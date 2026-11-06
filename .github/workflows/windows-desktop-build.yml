@@ -1,4 +1,3 @@
-
 name: Windows Desktop - Seek Fix Build
 
 on:
@@ -43,10 +42,17 @@ jobs:
           "$env:RUNNER_TEMP\wix" |
             Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
+      - name: Set up MSVC environment
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
       - name: Verify native build tools
+        shell: pwsh
         run: |
           cmake --version
-          cl
+          where.exe cl
+          cl /?
 
       - name: Write local.properties
         shell: pwsh
