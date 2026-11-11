@@ -105,4 +105,5 @@ This project is licensed under the **GNU General Public License v3.0 (GPLv3)**. 
 
 
 ### Desktop navigation and floating player
-The desktop Appearance settings offer **Modern** and **Legacy** interface modes. Modern uses compact Home / Explore / Library navigation, an expanding search field, a floating glass player dock, and a refined home feed with compact Quick picks. Legacy restores the classic sidebar layout. The full-screen player remains unchanged; its separate **Player background** setting controls the album-reactive color animation.
+The desktop Appearance settings offer **Modern** and **Legacy** interface modes. Modern uses compact Home / Explore / Library navigation, an expanding search field, a floating glass player dock, and a refined home feed with compact Quick picks. Under **Settings → Advanced → Advanced interface customization**, adjust the dock alignment, width, bottom spacing, corner curve, glass contrast, and rim highlight. Legacy restores the classic sidebar layout. The full-screen player remains unchanged; its separate **Player background** setting controls the album-reactive color animation.
+

@@ -258,6 +258,7 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.zIndex
 import bitchord.desktopapp.generated.resources.Res
 import bitchord.desktopapp.generated.resources.logo
 import bitchord.desktopapp.generated.resources.logo_mark
@@ -4457,15 +4458,19 @@ internal fun DesktopFloatingMiniPlayer(
 ) {
     var moreOpen by remember { mutableStateOf(false) }
     val reduceMotion by DesktopAppearanceSettings.reduceAnimation.collectAsState()
+    val maxWidth by DesktopMiniPlayerAppearance.width.collectAsState()
+    val cornerRadius by DesktopMiniPlayerAppearance.cornerRadius.collectAsState()
+    val surfaceContrast by DesktopMiniPlayerAppearance.contrast.collectAsState()
+    val rimStrength by DesktopMiniPlayerAppearance.rim.collectAsState()
     val entrance = remember { Animatable(0f) }
     LaunchedEffect(song.videoId, reduceMotion) {
         entrance.snapTo(0f)
         entrance.animateTo(1f, MusesMotion.settle(reduceMotion))
     }
-    val shape = RoundedCornerShape(18.dp)
+    val shape = RoundedCornerShape(cornerRadius.dp)
     Box(
         Modifier
-            .widthIn(max = 720.dp)
+            .widthIn(max = maxWidth.dp)
             .fillMaxWidth()
             .height(72.dp)
             .clip(shape)
@@ -4477,6 +4482,11 @@ internal fun DesktopFloatingMiniPlayer(
             }
             .padding(horizontal = 12.dp, vertical = 6.dp),
     ) {
+        // Keep a controlled dark veil over the moving album palette so the title, time and
+        // transport icons remain legible over bright artwork. The underlying glass still shows.
+        Box(
+            Modifier.fillMaxSize().background(Color(0xFF080A12).copy(alpha = surfaceContrast), shape),
+        )
         Row(Modifier.fillMaxSize(), verticalAlignment = Alignment.CenterVertically) {
             key(song.videoId) { DesktopArtwork(song.thumbnailUrl, artworkModifier.size(48.dp).clip(RoundedCornerShape(10.dp)), px = ROW_ART_PX) }
             Spacer(Modifier.width(10.dp))
@@ -4524,6 +4534,7 @@ internal fun DesktopFloatingMiniPlayer(
                 }
             }
         }
+        Box(Modifier.fillMaxSize().border(1.dp, Color.White.copy(alpha = rimStrength), shape))
     }
 }
 
@@ -4711,6 +4722,8 @@ private fun DesktopFrame(
     val material by DesktopWindowBackdrop.active.collectAsState()
     val appBackground by DesktopWindowBackdrop.appBackground.collectAsState()
     val fluid by DesktopFluiditySettings.enabled.collectAsState()
+    val dockPosition by DesktopMiniPlayerAppearance.position.collectAsState()
+    val dockBottomInset by DesktopMiniPlayerAppearance.bottomInset.collectAsState()
     val glass = material != DesktopBackdrop.OFF
     // Fluidity always lets the material through the page too: the glow is the page's background.
     val materialBehindApp = glass && (appBackground || fluid)
@@ -4763,13 +4776,27 @@ private fun DesktopFrame(
                                                 PaddingValues(
                                                     start = 0.dp,
                                                     end = 0.dp,
-                                                    bottom = if (modernMode) 104.dp else if (compact) 128.dp else 16.dp,
+                                                    bottom = if (modernMode) 88.dp + dockBottomInset.dp else if (compact) 128.dp else 16.dp,
                                                 ),
                                             )
                                         }
                                     }
                                     if (modernMode || compact) {
-                                        Box(Modifier.align(Alignment.BottomCenter).padding(bottom = 16.dp)) { bottomBar(compact) }
+                                        val dockAlignment = if (!modernMode) {
+                                            Alignment.BottomCenter
+                                        } else {
+                                            when (dockPosition) {
+                                                DesktopMiniPlayerPosition.LEFT -> Alignment.BottomStart
+                                                DesktopMiniPlayerPosition.CENTER -> Alignment.BottomCenter
+                                                DesktopMiniPlayerPosition.RIGHT -> Alignment.BottomEnd
+                                            }
+                                        }
+                                        Box(
+                                            Modifier.align(dockAlignment)
+                                                .padding(horizontal = if (modernMode) 20.dp else 0.dp, vertical = 0.dp)
+                                                .padding(bottom = if (modernMode) dockBottomInset.dp else 16.dp)
+                                                .zIndex(1f),
+                                        ) { bottomBar(compact) }
                                     }
                                 }
                                 Box(
@@ -6163,6 +6190,9 @@ private fun DesktopSettingsScreen(
                 }
             }
             if (section == DesktopSettingsSection.ADVANCED) item {
+                SettingsGroup(DesktopStrings["advanced_interface_customization", "Advanced interface customization"]) {
+                    DesktopMiniPlayerCustomizationSettings()
+                }
                 SettingsGroup(DesktopStrings["advanced_options", "Advanced options"]) {
                     SettingsToggle(
                         DesktopStrings["show_nerd_stats", "Show stats for nerds"],
@@ -6198,6 +6228,91 @@ private fun DesktopSettingsScreen(
             },
             onTest = onTestSource,
         )
+    }
+}
+
+@Composable
+private fun DesktopMiniPlayerCustomizationSettings() {
+    var expanded by remember { mutableStateOf(false) }
+    val title = DesktopStrings["floating_player_appearance", "Floating player appearance"]
+    val subtitle = DesktopStrings[
+        "floating_player_appearance_subtitle",
+        "Adjust its position, size, glass contrast, rim and corner curve",
+    ]
+    if (settingsRowVisible(title, subtitle)) {
+        Row(
+            Modifier.fillMaxWidth().desktopRowClickable { expanded = !expanded }.padding(vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text(title, style = MaterialTheme.typography.bodyLarge)
+                Text(subtitle, color = DesktopSecondary, style = MaterialTheme.typography.bodySmall)
+            }
+            Icon(
+                if (expanded) Icons.Rounded.KeyboardArrowUp else Icons.Rounded.KeyboardArrowDown,
+                if (expanded) "Collapse customization" else "Expand customization",
+                tint = DesktopSecondary,
+            )
+        }
+    }
+    if (!expanded) return
+
+    val position by DesktopMiniPlayerAppearance.position.collectAsState()
+    val width by DesktopMiniPlayerAppearance.width.collectAsState()
+    val bottomInset by DesktopMiniPlayerAppearance.bottomInset.collectAsState()
+    val cornerRadius by DesktopMiniPlayerAppearance.cornerRadius.collectAsState()
+    val contrast by DesktopMiniPlayerAppearance.contrast.collectAsState()
+    val rim by DesktopMiniPlayerAppearance.rim.collectAsState()
+    Column(Modifier.fillMaxWidth().padding(start = 14.dp, bottom = 10.dp)) {
+        Text("Dock position", color = DesktopSecondary, style = MaterialTheme.typography.bodySmall)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(vertical = 6.dp)) {
+            DesktopMiniPlayerPosition.entries.forEach { option ->
+                FilterChip(
+                    colors = desktopChipColors(),
+                    selected = position == option,
+                    onClick = { DesktopMiniPlayerAppearance.setPosition(option) },
+                    label = { Text(option.name.lowercase().replaceFirstChar(Char::uppercase)) },
+                )
+            }
+        }
+        MiniPlayerAppearanceSlider("Maximum width", "$width dp", width.toFloat(), 560f..920f, 17) {
+            DesktopMiniPlayerAppearance.setWidth(it.roundToInt())
+        }
+        MiniPlayerAppearanceSlider("Bottom spacing", "$bottomInset dp", bottomInset.toFloat(), 8f..48f, 19) {
+            DesktopMiniPlayerAppearance.setBottomInset(it.roundToInt())
+        }
+        MiniPlayerAppearanceSlider("Corner curve", "$cornerRadius dp", cornerRadius.toFloat(), 12f..30f, 8) {
+            DesktopMiniPlayerAppearance.setCornerRadius(it.roundToInt())
+        }
+        MiniPlayerAppearanceSlider("Glass contrast", "${(contrast * 100).roundToInt()}%", contrast, 0.48f..0.9f, 20) {
+            DesktopMiniPlayerAppearance.setContrast(it)
+        }
+        MiniPlayerAppearanceSlider("Rim highlight", "${(rim * 100).roundToInt()}%", rim, 0f..0.7f, 13) {
+            DesktopMiniPlayerAppearance.setRim(it)
+        }
+        Text(
+            "Rim highlight adjusts the glass edge. Optical refraction is not provided by the current renderer.",
+            color = DesktopSecondary,
+            style = MaterialTheme.typography.bodySmall,
+        )
+    }
+}
+
+@Composable
+private fun MiniPlayerAppearanceSlider(
+    title: String,
+    valueLabel: String,
+    value: Float,
+    valueRange: ClosedFloatingPointRange<Float>,
+    steps: Int,
+    onValueChange: (Float) -> Unit,
+) {
+    Column(Modifier.fillMaxWidth().padding(top = 8.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(title, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
+            Text(valueLabel, color = DesktopSecondary, style = MaterialTheme.typography.bodySmall)
+        }
+        DesktopBareSlider(value, onValueChange, valueRange = valueRange, steps = steps)
     }
 }
 
