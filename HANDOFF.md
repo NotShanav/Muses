@@ -142,15 +142,22 @@ The next supplied workflow run confirmed the playlist name and mini-player timin
 - Modern search expansion, page entrance, selection-orb movement, mini-player entrance, and button press feedback use `MusesMotion` and respect Reduce animation. Home shelves use 24 dp gutters, 30 dp section spacing, See all links, a compact Quick picks card row, and 1.03 hover lift. The full-screen player and its existing album-reactive background implementation were not changed.
 
 ### Known limits and verification
-- A rare home-background color flicker was reported by the user but was not reproduced or changed; it is low priority and separate from the shell layout work.
-- Manual source review only. The local Gradle invocation again stalled before output because the available Java launcher does not start reliably in this environment. Windows compilation, Linux compilation, Android compilation, and runtime visual QA remain unverified. The existing GitHub Actions failure logs were used to repair the prior Account 2 source errors, but this new Modern / Legacy implementation still needs an Actions run.
+- A rare home-background color flicker was reported by the user but was not reproduced or changed; it is separate from the shell layout work.
+- Local Windows/JDK 21 verification passed: `:sharedUi:compileKotlinJvm`, `:desktopApp:compileKotlin`, `:shared:jvmTest`, and `:desktopApp:test`. The first test attempt inside the sandbox failed because Windows registry preferences and the JavaCPP native cache were inaccessible there; the same workflow test tasks passed when rerun outside that restriction.
+- Local MSI/distributable packaging was not run because this machine lacks the workflow's CMake/MSVC/WiX setup. GitHub Actions installs those tools and must still confirm the packaged artifacts. Linux and Android builds and visual runtime QA are also unverified. `.github/workflows/windows-desktop-build.yml` and `check.yml` were compared against the input archive and are unchanged.
 - Modern mode is the default for installs without a saved interface preference. Existing saved Modern / Legacy preferences are preserved.
 
 
 ### Final package status
 - Refreshed Muses-modern-interface.zip from the complete current source tree, including hidden .github workflow files. The package retains the Muses/ top-level directory.
-- Build verification remains pending: local Gradle could not start reliably in this environment. Run the Windows desktop GitHub Actions workflow on this package before treating it as a release build.
+- Source compilation and the workflow test tasks pass locally under JDK 21. Windows MSI/distributable packaging and the GitHub post-package checks are still pending; run the Windows desktop workflow on this package before treating it as a release build.
 
 
 ### Latest CI compile fix
 The latest Windows Actions log identified `HomeScreen.kt` importing `composed` from `androidx.compose.runtime`. Compose defines the modifier extension at `androidx.compose.ui.composed`; the import is corrected. The unresolved `composed` error and the three composable-context errors at the hover helper were all consequences of that incorrect import. This correction has not yet been confirmed by a new CI run.
+
+### Follow-up compile diagnostics and fixes
+- GitHub's shared UI compile error came from importing `composed` from `androidx.compose.runtime`; changed it to `androidx.compose.ui.composed`. The `HomeScreen.kt` JVM source now compiles.
+- GitHub then reported that the `internal` mini-player signature exposed private `DesktopRepeatMode`; changed the enum visibility to `internal`. `:desktopApp:compileKotlin` now passes.
+- The matching Windows workflow test tasks passed locally under JDK 21. The GitHub workflow still needs to run its Windows MSI build and package verification steps.
+
