@@ -2058,7 +2058,12 @@ fun NowPlayingScreen(
             animationSpec = tween(durationMillis = 360, easing = FastOutSlowInEasing),
             label = "fullArtworkBackdropCrossfade",
         )
-        if (legacyMeshBackdrop) {
+        // A host's own backdrop (desktop Fluidity mode) replaces every mesh below.
+        val backdropOverride = LocalPlayerBackdropOverride.current
+        val overrideActive = backdropOverride != null && !spotifyCanvasPresentation
+        if (overrideActive) {
+            backdropOverride?.invoke(remoteArt, song.videoId)
+        } else if (legacyMeshBackdrop) {
             // v1.5's backdrop, restored verbatim: no seam, because the blobs
             // are not anchored to anything on screen — they fill the player and
             // the artwork simply sits on top of them. Keyed on the track, so
@@ -2078,9 +2083,11 @@ fun NowPlayingScreen(
                 modifier = Modifier.graphicsLayer { alpha = 1f - fullArtworkBackdropAlpha },
             )
         }
-        fullArtworkBlurContent(
-            Modifier.graphicsLayer { alpha = fullArtworkBackdropAlpha },
-        )
+        if (!overrideActive) {
+            fullArtworkBlurContent(
+                Modifier.graphicsLayer { alpha = fullArtworkBackdropAlpha },
+            )
+        }
 
         // Mount once, behind the controls. A known portrait aspect changes the
         // invisible view to full-player bounds before its first frame is shown.

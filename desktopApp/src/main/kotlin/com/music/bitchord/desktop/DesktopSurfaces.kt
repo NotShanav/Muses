@@ -20,6 +20,9 @@ import androidx.compose.foundation.border
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.ui.composed
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -46,12 +49,24 @@ internal val DesktopRowHover = Color(0x1AFFFFFF)
 internal val DesktopScrim = Color(0x8C000000)
 
 /** Card, hairline and all. */
-internal fun Modifier.desktopCard(shape: Shape): Modifier =
-    clip(shape).background(DesktopCardFill).border(0.5.dp, DesktopCardEdge, shape)
+internal fun Modifier.desktopCard(shape: Shape): Modifier = composed {
+    val fluid by DesktopFluiditySettings.enabled.collectAsState()
+    if (fluid) {
+        clip(shape).fluidGlass(shape, solid = DesktopCardFill, tintAlpha = 0.62f, blur = 28.dp)
+    } else {
+        clip(shape).background(DesktopCardFill).border(0.5.dp, DesktopCardEdge, shape)
+    }
+}
 
 /** A block of rows inside a card. */
-internal fun Modifier.desktopCardInset(shape: Shape): Modifier =
-    clip(shape).background(DesktopCardInsetFill).border(0.5.dp, DesktopCardEdge, shape)
+internal fun Modifier.desktopCardInset(shape: Shape): Modifier = composed {
+    val fluid by DesktopFluiditySettings.enabled.collectAsState()
+    if (fluid) {
+        fluidInset(shape)
+    } else {
+        clip(shape).background(DesktopCardInsetFill).border(0.5.dp, DesktopCardEdge, shape)
+    }
+}
 
 /** The rule between two rows of a card. A page of Settings has none: its rows are spaced, not ruled. */
 @Composable
@@ -166,6 +181,7 @@ internal fun DesktopDialogPanel(
             Modifier
                 .widthIn(max = maxWidth.dp)
                 .fillMaxWidth()
+                .fluidEnter()
                 .desktopCard(shape),
         ) {
             // Behind the content rather than around it, so it swallows clicks on the panel's own

@@ -36,6 +36,7 @@ import com.music.bitchord.playback.QueueTimeline.asQueueEntry
 import com.music.bitchord.data.listentogether.partyQueueIndexOf
 import com.music.bitchord.data.listentogether.partyUpcomingAfter
 import com.music.bitchord.ui.LyricsProviderState
+import com.music.bitchord.ui.player.LocalPlayerBackdropOverride
 import com.music.bitchord.ui.player.LyricsSidePanel
 import com.music.bitchord.ui.player.NowPlayingScreen
 import com.music.bitchord.ui.player.QueueSidePanel
@@ -45,6 +46,7 @@ import com.music.bitchord.ui.player.rememberMixPulse
 import androidx.compose.runtime.SideEffect
 import com.music.bitchord.data.model.QueueTier
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
@@ -339,7 +341,7 @@ internal val DesktopGlassStrong = Color(0xCC0D0D0F)
 private val DesktopBarGlass = Color(0xB324242A)
 
 /** The backdrop the floating bars blur. */
-private val LocalDesktopHaze = staticCompositionLocalOf<HazeState?> { null }
+internal val LocalDesktopHaze = staticCompositionLocalOf<HazeState?> { null }
 
 /** How much a page's scrollable should keep clear of the floating bars. */
 private val LocalDesktopBottomInset = staticCompositionLocalOf { 0.dp }
@@ -2856,6 +2858,10 @@ fun BitChordDesktopApp() {
         partySyncHolder[0]?.onLocalIntent()
     }
 
+    val fluidity by DesktopFluiditySettings.enabled.collectAsState()
+    // The full-screen player's own backdrop, swapped for the album-art fluid one in Fluidity mode.
+    val fluidPlayerBackdrop = if (fluidity) DesktopFluidPlayerBackdrop else null
+
     MaterialTheme(
         colorScheme = desktopColorScheme(),
         typography = desktopTypography(),
@@ -2863,17 +2869,23 @@ fun BitChordDesktopApp() {
         CompositionLocalProvider(
             LocalContentColor provides Color.White,
             LocalNowPlaying provides selectedSong,
+            LocalPlayerBackdropOverride provides fluidPlayerBackdrop,
         ) {
             DesktopFrame(
                 // The phone's page is black, not the near-black of its cards.
                 containerColor = DesktopBackground,
                 // Only Replay dresses itself; everywhere else the chrome sits on the plain surface.
                 backdrop = { transparentBase ->
-                    DesktopPageBackdrop(
-                        artworkUrl = replaySummary.songs.firstOrNull()?.song?.thumbnailUrl
-                            .takeIf { overlays.replay },
-                        transparentBase = transparentBase,
-                    )
+                    if (fluidity) {
+                        // Fluidity mode: the playing song's artwork colours the whole window.
+                        DesktopFluidBackdrop(artworkUrl = selectedSong?.thumbnailUrl)
+                    } else {
+                        DesktopPageBackdrop(
+                            artworkUrl = replaySummary.songs.firstOrNull()?.song?.thumbnailUrl
+                                .takeIf { overlays.replay },
+                            transparentBase = transparentBase,
+                        )
+                    }
                 },
                 modifier = Modifier.onPreviewKeyEvent { event ->
                     if (event.type != KeyEventType.KeyUp) return@onPreviewKeyEvent false
@@ -4410,11 +4422,17 @@ private fun DesktopSidebarItem(
     selected: Boolean,
     onClick: () -> Unit,
 ) {
+    val fluid by DesktopFluiditySettings.enabled.collectAsState()
+    val highlight by animateColorAsState(
+        targetValue = if (selected) Color.White.copy(alpha = if (fluid) 0.16f else 0.12f) else Color.Transparent,
+        animationSpec = if (fluid) tween(280) else tween(0),
+        label = "sidebarHighlight",
+    )
     Row(
         Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(7.dp))
-            .background(if (selected) Color.White.copy(alpha = 0.12f) else Color.Transparent)
+            .background(highlight)
             .clickable(onClick = onClick)
             .padding(horizontal = 9.dp, vertical = 7.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -5706,6 +5724,28 @@ private fun DesktopSettingsScreen(
                         reduceDynamicBlur,
                         DesktopAppearanceSettings::setReduceDynamicBlur,
                     )
+                    val fluidity by DesktopFluiditySettings.enabled.collectAsState()
+                    SettingsToggle(
+                        DesktopStrings["fluidity_mode", "Fluidity mode"],
+                        DesktopStrings[
+                            "fluidity_mode_subtitle",
+                            "Liquid glass surfaces and a background that animates in the colours of the playing album art",
+                        ],
+                        fluidity,
+                        DesktopFluiditySettings::setEnabled,
+                    )
+                    if (fluidity) {
+                        val fluiditySubtle by DesktopFluiditySettings.subtle.collectAsState()
+                        SettingsToggle(
+                            DesktopStrings["fluidity_subtle", "Subtle effects"],
+                            DesktopStrings[
+                                "fluidity_subtle_subtitle",
+                                "Fewer, calmer blobs and no orbs. Lighter on the GPU",
+                            ],
+                            fluiditySubtle,
+                            DesktopFluiditySettings::setSubtle,
+                        )
+                    }
                     // Window furniture belongs beside the visual settings it changes, rather than
                     // interrupting playback controls. These rows remain Windows-only.
                     if (DesktopPlatform.drawsOwnWindowFrame) {
@@ -6711,8 +6751,14 @@ private fun Song.isNowPlaying(): Boolean = isSameTrackAs(LocalNowPlaying.current
 
 /** The frosted pane the floating bars are made of. */
 @Composable
-internal fun Modifier.desktopBarGlass(shape: Shape): Modifier =
-    desktopFrosted(DesktopBarGlass, tintAlpha = 0.55f).border(0.5.dp, DesktopBarEdge, shape)
+internal fun Modifier.desktopBarGlass(shape: Shape): Modifier {
+    val fluid by DesktopFluiditySettings.enabled.collectAsState()
+    return if (fluid) {
+        fluidGlass(shape, solid = DesktopBarGlass, tintAlpha = 0.34f)
+    } else {
+        desktopFrosted(DesktopBarGlass, tintAlpha = 0.55f).border(0.5.dp, DesktopBarEdge, shape)
+    }
+}
 
 /** The edge of a chrome pane that meets the page, and so has to dissolve into it. */
 internal enum class DesktopChromeEdge { NONE, BOTTOM, END }
@@ -6728,12 +6774,16 @@ internal enum class DesktopChromeEdge { NONE, BOTTOM, END }
 internal fun Modifier.desktopChromeGlass(
     edge: DesktopChromeEdge = DesktopChromeEdge.NONE,
     fade: Float = 0.2f,
-): Modifier = desktopFrosted(
-    opaque = DesktopSurface.copy(alpha = 0.88f),
-    tintAlpha = 0.46f,
-    edge = edge,
-    fade = fade,
-)
+): Modifier {
+    val fluid by DesktopFluiditySettings.enabled.collectAsState()
+    return desktopFrosted(
+        opaque = DesktopSurface.copy(alpha = 0.88f),
+        // Lighter in Fluidity mode so the album colours come through the sidebar and top bar.
+        tintAlpha = if (fluid) 0.30f else 0.46f,
+        edge = edge,
+        fade = fade,
+    )
+}
 
 /**
  * The window's own chrome — title bar, top bar, sidebar. Over Windows 11's Mica or Acrylic

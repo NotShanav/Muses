@@ -2,6 +2,8 @@ package com.music.bitchord.desktop
 
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.Orientation
@@ -61,7 +63,11 @@ internal fun DesktopPlayerSheet(
 
         LaunchedEffect(visible) {
             if (visible) {
-                offset.animateTo(0f, tween(SHEET_OPEN_MS, easing = FastOutSlowInEasing))
+                if (DesktopFluiditySettings.enabled.value) {
+                    offset.animateTo(0f, spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = 260f))
+                } else {
+                    offset.animateTo(0f, tween(SHEET_OPEN_MS, easing = FastOutSlowInEasing))
+                }
             } else {
                 offset.animateTo(heightPx, tween(SHEET_CLOSE_MS, easing = FastOutSlowInEasing))
                 mounted = false
