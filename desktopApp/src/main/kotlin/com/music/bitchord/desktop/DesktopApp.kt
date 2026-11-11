@@ -3386,6 +3386,7 @@ fun BitChordDesktopApp() {
                 Box(
                     Modifier
                         .fillMaxSize()
+                        .fluidPageLift(destination to overlays.settingsPage)
                         .pointerInput(Unit) {
                             awaitPointerEventScope {
                                 while (true) {
@@ -4433,7 +4434,7 @@ private fun DesktopSidebarItem(
             .fillMaxWidth()
             .clip(RoundedCornerShape(7.dp))
             .background(highlight)
-            .clickable(onClick = onClick)
+            .fluidClickable(onClick)
             .padding(horizontal = 9.dp, vertical = 7.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -4516,7 +4517,7 @@ private fun DesktopFloatingNavigation(
                         .weight(1f)
                         .clip(RoundedCornerShape(percent = 50))
                         .background(if (isSelected) DesktopAccent.copy(alpha = 0.18f) else Color.Transparent)
-                        .clickable { onDestinationSelected(item) }
+                        .fluidClickable { onDestinationSelected(item) }
                         .padding(vertical = 8.dp),
                     horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
@@ -4543,7 +4544,7 @@ private fun DesktopMiniPlayer(
             .fillMaxWidth()
             .clip(shape)
             .desktopBarGlass(shape)
-            .clickable(onClick = onExpand)
+            .fluidClickable(onExpand)
             .padding(horizontal = 12.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -4651,13 +4652,21 @@ private fun DesktopFrame(
     // gray ground.
     val material by DesktopWindowBackdrop.active.collectAsState()
     val appBackground by DesktopWindowBackdrop.appBackground.collectAsState()
+    val fluid by DesktopFluiditySettings.enabled.collectAsState()
     val glass = material != DesktopBackdrop.OFF
-    val materialBehindApp = glass && appBackground
+    // Fluidity always lets the material through the page too: the glow is the page's background.
+    val materialBehindApp = glass && (appBackground || fluid)
     CompositionLocalProvider(LocalDesktopHaze provides haze) {
         Box(modifier.fillMaxSize().then(if (glass) Modifier else Modifier.background(containerColor))) {
-            // Both sources of the same state: the chrome blurs the backdrop behind it, and the
-            // floating bottom bar blurs the page scrolling under it.
-            if (!glass) Box(Modifier.fillMaxSize().hazeSource(haze)) { backdrop(false) }
+            // Fluidity: one glow across the whole window, title bar and sidebar included. It is
+            // deliberately not a haze source, so the panes above it never re-blur as it moves.
+            if (fluid) {
+                Box(Modifier.fillMaxSize()) { backdrop(glass) }
+            } else if (!glass) {
+                // Both sources of the same state: the chrome blurs the backdrop behind it, and the
+                // floating bottom bar blurs the page scrolling under it.
+                Box(Modifier.fillMaxSize().hazeSource(haze)) { backdrop(false) }
+            }
             Column(Modifier.fillMaxSize()) {
                 // Above everything, and outside the box the rest of the window is drawn in, because
                 // that is what a title bar is.
@@ -4685,7 +4694,7 @@ private fun DesktopFrame(
                                         ),
                                 ) {
                                     Box(Modifier.fillMaxSize().hazeSource(haze)) {
-                                        if (glass) backdrop(materialBehindApp)
+                                        if (glass && !fluid) backdrop(materialBehindApp)
                                         content(
                                             PaddingValues(
                                                 start = 0.dp,
@@ -5729,7 +5738,8 @@ private fun DesktopSettingsScreen(
                         DesktopStrings["fluidity_mode", "Fluidity mode"],
                         DesktopStrings[
                             "fluidity_mode_subtitle",
-                            "Liquid glass surfaces and a background that animates in the colours of the playing album art",
+                            "Translucent glass over a glow in the colours of the playing album art. " +
+                                "Shows your window material behind the whole app and needs no blur",
                         ],
                         fluidity,
                         DesktopFluiditySettings::setEnabled,
@@ -6754,7 +6764,7 @@ private fun Song.isNowPlaying(): Boolean = isSameTrackAs(LocalNowPlaying.current
 internal fun Modifier.desktopBarGlass(shape: Shape): Modifier {
     val fluid by DesktopFluiditySettings.enabled.collectAsState()
     return if (fluid) {
-        fluidGlass(shape, solid = DesktopBarGlass, tintAlpha = 0.34f)
+        fluidGlass(shape, tint = 0.58f)
     } else {
         desktopFrosted(DesktopBarGlass, tintAlpha = 0.55f).border(0.5.dp, DesktopBarEdge, shape)
     }
@@ -6776,10 +6786,11 @@ internal fun Modifier.desktopChromeGlass(
     fade: Float = 0.2f,
 ): Modifier {
     val fluid by DesktopFluiditySettings.enabled.collectAsState()
+    // Fluidity: a light smoke over the glow. No blur, so nothing re-blurs while the glow moves.
+    if (fluid) return fluidChrome()
     return desktopFrosted(
         opaque = DesktopSurface.copy(alpha = 0.88f),
-        // Lighter in Fluidity mode so the album colours come through the sidebar and top bar.
-        tintAlpha = if (fluid) 0.30f else 0.46f,
+        tintAlpha = 0.46f,
         edge = edge,
         fade = fade,
     )
@@ -6799,7 +6810,10 @@ internal fun Modifier.desktopWindowGlass(
     fade: Float = 0.2f,
 ): Modifier {
     val backdrop by DesktopWindowBackdrop.active.collectAsState()
-    return if (backdrop == DesktopBackdrop.OFF) {
+    val fluid by DesktopFluiditySettings.enabled.collectAsState()
+    return if (fluid) {
+        fluidChrome()
+    } else if (backdrop == DesktopBackdrop.OFF) {
         desktopChromeGlass(edge, fade)
     } else {
         background(Color.Black.copy(alpha = WINDOW_GLASS_TINT))

@@ -52,7 +52,7 @@ internal val DesktopScrim = Color(0x8C000000)
 internal fun Modifier.desktopCard(shape: Shape): Modifier = composed {
     val fluid by DesktopFluiditySettings.enabled.collectAsState()
     if (fluid) {
-        clip(shape).fluidGlass(shape, solid = DesktopCardFill, tintAlpha = 0.62f, blur = 28.dp)
+        clip(shape).fluidGlass(shape, tint = 0.74f)
     } else {
         clip(shape).background(DesktopCardFill).border(0.5.dp, DesktopCardEdge, shape)
     }
