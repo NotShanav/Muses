@@ -102,3 +102,7 @@ Muses is an independent third-party audio player and client. It is **not** assoc
 This project is licensed under the **GNU General Public License v3.0 (GPLv3)**. See the [LICENSE](LICENSE) file for details, and [NOTICE.md](NOTICE.md) for where this code comes from.
 
 </div>
+
+
+### Desktop navigation and floating player
+The desktop shell now uses a compact top navigation bar and a floating mini-player over the scrolling page. The profile menu keeps History, Downloads, Local Music, Settings, account switching, and playlist shortcuts reachable. The Appearance settings also include the **Player background** choice added in the previous phase.

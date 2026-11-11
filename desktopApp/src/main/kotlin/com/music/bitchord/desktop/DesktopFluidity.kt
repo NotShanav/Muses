@@ -107,16 +107,26 @@ private val FluidDefaultPalette = FluidPalette(
 private const val FLUID_ART_PX = 120
 private const val HUE_BINS = 24
 
+/** Palettes already read, by artwork URL, so a track heard before does not decode its cover again. */
+private const val FLUID_PALETTE_CACHE_ENTRIES = 24
+private val FluidPaletteCache = DesktopCountLru<FluidPalette>(FLUID_PALETTE_CACHE_ENTRIES)
+
 /**
  * The palette for [url]. The last palette stays on screen while the next cover loads, so a track
  * change crossfades from one cover's colours to the next instead of passing through a default.
+ * A cover seen recently is answered from [FluidPaletteCache]; extraction stays on Dispatchers.IO.
  */
 @Composable
 private fun rememberFluidPalette(url: String?): FluidPalette {
-    var palette by remember { mutableStateOf(FluidDefaultPalette) }
+    var palette by remember { mutableStateOf(url?.let(FluidPaletteCache::get) ?: FluidDefaultPalette) }
     LaunchedEffect(url) {
         if (url == null) {
             palette = FluidDefaultPalette
+            return@LaunchedEffect
+        }
+        val cached = FluidPaletteCache.get(url)
+        if (cached != null) {
+            palette = cached
             return@LaunchedEffect
         }
         val found = withContext(Dispatchers.IO) {
@@ -124,7 +134,10 @@ private fun rememberFluidPalette(url: String?): FluidPalette {
                 DesktopArtworkCache.load(url.artworkAt(FLUID_ART_PX) ?: url)?.let(::extractFluidPalette)
             }.getOrNull()
         }
-        if (found != null) palette = found
+        if (found != null) {
+            FluidPaletteCache.put(url, found)
+            palette = found
+        }
     }
     return palette
 }
