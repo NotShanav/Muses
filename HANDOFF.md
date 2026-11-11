@@ -151,3 +151,6 @@ The next supplied workflow run confirmed the playlist name and mini-player timin
 - Refreshed Muses-modern-interface.zip from the complete current source tree, including hidden .github workflow files. The package retains the Muses/ top-level directory.
 - Build verification remains pending: local Gradle could not start reliably in this environment. Run the Windows desktop GitHub Actions workflow on this package before treating it as a release build.
 
+
+### Latest CI compile fix
+The latest Windows Actions log identified `HomeScreen.kt` importing `composed` from `androidx.compose.runtime`. Compose defines the modifier extension at `androidx.compose.ui.composed`; the import is corrected. The unresolved `composed` error and the three composable-context errors at the hover helper were all consequences of that incorrect import. This correction has not yet been confirmed by a new CI run.
