@@ -22,7 +22,22 @@ val targetOs: String = (providers.gradleProperty("bitchord.target").orNull ?: wh
 // intentionally displayed without a patch number (1.7 rather than 1.7.0).
 // The build number is the desktop version code; it also keeps "-beta1" out of the numeric installer version.
 val desktopVersionCode = 29
-val nativePackageVersion = appVersion.substringBefore('-').split('.').take(2).joinToString(".") + ".$desktopVersionCode"
+
+/**
+ * The installer's MAJOR.MINOR.BUILD, derived from whatever label the build was given.
+ *
+ * jpackage/WiX reject anything that is not numeric or whose MAJOR/MINOR is above 255 (so a
+ * label such as "seek-fix", "2026.11.11" or "1.8.0-seek-fix" must not leak into it).
+ * Non-numeric or out-of-range parts fall back to a safe value instead of failing the whole build.
+ */
+fun installerPart(raw: String?, fallback: Int): Int =
+    raw?.takeWhile(Char::isDigit)?.toIntOrNull()?.takeIf { it in 0..255 } ?: fallback
+
+val nativePackageVersion: String = appVersion.substringBefore('-').split('.').let { parts ->
+    val major = installerPart(parts.getOrNull(0), 1).coerceAtLeast(1)
+    val minor = installerPart(parts.getOrNull(1), 0)
+    "$major.$minor.$desktopVersionCode"
+}
 
 // FFmpeg decodes audio; see DesktopAudioDecoder.
 val javacppVersion = "1.5.12"
@@ -539,6 +554,9 @@ compose.desktop {
             }
 
             windows {
+                packageVersion = nativePackageVersion
+                msiPackageVersion = nativePackageVersion
+                exePackageVersion = nativePackageVersion
                 iconFile.set(project.file("packaging/icons/AppIcon.ico"))
                 upgradeUuid = "5b1e7c3a-9d42-4f68-b3a1-6e0c2d7f4a15"
                 menuGroup = "Muses"
