@@ -4073,7 +4073,6 @@ private fun DesktopTopBar(
                 }
             }
         }
-            }
             HorizontalDivider(Modifier.align(Alignment.BottomCenter).fillMaxWidth(), thickness = 1.dp, color = desktopChromeDivider())
         }
     }
