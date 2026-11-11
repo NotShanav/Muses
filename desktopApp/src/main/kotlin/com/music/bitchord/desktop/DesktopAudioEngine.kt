@@ -180,7 +180,7 @@ class DesktopPlaybackEngine(
         data object Flush : Command
     }
 
-    private val thread = Thread(::pump, "BitChord-Audio").apply {
+    private val thread = Thread(::pump, "Muses-Audio").apply {
         isDaemon = true
         priority = Thread.NORM_PRIORITY + 2
         start()
@@ -277,7 +277,7 @@ class DesktopPlaybackEngine(
                     outputFormat = decoder.outputFormat,
                     durationUs = decoder.durationUs,
                     measuredFormat = decoder.measuredFormat,
-                    name = "BitChord-Decode ${song.title.take(24)}",
+                    name = "Muses-Decode ${song.title.take(24)}",
                 )
                 Track(song, ahead, stream, startAtMs * 1_000)
             }.onFailure { decoder.close() }

@@ -3,7 +3,7 @@ package com.music.bitchord.desktop
 import kotlinx.coroutines.delay
 
 /**
- * Windows' native frame kept underneath BitChord's Compose-drawn traffic-light controls.
+ * Windows' native frame kept underneath Muses's Compose-drawn traffic-light controls.
  *
  * The Win32 window remains an overlapped window, so DWM owns its shadow, transitions, taskbar
  * maximization and resize border. Only the caption drawing is replaced by the app. This object is

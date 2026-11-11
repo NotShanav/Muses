@@ -20,7 +20,7 @@ import okhttp3.Request
 import java.io.File
 
 /**
- * BitChord ships as a sideloaded APK off GitHub Releases rather than through
+ * Muses ships as a sideloaded APK off GitHub Releases rather than through
  * a store, so there's nothing to push an update notice on its own — this
  * polls the repo's "latest release" once per launch and compares its tag
  * against the running build.
@@ -42,8 +42,8 @@ object AppUpdateChecker {
 
     private const val CACHE_SUBDIR = "updates"
 
-    private const val LATEST_RELEASE_URL =
-        "https://api.github.com/repos/kushagrasinghx/BitChord/releases/latest"
+    /** Blank: Muses does not check anywhere for updates, so no update prompt is ever shown. */
+    private const val LATEST_RELEASE_URL = ""
 
     private val json = Json { ignoreUnknownKeys = true }
 
@@ -66,6 +66,7 @@ object AppUpdateChecker {
     private var downloadCancelled = false
 
     suspend fun check() = withContext(Dispatchers.IO) {
+        if (LATEST_RELEASE_URL.isBlank()) return@withContext
         runCatching {
             val request = Request.Builder().url(LATEST_RELEASE_URL).build()
             val body = Http.client.newCall(request).execute().use { response ->

@@ -212,7 +212,7 @@ private fun DiscordSection(
         PanelGroup(
             header = "Buttons",
             footer = "{song_name}, {artist_name} and {album_name} are replaced with the track. " +
-                "The first button opens the song on YouTube Music and the second opens this project.",
+                "The first button opens the song on YouTube Music and the second opens YouTube Music.",
         ) {
             PanelSwitchRow(
                 title = DesktopStrings["first_button", "First button"],

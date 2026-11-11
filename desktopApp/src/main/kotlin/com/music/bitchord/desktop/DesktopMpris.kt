@@ -19,7 +19,7 @@ import java.util.concurrent.Executors
 private const val MPRIS_ROOT_INTERFACE = "org.mpris.MediaPlayer2"
 private const val MPRIS_PLAYER_INTERFACE = "org.mpris.MediaPlayer2.Player"
 private const val MPRIS_OBJECT_PATH = "/org/mpris/MediaPlayer2"
-private const val MPRIS_BUS_NAME = "org.mpris.MediaPlayer2.bitchord"
+private const val MPRIS_BUS_NAME = "org.mpris.MediaPlayer2.muses"
 
 interface MprisMetadataType : TypeRef<Map<String, Variant<*>>>
 
@@ -83,7 +83,7 @@ internal class DesktopMprisController(
 ) {
     private val lock = Any()
     private val worker: ExecutorService = Executors.newSingleThreadExecutor { runnable ->
-        Thread(runnable, "BitChord-MPRIS").apply { isDaemon = true }
+        Thread(runnable, "Muses-MPRIS").apply { isDaemon = true }
     }
     private var connection: DBusConnection? = null
     private var started = false
@@ -115,7 +115,7 @@ internal class DesktopMprisController(
                     connection = null
                     started = false
                 }
-                System.err.println("BitChord MPRIS unavailable: ${failure.message}")
+                System.err.println("Muses MPRIS unavailable: ${failure.message}")
             }
         }
     }
@@ -200,7 +200,7 @@ internal class DesktopMprisController(
             "CanQuit" to variant(false),
             "CanRaise" to variant(false),
             "HasTrackList" to variant(false),
-            "Identity" to variant("BitChord"),
+            "Identity" to variant("Muses"),
             "DesktopEntry" to variant("bitchord"),
             "SupportedUriSchemes" to variant(listOf("file", "http", "https"), "as"),
             "SupportedMimeTypes" to variant(

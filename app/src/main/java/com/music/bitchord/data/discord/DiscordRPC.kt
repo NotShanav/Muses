@@ -21,13 +21,13 @@ import java.util.Locale
  * The presence Discord renders from one [updateSong] call:
  *
  * ```
- *   Listening to BitChord          <- activityName, or the app's own name
+ *   Listening to Muses          <- activityName, or the app's own name
  *   ┌────┐  Song title             <- details
  *   │art │  Artist                 <- state
  *   └────┘  Hi-Res Lossless · FLAC · 4608 kbps · 24-bit · 96 kHz
  *           ▁▁▁▁▁▁ 1:04 / 3:47     <- from the timestamps
  *   [ Listen on YouTube Music ]    <- button 1
- *   [ Visit BitChord           ]   <- button 2
+ *   [ Visit Muses           ]   <- button 2
  * ```
  */
 class DiscordRPC(
@@ -167,10 +167,10 @@ class DiscordRPC(
          */
         private const val APPLICATION_ID = "1411019391843172514"
 
-        const val PROJECT_URL = "https://github.com/kushagrasinghx/BitChord"
+        const val PROJECT_URL = "https://music.youtube.com"
 
         const val DEFAULT_BUTTON_1 = "Listen on YouTube Music"
-        const val DEFAULT_BUTTON_2 = "Visit BitChord"
+        const val DEFAULT_BUTTON_2 = "Visit Muses"
 
         /** Discord draws the sleeve at roughly 96dp; 480px covers it on any density. */
         private const val ART_PX = 480
@@ -182,8 +182,7 @@ class DiscordRPC(
          * at the launcher icon in the repo rather than the copy bundled in the
          * APK — a `res/` drawable has no address the presence can carry.
          */
-        private const val FALLBACK_ART_URL =
-            "https://raw.githubusercontent.com/kushagrasinghx/BitChord/main/app/src/main/ic_launcher-playstore.png"
+        private const val FALLBACK_ART_URL = "https://music.youtube.com/img/favicon_144.png"
 
         fun watchUrl(song: Song): String =
             "https://music.youtube.com/watch?v=${song.videoId}"

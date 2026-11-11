@@ -973,7 +973,7 @@ private fun PillSegment(
  * whenever there is one.
  *
  * A party overrides the output rather than sitting beside it because the two
- * are not the same kind of fact. "Kushagra's Phone" answers which speaker in
+ * are not the same kind of fact. "Alex's Phone" answers which speaker in
  * this room; once there are four devices playing the same song, the room is no
  * longer what the listener is checking. The tap follows the label — whichever
  * one is on screen is the thing it opens.
@@ -1011,7 +1011,7 @@ internal fun OutputCaption(
     val streamIsHiRes = nerdStats?.isHiRes == true
     val isHiResOutput = streamIsHiRes && routeCarriesHiRes
     // The host's first name, exactly as the output line already shortens the
-    // account's — "Kushagra's Jam" alongside "Kushagra's Phone".
+    // account's — "Alex's Jam" alongside "Alex's Phone".
     val jamName = badge.hostFirstName
         ?.let { stringResource(Res.string.listen_together_jam, it) }
         ?: stringResource(Res.string.listen_together_jam_unnamed)

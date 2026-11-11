@@ -2,14 +2,14 @@
 # One-shot installer for the Listen Together server on an Oracle Cloud
 # (or any Ubuntu 22.04/24.04) VM. Safe to re-run: it rebuilds and restarts.
 #
-#   sudo DOMAIN=jam.bitchord.kushagrasingh.in bash deploy/setup.sh
+#   sudo DOMAIN=jam.example.com bash deploy/setup.sh
 #
 # Run it from the backend/ directory of a checkout on the VM. The DNS A record
 # for $DOMAIN must already point at this VM, or Caddy cannot get a certificate.
 set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
 
-DOMAIN="${DOMAIN:?set DOMAIN, e.g. DOMAIN=jam.bitchord.kushagrasingh.in}"
+DOMAIN="${DOMAIN:?set DOMAIN, e.g. DOMAIN=jam.example.com}"
 GO_VERSION="${GO_VERSION:-1.27.0}"
 BACKEND_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 

@@ -7,7 +7,7 @@ import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 val appVersion: String = providers.gradleProperty("bitchord.version").orNull
     ?.removePrefix("v")
     ?.takeIf { it.isNotBlank() }
-    ?: "1.8-beta1"
+    ?: "1.0.0"
 
 /** Which platform this build is *for*, which is the host unless told otherwise. */
 val hostIsWindows = System.getProperty("os.name").contains("Windows", ignoreCase = true)
@@ -15,7 +15,7 @@ val hostIsLinux = System.getProperty("os.name").contains("Linux", ignoreCase = t
 val targetOs: String = (providers.gradleProperty("bitchord.target").orNull ?: when {
     hostIsWindows -> "windows"
     hostIsLinux -> "linux"
-    else -> error("BitChord desktop supports Linux and Windows only")
+    else -> error("Muses desktop supports Linux and Windows only")
 }).lowercase()
 
 // Windows installer metadata requires MAJOR.MINOR.BUILD even though the app's public version is
@@ -30,7 +30,7 @@ val ffmpegVersion = "7.1.1-$javacppVersion"
 val nativeClassifier = when (targetOs) {
     "windows" -> "windows-x86_64"
     "linux" -> "linux-x86_64"
-    else -> error("BitChord desktop supports Linux and Windows only")
+    else -> error("Muses desktop supports Linux and Windows only")
 }
 private fun localProperty(name: String): String = rootProject.file("local.properties")
     .takeIf { it.isFile }
@@ -368,7 +368,7 @@ val windowsPortableAssemble by tasks.registering {
     group = "distribution"
     description = "Lays out a Windows-runnable folder: application jars, Windows natives, launcher."
     dependsOn(tasks.named("jar"))
-    val stage = windowsPortableDir.map { it.dir("BitChord") }
+    val stage = windowsPortableDir.map { it.dir("Muses") }
     val appJar = tasks.named<Jar>("jar").flatMap { it.archiveFile }
     val runtime = configurations.named("runtimeClasspath")
     val version = appVersion
@@ -401,11 +401,11 @@ val windowsPortableAssemble by tasks.registering {
 
         // `lib\*` rather than a spelled-out classpath: the wildcard is what keeps this working when
         // a dependency is added, and the JVM is what expands it.
-        File(target, "BitChord.bat").writeText(
+        File(target, "Muses.bat").writeText(
             buildString {
                 appendLine("@echo off")
                 appendLine("setlocal")
-                appendLine("rem BitChord, portable. Needs a Java 21+ runtime on PATH or in JAVA_HOME.")
+                appendLine("rem Muses, portable. Needs a Java 21+ runtime on PATH or in JAVA_HOME.")
                 appendLine("set \"HERE=%~dp0\"")
                 appendLine("set \"RUNNER=java\"")
                 appendLine("if defined JAVA_HOME set \"RUNNER=%JAVA_HOME%\\bin\\java\"")
@@ -427,7 +427,7 @@ val windowsPortableAssemble by tasks.registering {
         }
         val problems = buildList {
             if (!holds("com/music/bitchord/desktop/MainKt.class")) {
-                add("the BitChord desktop entry point is missing")
+                add("the Muses desktop entry point is missing")
             }
             if (!holds("androidx/compose/runtime/Composer.class")) {
                 add("the Compose runtime is missing")
@@ -463,7 +463,7 @@ val windowsPortable by tasks.registering(Zip::class) {
     description = "Zips the portable Windows folder for copying to a Windows machine."
     dependsOn(windowsPortableAssemble)
     from(windowsPortableDir)
-    archiveFileName.set("BitChord-$appVersion-windows-portable.zip")
+    archiveFileName.set("Muses-$appVersion-windows-portable.zip")
     destinationDirectory.set(layout.buildDirectory.dir("distributions"))
     doLast { logger.lifecycle("windowsPortable: ${archiveFile.get().asFile.absolutePath}") }
 }
@@ -500,10 +500,10 @@ compose.desktop {
                 TargetFormat.Deb,
                 TargetFormat.Rpm,
             )
-            packageName = "BitChord"
+            packageName = "Muses"
             packageVersion = nativePackageVersion
-            description = if (targetOs == "windows") "BitChord" else "Aesthetic YouTube Music client"
-            vendor = "BitChord contributors"
+            description = if (targetOs == "windows") "Muses" else "Aesthetic YouTube Music client"
+            vendor = "Muses"
             copyright = "Copyright © 2026 BitChord contributors"
 
             modules(
@@ -534,14 +534,14 @@ compose.desktop {
                 iconFile.set(project.file("packaging/icons/AppIcon.png"))
                 menuGroup = "Audio"
                 appCategory = "AudioVideo;Audio;Player"
-                debMaintainer = "85984486+AbhiTheModder@users.noreply.github.com"
+                debMaintainer = "muses@localhost"
                 rpmLicenseType = "GPL-3.0"
             }
 
             windows {
                 iconFile.set(project.file("packaging/icons/AppIcon.ico"))
-                upgradeUuid = "8f3c1d24-6a2b-4f5e-9c17-2b8d54e0a913"
-                menuGroup = "BitChord"
+                upgradeUuid = "5b1e7c3a-9d42-4f68-b3a1-6e0c2d7f4a15"
+                menuGroup = "Muses"
                 shortcut = true
                 dirChooser = false
                 perUserInstall = true

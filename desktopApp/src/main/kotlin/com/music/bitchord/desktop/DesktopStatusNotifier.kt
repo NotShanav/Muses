@@ -56,7 +56,7 @@ internal class DesktopStatusNotifierController(
 
     private fun worker(): ExecutorService = synchronized(lock) {
         worker?.takeIf { !it.isShutdown } ?: Executors.newSingleThreadExecutor { runnable ->
-            Thread(runnable, "BitChord-Tray").apply { isDaemon = true }
+            Thread(runnable, "Muses-Tray").apply { isDaemon = true }
         }.also { worker = it }
     }
 
@@ -206,19 +206,19 @@ internal class DesktopStatusNotifierController(
 
     private fun icons(): List<TrayPixmap> = synchronized(lock) { iconPixmaps }
 
-    private fun tooltipTitle(): String = synchronized(lock) { nowPlaying } ?: "BitChord"
+    private fun tooltipTitle(): String = synchronized(lock) { nowPlaying } ?: "Muses"
 
     private fun itemProperties(): Map<String, Variant<*>> = mapOf(
         "Category" to Variant("ApplicationStatus"),
         "Id" to Variant("bitchord"),
-        "Title" to Variant("BitChord"),
+        "Title" to Variant("Muses"),
         "Status" to Variant("Active"),
         // The logo itself when it has been rendered, and a themed name as the fallback for a host
         // that ignores pixmaps.
         "IconName" to Variant(if (icons().isEmpty()) "multimedia-player" else ""),
         "IconPixmap" to Variant(icons(), "a(iiay)"),
         "ToolTip" to Variant(
-            ToolTip("", icons(), "BitChord", tooltipTitle()),
+            ToolTip("", icons(), "Muses", tooltipTitle()),
         ),
         // Where the host reads the menu from.
         "Menu" to Variant(DBusPath(DesktopTrayMenu.OBJECT_PATH), "o"),
@@ -285,13 +285,20 @@ private fun TrayPixmap.toImage(): java.awt.image.BufferedImage {
 }
 
 private fun renderSvg(svg: ByteArray, size: Int): TrayPixmap? = runCatching {
-    val dom = SVGDOM(Data.makeFromBytes(svg))
-    dom.setContainerSize(size.toFloat(), size.toFloat())
     val surface = Surface.makeRasterN32Premul(size, size)
-    // The container size alone does not resize an SVG that declares absolute width and height.
-    val intrinsic = dom.root?.width?.value?.takeIf { it > 0f } ?: size.toFloat()
-    surface.canvas.scale(size / intrinsic, size / intrinsic)
-    dom.render(surface.canvas)
+    val isPng = svg.size > 4 && svg[0] == 0x89.toByte() && svg[1] == 'P'.code.toByte()
+    if (isPng) {
+        // The artwork may be a PNG (Muses' logo is a raster): scale it into the tray's square.
+        val image = org.jetbrains.skia.Image.makeFromEncoded(svg)
+        surface.canvas.drawImageRect(image, org.jetbrains.skia.Rect.makeWH(size.toFloat(), size.toFloat()))
+    } else {
+        val dom = SVGDOM(Data.makeFromBytes(svg))
+        dom.setContainerSize(size.toFloat(), size.toFloat())
+        // The container size alone does not resize an SVG that declares absolute width and height.
+        val intrinsic = dom.root?.width?.value?.takeIf { it > 0f } ?: size.toFloat()
+        surface.canvas.scale(size / intrinsic, size / intrinsic)
+        dom.render(surface.canvas)
+    }
     val bitmap = Bitmap()
     bitmap.allocPixels(ImageInfo.makeN32Premul(size, size))
     if (!surface.readPixels(bitmap, 0, 0)) return@runCatching null

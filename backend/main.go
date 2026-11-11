@@ -701,7 +701,7 @@ var inviteTemplate = template.Must(template.New("invite").Parse(`<!DOCTYPE html>
             <a id="joinBtn" href="{{.IntentURI}}" class="btn">Join Party in BitChord</a>
             <p class="footer-note">
                 Didn’t open automatically? Tap the button above.<br>
-                Don't have BitChord yet? <a href="https://github.com/kushagrasinghx/BitChord/releases" target="_blank" rel="noopener">Download it here</a>.
+                Don't have Muses yet?
             </p>
             <script>
                 var intentUri = {{.IntentURI}};

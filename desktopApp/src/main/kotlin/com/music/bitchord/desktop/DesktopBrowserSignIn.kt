@@ -30,7 +30,7 @@ import kotlin.coroutines.cancellation.CancellationException
  * different executable from decrypting the main profile. Google also rejects account login while
  * remote debugging is active. We therefore sign in normally in a separate browser profile first;
  * after that window closes, the same profile is opened headlessly with loopback debugging only
- * long enough for Chrome to hand the completed session back to BitChord.
+ * long enough for Chrome to hand the completed session back to Muses.
  */
 internal object DesktopBrowserSignIn {
     data class Browser(val name: String, val executable: Path) {
@@ -60,7 +60,7 @@ internal object DesktopBrowserSignIn {
     /** Opens [browser] normally for sign-in, then reads the finished session in a headless pass. */
     suspend fun capture(browser: Browser): String = withContext(kotlinx.coroutines.Dispatchers.IO) {
         val profile = environmentPath("LOCALAPPDATA", "AppData/Local")
-            .resolve("BitChord")
+            .resolve("Muses")
             .resolve("Browser Sign In")
             .resolve(browser.name)
         Files.createDirectories(profile)

@@ -80,7 +80,7 @@ jobs:
       - name: Verify packaged SMTC DLL and seek callback
         shell: pwsh
         run: |
-          $jarPath = "desktopApp/build/compose/binaries/main/app/BitChord/app"
+          $jarPath = "desktopApp/build/compose/binaries/main/app/Muses/app"
           $jar = Get-ChildItem $jarPath -Filter "desktopApp*.jar" |
             Select-Object -First 1
 
@@ -127,14 +127,14 @@ jobs:
             throw "MSI installer was not generated."
           }
 
-          Copy-Item $msi.FullName "dist/BitChord-$env:BUILD_VERSION-windows-x64.msi"
+          Copy-Item $msi.FullName "dist/Muses-$env:BUILD_VERSION-windows-x64.msi"
 
           Get-ChildItem dist | Format-Table Name, Length
 
       - name: Upload Windows MSI
         uses: actions/upload-artifact@v4
         with:
-          name: BitChord-Windows-Seek-Fix
+          name: Muses-Windows
           path: dist/*.msi
           if-no-files-found: error
           retention-days: 14

@@ -241,9 +241,8 @@ To keep memory, bandwidth, and latency strictly bounded:
 
 ## Deploying to Oracle Cloud (Always Free)
 
-This is what runs `https://api.bitchord.kushagrasingh.in`: one Always Free
-`VM.Standard.E2.1.Micro` (1 OCPU, 1 GB) on Ubuntu 24.04 in ap-mumbai-1, with
-Caddy in front for HTTPS and WebSockets. Files are in `deploy/`.
+One way to host it: an Always Free `VM.Standard.E2.1.Micro` (1 OCPU, 1 GB) on
+Ubuntu 24.04, with Caddy in front for HTTPS and WebSockets. Files are in `deploy/`.
 
 1. **Create the VM**: Compute -> Instances -> Create. Image *Canonical Ubuntu
    24.04*, shape *VM.Standard.E2.1.Micro* (tagged Always Free), public subnet,
@@ -256,7 +255,7 @@ Caddy in front for HTTPS and WebSockets. Files are in `deploy/`.
 4. **Install** (from a copy of `backend/` on the VM):
 
    ```sh
-   sudo DOMAIN=api.bitchord.kushagrasingh.in bash deploy/setup.sh
+   sudo DOMAIN=api.example.com bash deploy/setup.sh
    ```
 
    It installs Go, builds the server into `/opt/bitchord-jam`, runs it as the

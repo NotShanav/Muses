@@ -24,7 +24,7 @@ import kotlin.random.Random
 enum class PresencePlatform(val wire: String) { Android("android"), Pc("pc") }
 
 /**
- * Tells the BitChord server this install is open, so it can publish how many
+ * Tells the Muses server this install is open, so it can publish how many
  * apps are open right now (`GET /api/stats/live`).
  *
  * While open, one small POST goes out every few minutes. The server sets the
@@ -85,6 +85,7 @@ class Presence(
     }
 
     private fun send(open: Boolean, timeoutSec: Long = 15) {
+        if (endpoint.isBlank()) return
         val body = buildJsonObject {
             put("id", installId)
             put("platform", platform.wire)
@@ -115,7 +116,8 @@ class Presence(
     }
 
     companion object {
-        const val ENDPOINT = "https://api.bitchord.kushagrasingh.in/api/presence"
+        /** Blank: Muses does not report presence anywhere. */
+        const val ENDPOINT = ""
         private const val TAG = "Presence"
         private const val DEFAULT_INTERVAL_SEC = 300
         private const val MIN_INTERVAL_SEC = 60

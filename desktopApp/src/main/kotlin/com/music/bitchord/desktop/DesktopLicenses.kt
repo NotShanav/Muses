@@ -21,10 +21,16 @@ internal object DesktopLicenses {
             "This application",
             listOf(
                 DesktopLicense(
-                    "BitChord",
+                    "Muses",
                     "GPL-3.0-or-later",
                     "https://www.gnu.org/licenses/gpl-3.0.html",
                     "Your music, your way.",
+                ),
+                DesktopLicense(
+                    "BitChord",
+                    "GPL-3.0-or-later",
+                    "https://www.gnu.org/licenses/gpl-3.0.html",
+                    "Muses is a modified version of this program; its copyright notices are kept in the source.",
                 ),
             ),
         ),

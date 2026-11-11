@@ -170,7 +170,8 @@ internal object DesktopDiscordRpc {
                     // whatever icon the application id points at, which is not
                     // ours to set.
                     largeImage = RpcImage.ExternalImage(
-                        song.artworkAt(ART_PX)?.takeIf { it.startsWith("http") } ?: FALLBACK_ART_URL,
+                        song.artworkAt(ART_PX)?.takeIf { it.startsWith("http") }
+                            ?: "https://i.ytimg.com/vi/${song.videoId}/hqdefault.jpg",
                     ),
                     smallImage = null,
                     largeText = song.albumName,
@@ -224,7 +225,11 @@ internal object DesktopDiscordRpc {
             put("end", endMs)
         }
         putJsonObject("assets") {
-            put("large_image", song.artworkAt(ART_PX)?.takeIf { it.startsWith("http") } ?: FALLBACK_ART_URL)
+            put(
+                "large_image",
+                song.artworkAt(ART_PX)?.takeIf { it.startsWith("http") }
+                    ?: "https://i.ytimg.com/vi/${song.videoId}/hqdefault.jpg",
+            )
             song.albumName?.let { put("large_text", it) }
         }
         val labels = buttonLabels(song)
@@ -246,7 +251,7 @@ internal object DesktopDiscordRpc {
         }
         if (settings.button2Visible.value) {
             val text = settings.button2Text.value.ifEmpty { DesktopDiscordSettings.DEFAULT_BUTTON_2 }
-            add(settings.resolveVariables(text, song.title, song.artist, song.albumName) to PROJECT_URL)
+            add(settings.resolveVariables(text, song.title, song.artist, song.albumName) to YOUTUBE_MUSIC_URL)
         }
     }
 
@@ -289,10 +294,8 @@ internal object DesktopDiscordRpc {
     private const val KEY_ENABLED = "discord_rpc_enabled"
 
     private const val APPLICATION_ID = "1411019391843172514"
-    private const val PROJECT_URL = "https://github.com/kushagrasinghx/BitChord"
+    private const val YOUTUBE_MUSIC_URL = "https://music.youtube.com"
     private const val ART_PX = 480
-    private const val FALLBACK_ART_URL =
-        "https://raw.githubusercontent.com/kushagrasinghx/BitChord/main/app/src/main/ic_launcher-playstore.png"
     private const val CLIENT_VERSION = "0.0.83"
     private const val CLIENT_BUILD = "352675"
     private const val USER_AGENT =

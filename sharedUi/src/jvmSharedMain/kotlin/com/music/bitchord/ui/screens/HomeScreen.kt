@@ -496,10 +496,9 @@ private fun HomeTitle(title: String, modifier: Modifier = Modifier) {
     val style = MaterialTheme.typography.displayLarge
     val logoHeight = with(LocalDensity.current) { (style.fontSize * LOGO_TO_FONT).toDp() }
     Column(modifier = modifier.padding(horizontal = PAGE_GUTTER, vertical = 8.dp)) {
-        Icon(
+        Image(
             painter = painterResource(Res.drawable.ic_logo),
             contentDescription = null,
-            tint = MaterialTheme.colorScheme.onBackground,
             modifier = Modifier
                 .padding(bottom = 14.dp)
                 .height(logoHeight)

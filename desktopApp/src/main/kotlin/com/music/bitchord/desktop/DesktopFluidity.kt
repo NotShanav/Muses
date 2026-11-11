@@ -49,7 +49,7 @@ import kotlin.math.min
 import kotlin.math.sin
 
 /*
- * Fluidity mode: liquid glass for BitChord desktop, after the Hermes "fluidity" skin.
+ * Fluidity mode: liquid glass for Muses desktop, after the Hermes "fluidity" skin.
  *
  * What it does, and how it plays with the settings that were already there:
  *

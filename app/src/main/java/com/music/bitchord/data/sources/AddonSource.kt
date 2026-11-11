@@ -308,7 +308,7 @@ class AddonSource(
         if (answer.isEncrypted) {
             TrackLog.w(
                 TAG,
-                "${config.displayName}: $trackId came back encrypted, which BitChord never asked for — passing",
+                "${config.displayName}: $trackId came back encrypted, which Muses never asked for — passing",
             )
             return null
         }
@@ -406,7 +406,7 @@ class AddonSource(
     }
 
     private companion object {
-        const val TAG = "BitChord"
+        const val TAG = "Muses"
 
         /** What a gated addon's health says, for the editor's Test line. The sources list draws its own. */
         const val NEEDS_LOSSLESS_OUTPUT =

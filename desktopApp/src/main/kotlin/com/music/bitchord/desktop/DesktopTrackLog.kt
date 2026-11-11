@@ -24,7 +24,7 @@ internal object DesktopTrackLog {
 
     fun log(line: String) {
         val stamped = "${LocalTime.now().format(clock)}  $line"
-        println("BitChord: $stamped")
+        println("Muses: $stamped")
         val target = file ?: return
         runCatching {
             Files.writeString(
