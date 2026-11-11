@@ -3966,8 +3966,6 @@ private fun DesktopTopBar(
     isLoading: Boolean,
     previousEnabled: Boolean,
     progress: Float,
-    positionMs: Long,
-    durationMs: Long,
     volume: Float,
     shuffle: Boolean,
     repeatMode: DesktopRepeatMode,
@@ -4013,11 +4011,12 @@ private fun DesktopTopBar(
     val activeIndex = tabs.indexOfFirst { it.first == destination }.coerceAtLeast(0)
     val slide by animateFloatAsState(activeIndex.toFloat(), MusesMotion.settle(), label = "navigationPill")
     DesktopTitleBarDragArea(Modifier.fillMaxWidth().height(64.dp)) {
-        Row(
-            Modifier.fillMaxSize().desktopWindowGlass(DesktopChromeEdge.BOTTOM).padding(horizontal = 14.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
+        Box(Modifier.fillMaxSize()) {
+            Row(
+                Modifier.fillMaxSize().desktopWindowGlass(DesktopChromeEdge.BOTTOM).padding(horizontal = 14.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
             if (inlineCaption) DesktopWindowButtons()
             Box(Modifier.height(40.dp)) {
                     Box(
@@ -4068,13 +4067,15 @@ private fun DesktopTopBar(
                             DropdownMenuItem(text = { Text(item.title, maxLines = 1, overflow = TextOverflow.Ellipsis) }, onClick = { accountMenuOpen = false; onOpenAccountPlaylist(item) })
                         }
                         localPlaylists.forEach { item ->
-                            DropdownMenuItem(text = { Text(item.name, maxLines = 1, overflow = TextOverflow.Ellipsis) }, onClick = { accountMenuOpen = false; onOpenLocalPlaylist(item) })
+                            DropdownMenuItem(text = { Text(item.title, maxLines = 1, overflow = TextOverflow.Ellipsis) }, onClick = { accountMenuOpen = false; onOpenLocalPlaylist(item) })
                         }
                     }
                 }
             }
         }
-        HorizontalDivider(Modifier.align(Alignment.BottomCenter).fillMaxWidth(), thickness = 1.dp, color = desktopChromeDivider())
+            }
+            HorizontalDivider(Modifier.align(Alignment.BottomCenter).fillMaxWidth(), thickness = 1.dp, color = desktopChromeDivider())
+        }
     }
 }
 
@@ -4288,6 +4289,8 @@ internal fun DesktopFloatingMiniPlayer(
     isPlaying: Boolean,
     previousEnabled: Boolean,
     progress: Float,
+    positionMs: Long,
+    durationMs: Long,
     onExpandPlayer: () -> Unit,
     artworkModifier: Modifier = Modifier,
     onPlayPause: () -> Unit,

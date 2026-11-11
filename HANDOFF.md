@@ -120,3 +120,7 @@ internal fun DesktopFloatingMiniPlayer(
 1. Compile Windows desktop and JVM shared UI in GitHub Actions and fix any issues reported there.
 2. If implementing the player expansion transition, use `onExpandPlayer` and `artworkModifier` above; keep the current full-screen layout unchanged unless shared-element continuity requires a carefully reviewed adjustment.
 3. Preserve this mapping table and keep all formerly reachable controls accessible.
+
+
+### Account 2 build-log follow-up
+The GitHub Actions log supplied after packaging identified four source issues: `positionMs` and `durationMs` had been declared on `DesktopTopBar` instead of `DesktopFloatingMiniPlayer`; a local playlist menu item used nonexistent `name` instead of `title`; and the top-strip divider used `Modifier.align` outside a `BoxScope`. These were corrected by moving the timing parameters to the mini-player API, using `DesktopPlaylist.title`, and placing the row and divider inside a `Box`. The corrected project is repackaged. It has not yet been rerun through GitHub Actions, so successful compilation is still unverified.
