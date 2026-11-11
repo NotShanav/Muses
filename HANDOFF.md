@@ -69,6 +69,10 @@ internal fun DesktopFloatingMiniPlayer(
     progress: Float,
     positionMs: Long,
     durationMs: Long,
+    shuffle: Boolean,
+    repeatMode: DesktopRepeatMode,
+    onShuffleChange: (Boolean) -> Unit,
+    onRepeatModeChange: (DesktopRepeatMode) -> Unit,
     onExpandPlayer: () -> Unit,
     artworkModifier: Modifier = Modifier,
     onPlayPause: () -> Unit,
@@ -97,9 +101,9 @@ internal fun DesktopFloatingMiniPlayer(
 | Account playlists shelf | Library Playlists shelf and profile menu playlist entries |
 | Local playlists shelf | Library and profile menu playlist entries |
 | Account switcher | Profile menu > Switch account; existing `DesktopAccountUi` overlay |
-| Previous / play-pause / next | Floating mini-player |
+| Previous / play-pause / next | Modern floating mini-player; Legacy top bar or compact mini-player |
 | Seek progress | Floating mini-player progress line; full seek remains in full-screen player |
-| Shuffle / repeat | Full-screen player controls |
+| Shuffle / repeat | Modern mini-player and full-screen player; Legacy top bar and full-screen player |
 | Volume | Full-screen player volume controls |
 | Queue / lyrics | Mini-player More menu and full-screen player |
 | Audio output | Mini-player More menu and full-screen player output control |
@@ -107,13 +111,13 @@ internal fun DesktopFloatingMiniPlayer(
 
 ### Decisions and limitations
 - `DesktopFloatingMiniPlayer` uses the Haze source already installed on the page, with `desktopBarGlass` for the one glass surface and the repository's solid fallback when dynamic blur is reduced.
-- The top pill animation is transform-only. Card hover-lift changes were not added to the shared HomeScreen because it is shared by Android and desktop while `MusesMotion` is desktop-only; the existing card interaction and shelf layout remain intact.
+- The top pill and home card hover animations use transform-only motion. Desktop passes its `MusesMotion.Press` spec into optional shared HomeScreen parameters; other callers retain the prior behavior.
 - The profile dropdown can become tall when an account has many playlist entries; the Library page remains the primary route to the full playlist shelf.
 - No player engine, account, library, lyrics-fetching, or background-mode code was altered.
 
 ### Verified
 - **Gradle was attempted but did not reach compilation.** Both `./gradlew :desktopApp:compileKotlin :sharedUi:compileKotlinJvm` and the Windows wrapper with `--offline` stalled before emitting Gradle output. `java -version` also stalled; the available Java path resolves to the Windows Java 8 path shim. No successful compile or tests are claimed.
-- **Manual source review:** compared the edited `DesktopApp.kt` against the input archive version; checked imports and symbol definitions for `DesktopFloatingMiniPlayer`, `DesktopToolbarButton`, the existing desktop destination enum, `DesktopPlaylist.title`, `DesktopSearchField`, `DesktopFrame`, the visit restoration logic, Compose `key`, and existing animation/glass APIs. The shared HomeScreen and Android source files were not edited, so there are no new expect/actual changes.
+- **Manual source review:** compared the edited `DesktopApp.kt` against the input archive version; checked imports and symbol definitions for `DesktopFloatingMiniPlayer`, `DesktopToolbarButton`, the existing desktop destination enum, `DesktopPlaylist.title`, `DesktopSearchField`, `DesktopFrame`, the visit restoration logic, Compose `key`, and existing animation/glass APIs. At the Account 2 stage, the shared HomeScreen and Android source files were not edited. The later Modern / Legacy follow-up adds optional parameters only to the JVM desktop HomeScreen implementation; Android and other platform source sets remain untouched, with no new expect/actual declarations.
 - Not verified: Linux desktop compile, Android compile, UI behavior at narrow widths, and automated tests.
 
 ### Next account
@@ -126,3 +130,24 @@ internal fun DesktopFloatingMiniPlayer(
 The GitHub Actions log supplied after packaging identified four source issues: `positionMs` and `durationMs` had been declared on `DesktopTopBar` instead of `DesktopFloatingMiniPlayer`; a local playlist menu item used nonexistent `name` instead of `title`; and the top-strip divider used `Modifier.align` outside a `BoxScope`. These were corrected by moving the timing parameters to the mini-player API, using `DesktopPlaylist.title`, and placing the row and divider inside a `Box`. The corrected project is repackaged. It has not yet been rerun through GitHub Actions, so successful compilation is still unverified.
 
 The next supplied workflow run confirmed the playlist name and mini-player timing-parameter corrections and reported two additional top-bar structure errors. The bottom divider now lives inside the surrounding `Box` scope, and the extra closing brace has been removed. The archive has been refreshed again; another Actions run is needed to confirm the fix.
+
+
+## Modern / Legacy interface follow-up
+
+### Implemented
+- Added one persisted Modern interface switch through `DesktopInterfaceMode` (`MODERN` / `LEGACY`) and `DesktopInterfaceSettings`, using preference key `desktop_interface_mode`. New installs default to Modern; switching it off selects Legacy and restores the classic desktop shell.
+- Modern keeps Home / Explore / Library at the upper left with a spring-sliding selection orb. Search is an icon between Back and Forward; it opens the existing Search field and reuses the existing query, search, and typeahead state. The profile menu provides account switching, History, and Settings.
+- Modern refines the home feed with 24 dp side gutters, 30 dp shelf spacing, See all actions, compact Quick picks cards, and 1.03 hover lift. It uses the centered floating player dock over the full-height page with artwork, track details, elapsed/total time, progress, previous, play/pause, next, shuffle, repeat, and a More menu for lyrics, queue, and output. Downloads, local music, account playlists, and the existing library detail remain reachable from Library device items and shelves.
+- The Appearance group now starts with the Modern / Legacy choice, followed by the existing blur, Fluidity, and player-background settings. Interface mode is stored separately from `player_background_mode` and the global Fluidity setting.
+- Modern search expansion, page entrance, selection-orb movement, mini-player entrance, and button press feedback use `MusesMotion` and respect Reduce animation. Home shelves use 24 dp gutters, 30 dp section spacing, See all links, a compact Quick picks card row, and 1.03 hover lift. The full-screen player and its existing album-reactive background implementation were not changed.
+
+### Known limits and verification
+- A rare home-background color flicker was reported by the user but was not reproduced or changed; it is low priority and separate from the shell layout work.
+- Manual source review only. The local Gradle invocation again stalled before output because the available Java launcher does not start reliably in this environment. Windows compilation, Linux compilation, Android compilation, and runtime visual QA remain unverified. The existing GitHub Actions failure logs were used to repair the prior Account 2 source errors, but this new Modern / Legacy implementation still needs an Actions run.
+- Modern mode is the default for installs without a saved interface preference. Existing saved Modern / Legacy preferences are preserved.
+
+
+### Final package status
+- Refreshed Muses-modern-interface.zip from the complete current source tree, including hidden .github workflow files. The package retains the Muses/ top-level directory.
+- Build verification remains pending: local Gradle could not start reliably in this environment. Run the Windows desktop GitHub Actions workflow on this package before treating it as a release build.
+

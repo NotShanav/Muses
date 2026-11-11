@@ -1,5 +1,7 @@
 package com.music.bitchord.ui.screens
 
+import androidx.compose.animation.core.FiniteAnimationSpec
+import androidx.compose.animation.core.animateFloatAsState
 import com.music.bitchord.ui.components.contextClick
 import com.music.bitchord.ui.AppUi
 import com.music.bitchord.sharedui.resources.*
@@ -11,6 +13,9 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.hoverable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import com.music.bitchord.ui.components.longPressMenuClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -40,6 +45,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.pulltorefresh.PullToRefreshState
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.composed
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
@@ -51,11 +57,14 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.Dp
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Cached
+import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
 import androidx.compose.material.icons.rounded.Folder
 import androidx.compose.material.icons.rounded.LibraryMusic
 import androidx.compose.material.icons.rounded.MoreVert
@@ -138,8 +147,16 @@ fun HomeScreen(
     leadHero: Boolean = true,
     currentSong: Song? = null,
     isPlaying: Boolean = false,
+    /** Desktop supplies MusesMotion.Press; shared mobile callers keep the current touch behavior. */
+    desktopCardHoverSpec: FiniteAnimationSpec<Float>? = null,
+    desktopGutter: Dp? = null,
+    desktopSectionSpacing: Dp? = null,
+    compactQuickPicks: Boolean = false,
+    onShowAll: ((HomeShelf) -> Unit)? = null,
 ) {
     val recentsViewType by AppUi.host.homeRecentsViewType.collectAsStateWithLifecycle()
+    val horizontalGutter = desktopGutter ?: PAGE_GUTTER
+    val sectionSpacing = desktopSectionSpacing ?: 26.dp
 
     PullToRefresh(
         refreshing = refreshing,
@@ -162,7 +179,7 @@ fun HomeScreen(
             },
         ) {
             if (title != null) {
-                item { HomeTitle(title) }
+                item { HomeTitle(title, gutter = horizontalGutter) }
             }
             if (!signedIn && onSignIn != null) {
                 item {
@@ -208,6 +225,11 @@ fun HomeScreen(
                                 },
                             )
                         },
+                        horizontalGutter = horizontalGutter,
+                        sectionSpacing = sectionSpacing,
+                        hoverScaleSpec = desktopCardHoverSpec,
+                        compactQuickPicks = compactQuickPicks,
+                        onShowAll = onShowAll,
                     )
                     if (loadingMore) feedMoreSkeleton()
                 }
@@ -248,6 +270,11 @@ private fun androidx.compose.foundation.lazy.LazyListScope.itemsIndexedShelves(
     firstIsHero: Boolean = true,
     recentsViewType: LibraryViewType,
     onRecentsViewTypeToggle: () -> Unit,
+    horizontalGutter: Dp,
+    sectionSpacing: Dp,
+    hoverScaleSpec: FiniteAnimationSpec<Float>?,
+    compactQuickPicks: Boolean,
+    onShowAll: ((HomeShelf) -> Unit)?,
 ) {
     shelves.forEachIndexed { index, shelf ->
         item(key = shelf.title + index) {
@@ -261,6 +288,10 @@ private fun androidx.compose.foundation.lazy.LazyListScope.itemsIndexedShelves(
                     isPlaying = isPlaying,
                     viewType = recentsViewType,
                     onViewTypeToggle = onRecentsViewTypeToggle,
+                    horizontalGutter = horizontalGutter,
+                    sectionSpacing = sectionSpacing,
+                    hoverScaleSpec = hoverScaleSpec,
+                    onShowAll = onShowAll?.let { callback -> { callback(shelf) } },
                 )
             } else if (index == 0 && firstIsHero) {
                 HeroShelf(
@@ -269,6 +300,20 @@ private fun androidx.compose.foundation.lazy.LazyListScope.itemsIndexedShelves(
                     onItemLongPress = onItemLongPress,
                     currentSong = currentSong,
                     isPlaying = isPlaying,
+                    horizontalGutter = horizontalGutter,
+                    sectionSpacing = sectionSpacing,
+                    hoverScaleSpec = hoverScaleSpec,
+                    onShowAll = onShowAll?.let { callback -> { callback(shelf) } },
+                )
+            } else if (compactQuickPicks && isQuickPicksShelf(shelf.title)) {
+                QuickPicksShelf(
+                    shelf = shelf,
+                    onItemClick = openItem,
+                    onItemLongPress = onItemLongPress,
+                    horizontalGutter = horizontalGutter,
+                    sectionSpacing = sectionSpacing,
+                    hoverScaleSpec = hoverScaleSpec,
+                    onShowAll = onShowAll?.let { callback -> { callback(shelf) } },
                 )
             } else {
                 Shelf(
@@ -277,11 +322,21 @@ private fun androidx.compose.foundation.lazy.LazyListScope.itemsIndexedShelves(
                     onItemLongPress = onItemLongPress,
                     currentSong = currentSong,
                     isPlaying = isPlaying,
+                    horizontalGutter = horizontalGutter,
+                    sectionSpacing = sectionSpacing,
+                    hoverScaleSpec = hoverScaleSpec,
+                    onShowAll = onShowAll?.let { callback -> { callback(shelf) } },
                 )
             }
         }
     }
 }
+
+private fun isQuickPicksShelf(title: String): Boolean =
+    title.equals("Quick picks", ignoreCase = true) ||
+        title.equals("Lựa chọn nhanh", ignoreCase = true) ||
+        title.equals("Chọn nhanh đài phát", ignoreCase = true) ||
+        title.equals("クイック ミックス", ignoreCase = true)
 
 /** The same four-rows-per-page treatment used by an artist's Top songs. */
 @Composable
@@ -293,19 +348,25 @@ private fun RecentShelf(
     isPlaying: Boolean,
     viewType: LibraryViewType,
     onViewTypeToggle: () -> Unit,
+    horizontalGutter: Dp,
+    sectionSpacing: Dp,
+    hoverScaleSpec: FiniteAnimationSpec<Float>?,
+    onShowAll: (() -> Unit)?,
 ) {
-    Column(Modifier.padding(bottom = 26.dp)) {
+    Column(Modifier.padding(bottom = sectionSpacing)) {
         RecentSectionHeader(
             title = shelf.title,
             subtitle = shelf.subtitle,
             viewType = viewType,
             onViewTypeToggle = onViewTypeToggle,
+            horizontalGutter = horizontalGutter,
+            onShowAll = onShowAll,
         )
         if (viewType == LibraryViewType.LIST) {
             BoxWithConstraints {
                 val columnWidth = trackColumnWidth(maxWidth)
                 ShelfRow(
-                    contentPadding = PaddingValues(horizontal = PAGE_GUTTER),
+                    contentPadding = PaddingValues(horizontal = horizontalGutter),
                     horizontalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
                     items(shelf.items.chunked(RECENT_TRACKS_PER_COLUMN)) { column ->
@@ -327,7 +388,7 @@ private fun RecentShelf(
             BoxWithConstraints {
                 val cardWidth = heroCardWidth(maxWidth)
                 ShelfRow(
-                    contentPadding = PaddingValues(horizontal = PAGE_GUTTER),
+                    contentPadding = PaddingValues(horizontal = horizontalGutter),
                     horizontalArrangement = Arrangement.spacedBy(14.dp),
                 ) {
                     items(shelf.items) { item ->
@@ -335,7 +396,7 @@ private fun RecentShelf(
                             item = item,
                             onClick = { onItemClick(item) },
                             onLongPress = onItemLongPress?.let { { it(item) } },
-                            modifier = Modifier.width(cardWidth),
+                            modifier = Modifier.width(cardWidth).cardHoverLift(hoverScaleSpec),
                             isCurrent = item.matchesCurrentlyPlaying(currentSong),
                             isPlaying = item.matchesCurrentlyPlaying(currentSong) && isPlaying,
                         )
@@ -352,10 +413,12 @@ private fun RecentSectionHeader(
     subtitle: String,
     viewType: LibraryViewType,
     onViewTypeToggle: () -> Unit,
+    horizontalGutter: Dp,
+    onShowAll: (() -> Unit)?,
 ) {
     Row(
         modifier = Modifier
-            .padding(horizontal = PAGE_GUTTER, vertical = 10.dp)
+            .padding(horizontal = horizontalGutter, vertical = 10.dp)
             .fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -400,6 +463,14 @@ private fun RecentSectionHeader(
                 ),
                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.size(19.dp),
+            )
+        }
+        if (onShowAll != null) {
+            Text(
+                text = stringResource(Res.string.show_all),
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.clickable(onClick = onShowAll).padding(horizontal = 8.dp, vertical = 4.dp),
             )
         }
     }
@@ -492,10 +563,10 @@ fun CompactTrackRow(
  * system font scale.
  */
 @Composable
-private fun HomeTitle(title: String, modifier: Modifier = Modifier) {
+private fun HomeTitle(title: String, modifier: Modifier = Modifier, gutter: Dp = PAGE_GUTTER) {
     val style = MaterialTheme.typography.displayLarge
     val logoHeight = with(LocalDensity.current) { (style.fontSize * LOGO_TO_FONT).toDp() }
-    Column(modifier = modifier.padding(horizontal = PAGE_GUTTER, vertical = 8.dp)) {
+    Column(modifier = modifier.padding(horizontal = gutter, vertical = 8.dp)) {
         Image(
             painter = painterResource(Res.drawable.ic_logo),
             contentDescription = null,
@@ -521,17 +592,21 @@ private const val LOGO_ASPECT = 730f / 484f
 /**
  * Shared by the home feed, Explore and Library so headings line up across tabs.
  *
- * [onShowAll] is only ever set on Library, whose rows stop at five cards
- * rather than running the shelf's whole length — see [LibraryGridShelf].
- * Home and Explore never pass it, so their heading is unchanged.
+ * [onShowAll] is used by bounded Library rows and optionally by the desktop
+ * Modern home feed; Explore and Legacy home keep their existing headings.
  */
 @Composable
-internal fun SectionHeader(title: String, subtitle: String = "", onShowAll: (() -> Unit)? = null) {
+internal fun SectionHeader(
+    title: String,
+    subtitle: String = "",
+    onShowAll: (() -> Unit)? = null,
+    horizontalGutter: Dp = PAGE_GUTTER,
+) {
     val displayTitle = localizeShelfTitle(title)
     val displaySubtitle = localizeShelfSubtitle(subtitle)
     Row(
         modifier = Modifier
-            .padding(horizontal = PAGE_GUTTER, vertical = 10.dp)
+            .padding(horizontal = horizontalGutter, vertical = 10.dp)
             .fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -736,15 +811,86 @@ internal fun localizeCardSubtitle(subtitle: String): String {
 }
 
 @Composable
+private fun QuickPicksShelf(
+    shelf: HomeShelf,
+    onItemClick: (ShelfItem) -> Unit,
+    onItemLongPress: ((ShelfItem) -> Unit)?,
+    horizontalGutter: Dp,
+    sectionSpacing: Dp,
+    hoverScaleSpec: FiniteAnimationSpec<Float>?,
+    onShowAll: (() -> Unit)?,
+) {
+    Column(Modifier.padding(bottom = sectionSpacing)) {
+        SectionHeader(shelf.title, shelf.subtitle, onShowAll, horizontalGutter)
+        ShelfRow(
+            contentPadding = PaddingValues(horizontal = horizontalGutter),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            items(shelf.items) { item ->
+                Row(
+                    Modifier.width(224.dp).height(72.dp)
+                        .clip(RoundedCornerShape(16.dp))
+                        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.78f))
+                        .cardHoverLift(hoverScaleSpec)
+                        .longPressMenuClickable(
+                            onClick = { onItemClick(item) },
+                            onLongClick = onItemLongPress?.let { { it(item) } },
+                        )
+                        .contextClick(onItemLongPress?.let { { it(item) } })
+                        .padding(horizontal = 10.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    AsyncImage(
+                        model = item.thumbnailUrl.artworkAt(ROW_ART_PX),
+                        contentDescription = null,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.size(48.dp).clip(RoundedCornerShape(12.dp)),
+                    )
+                    Column(Modifier.weight(1f).padding(horizontal = 10.dp)) {
+                        Text(item.title, style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(localizeCardSubtitle(item.subtitle), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+                    Icon(
+                        imageVector = androidx.compose.material.icons.Icons.AutoMirrored.Rounded.KeyboardArrowRight,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(20.dp),
+                    )
+                }
+            }
+        }
+    }
+}
+
+private fun Modifier.cardHoverLift(spec: FiniteAnimationSpec<Float>?): Modifier =
+    if (spec == null) this else composed {
+        val interaction = remember { MutableInteractionSource() }
+        val hovered by interaction.collectIsHoveredAsState()
+        val scale by animateFloatAsState(
+            targetValue = if (hovered) 1.03f else 1f,
+            animationSpec = spec,
+            label = "homeCardHoverLift",
+        )
+        this.hoverable(interaction).graphicsLayer {
+            scaleX = scale
+            scaleY = scale
+        }
+    }
+
+@Composable
 private fun HeroShelf(
     shelf: HomeShelf,
     onItemClick: (ShelfItem) -> Unit,
     onItemLongPress: ((ShelfItem) -> Unit)? = null,
     currentSong: Song? = null,
     isPlaying: Boolean = false,
+    horizontalGutter: Dp = PAGE_GUTTER,
+    sectionSpacing: Dp = 26.dp,
+    hoverScaleSpec: FiniteAnimationSpec<Float>? = null,
+    onShowAll: (() -> Unit)? = null,
 ) {
-    Column(Modifier.padding(bottom = 26.dp)) {
-        SectionHeader(shelf.title, shelf.subtitle)
+    Column(Modifier.padding(bottom = sectionSpacing)) {
+        SectionHeader(shelf.title, shelf.subtitle, onShowAll, horizontalGutter)
         // Measured rather than taken as a share of the parent, because the card
         // has a ceiling as well as a fraction — see [heroCardWidth]. A fixed
         // width is also the only one of the two the aspect ratio below can turn
@@ -753,7 +899,7 @@ private fun HeroShelf(
             val cardWidth = heroCardWidth(maxWidth)
             ShelfRow(
                 state = rememberLazyListState(),
-                contentPadding = PaddingValues(horizontal = PAGE_GUTTER),
+                contentPadding = PaddingValues(horizontal = horizontalGutter),
                 horizontalArrangement = Arrangement.spacedBy(14.dp),
             ) {
                 items(shelf.items) { item ->
@@ -761,7 +907,7 @@ private fun HeroShelf(
                         item = item,
                         onClick = { onItemClick(item) },
                         onLongPress = onItemLongPress?.let { { it(item) } },
-                        modifier = Modifier.width(cardWidth),
+                        modifier = Modifier.width(cardWidth).cardHoverLift(hoverScaleSpec),
                         isCurrent = item.matchesCurrentlyPlaying(currentSong),
                         isPlaying = item.matchesCurrentlyPlaying(currentSong) && isPlaying,
                     )
@@ -846,11 +992,15 @@ internal fun Shelf(
     leadingCard: (@Composable () -> Unit)? = null,
     currentSong: Song? = null,
     isPlaying: Boolean = false,
+    horizontalGutter: Dp = PAGE_GUTTER,
+    sectionSpacing: Dp = 26.dp,
+    hoverScaleSpec: FiniteAnimationSpec<Float>? = null,
+    onShowAll: (() -> Unit)? = null,
 ) {
-    Column(Modifier.padding(bottom = 26.dp)) {
-        SectionHeader(shelf.title, shelf.subtitle)
+    Column(Modifier.padding(bottom = sectionSpacing)) {
+        SectionHeader(shelf.title, shelf.subtitle, onShowAll, horizontalGutter)
         ShelfRow(
-            contentPadding = PaddingValues(horizontal = PAGE_GUTTER),
+            contentPadding = PaddingValues(horizontal = horizontalGutter),
             horizontalArrangement = Arrangement.spacedBy(14.dp),
         ) {
             leadingCard?.let { card -> item(key = "leading") { card() } }
@@ -861,6 +1011,7 @@ internal fun Shelf(
                     onLongPress = onItemLongPress?.let { { it(item) } },
                     isCurrent = item.matchesCurrentlyPlaying(currentSong),
                     isPlaying = item.matchesCurrentlyPlaying(currentSong) && isPlaying,
+                    hoverScaleSpec = hoverScaleSpec,
                 )
             }
         }
@@ -970,9 +1121,11 @@ internal fun ShelfCard(
     isPinned: Boolean = false,
     isCurrent: Boolean = false,
     isPlaying: Boolean = false,
+    hoverScaleSpec: FiniteAnimationSpec<Float>? = null,
 ) {
     Column(
         modifier = modifier
+            .cardHoverLift(hoverScaleSpec)
             .longPressMenuClickable(onClick = onClick, onLongClick = onLongPress)
             .contextClick(onLongPress),
     ) {

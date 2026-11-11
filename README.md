@@ -105,4 +105,4 @@ This project is licensed under the **GNU General Public License v3.0 (GPLv3)**. 
 
 
 ### Desktop navigation and floating player
-The desktop shell now uses a compact top navigation bar and a floating mini-player over the scrolling page. The profile menu keeps History, Downloads, Local Music, Settings, account switching, and playlist shortcuts reachable. The Appearance settings also include the **Player background** choice added in the previous phase.
+The desktop Appearance settings offer **Modern** and **Legacy** interface modes. Modern uses compact Home / Explore / Library navigation, an expanding search field, a floating glass player dock, and a refined home feed with compact Quick picks. Legacy restores the classic sidebar layout. The full-screen player remains unchanged; its separate **Player background** setting controls the album-reactive color animation.
