@@ -111,12 +111,3 @@ For a source-grounded product, architecture, feature, and build guide, see [docs
 
 Desktop users can open **Settings → Appearance → Advanced customisation** for desktop-only typography, colour, home spacing and artwork, presets, mini-player contents/material, and JSON appearance import/export. Existing desktop shell, Fluidity, player-background, motion, window, and dock settings are reused there. Android settings are unchanged.
 
-
-
-### Media Hub (beta, Windows)
-Muses can also act as a small **media hub**: **Media Hub** (profile menu in the Modern layout, sidebar in the Legacy layout) lists YouTube, Netflix, Prime Video, JioHotstar and Twitch, and clicking one opens that service in a real Brave, Chrome or Edge window (app mode, no tabs or address bar) that uses its own Muses-owned browser profile. Muses itself only controls the windows: it starts them, closes them, pauses its own music when a service starts, and measures memory so that Muses plus the browser stays under a 2 GB budget (a warning is shown at 1.6 GB). Because a real browser is used, video codecs, Widevine DRM, the browser's ad blocking and your own Chromium extensions come from the browser, not from Muses.
-
-Beta limits: one service is open at a time, closing a service does not keep the playback position, Muses cannot bring an open service's window to the front, and DRM services and extensions are untested. The Hub is not part of the music player and does not change playback, accounts or settings. The test plan is in [HUB_TEST_CHECKLIST.md](HUB_TEST_CHECKLIST.md) and the design is in [HUB_PLAN.md](HUB_PLAN.md).
-
-> [!WARNING]
-> Blocking ads on YouTube is against YouTube's Terms of Service. The Hub does not block ads itself; any ad blocking comes from the browser you choose (for example Brave Shields) and is your own responsibility and risk. Do not use the Hub on YouTube if you do not accept that. Muses is not affiliated with YouTube, Google, Netflix, Amazon, JioHotstar, Twitch or any browser vendor.
