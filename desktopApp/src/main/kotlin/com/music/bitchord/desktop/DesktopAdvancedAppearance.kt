@@ -30,6 +30,7 @@ internal data class DesktopAppearanceConfig(
     val amoledDark: Boolean = false,
     val fixedAccentArgb: Long? = null,
     val homeSections: DesktopHomeSectionPrefs = DesktopHomeSectionPrefs(),
+    val pillConfig: DesktopPillConfig = DesktopPillConfig(),
 ) {
     fun validated() = copy(
         schemaVersion = CURRENT_SCHEMA,
@@ -38,6 +39,7 @@ internal data class DesktopAppearanceConfig(
         paletteStrength = paletteStrength.takeIf(Float::isFinite)?.coerceIn(0f, 1f) ?: 1f,
         fixedAccentArgb = fixedAccentArgb?.takeIf { (it ushr 24) == 0xFFL && contrastRatio(it, if (amoledDark) 0xFF000000L else 0xFF202020L) >= 4.5 },
         homeSections = homeSections.validated(),
+        pillConfig = pillConfig.validated(),
     )
 
     private fun contrastRatio(foreground: Long, background: Long): Double {
@@ -54,7 +56,7 @@ internal data class DesktopAppearanceConfig(
     }
 
     companion object {
-        const val CURRENT_SCHEMA = 2
+        const val CURRENT_SCHEMA = 3
     }
 }
 
@@ -137,21 +139,28 @@ internal object DesktopAppearanceRegistry {
 }
 
 internal object DesktopAdvancedAppearance {
-    private const val CONFIG_KEY = "desktop_appearance_config_v2"
-    private const val LEGACY_CONFIG_KEY = "desktop_appearance_config_v1"
+    private const val CONFIG_KEY = "desktop_appearance_config_v3"
+    private const val LEGACY_CONFIG_KEY = "desktop_appearance_config_v2"
+    private const val OLDEST_CONFIG_KEY = "desktop_appearance_config_v1"
     private const val PRESETS_KEY = "desktop_appearance_user_presets_v1"
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
     private val persistence = DesktopPersistence()
 
     private fun load(): DesktopAppearanceConfig {
-        val raw = persistence.string(CONFIG_KEY, "").ifBlank { persistence.string(LEGACY_CONFIG_KEY, "") }
+        val raw = persistence.string(CONFIG_KEY, "")
+            .ifBlank { persistence.string(LEGACY_CONFIG_KEY, "") }
+            .ifBlank { persistence.string(OLDEST_CONFIG_KEY, "") }
         val decoded = raw.takeIf(String::isNotBlank)?.let {
             runCatching { json.decodeFromString<DesktopAppearanceConfig>(it) }.getOrNull()
         }
         // Unknown future versions are ignored safely; known older payloads are forward-filled by
         // defaults and validated field by field.
-        return (decoded?.takeIf { it.schemaVersion <= DesktopAppearanceConfig.CURRENT_SCHEMA }
-            ?.validated() ?: DesktopAppearanceConfig()).also { migrated ->
+        val accepted = decoded?.takeIf { it.schemaVersion <= DesktopAppearanceConfig.CURRENT_SCHEMA }
+        val loaded = accepted?.let { value ->
+            if (value.schemaVersion < 3) value.copy(pillConfig = migrateLegacyPillConfig(value)).validated()
+            else value.validated()
+        } ?: DesktopAppearanceConfig()
+        return loaded.also { migrated ->
             if (decoded != null && persistence.string(CONFIG_KEY, "").isBlank()) {
                 persistence.saveString(CONFIG_KEY, json.encodeToString(migrated))
             }

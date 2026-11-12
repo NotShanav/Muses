@@ -60,7 +60,7 @@ internal fun DesktopSidePanelColumn(
             fadeOut(tween(SLIDE_MS / 2)),
     ) {
         Row(Modifier.width(SIDE_PANEL_WIDTH).fillMaxHeight()) {
-            Box(Modifier.width(1.dp).fillMaxHeight().background(DesktopDivider))
+            // Let the page and lyrics glass meet without the old black one-pixel seam.
             Crossfade(
                 targetState = shown ?: return@Row,
                 animationSpec = tween(CROSSFADE_MS),

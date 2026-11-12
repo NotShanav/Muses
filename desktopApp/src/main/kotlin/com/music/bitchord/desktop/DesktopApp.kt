@@ -46,6 +46,7 @@ import com.music.bitchord.ui.player.rememberMixPulse
 import androidx.compose.runtime.SideEffect
 import com.music.bitchord.data.model.QueueTier
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.Crossfade
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.animateDpAsState
@@ -3041,6 +3042,7 @@ fun BitChordDesktopApp() {
                             onShuffleChange = ::setShuffle,
                             onRepeatModeChange = { repeatMode = it; persistence.saveString("repeat_mode", it.name) },
                             onExpandPlayer = { overlays.nowPlaying = true },
+                            onOpenPillStudio = { overlays.settingsPage = DesktopSettingsPage.PILL_STUDIO },
                             onPlayPause = { togglePlayPauseFromUser() },
                             onPrevious = ::playPrevious,
                             onNext = ::playNext,
@@ -3654,6 +3656,41 @@ fun BitChordDesktopApp() {
                                     onOpenHomeSections = { overlays.settingsPage = DesktopSettingsPage.HOME_SECTIONS },
                                 )
                                 DesktopSettingsPage.HOME_SECTIONS -> DesktopHomeSectionManagerPage(onDismiss = ::goBack)
+                                DesktopSettingsPage.CUSTOMISE_HUB -> DesktopCustomiseHubPage(
+                                    onHomeSections = { overlays.settingsPage = DesktopSettingsPage.HOME_SECTIONS },
+                                    onPillStudio = { overlays.settingsPage = DesktopSettingsPage.PILL_STUDIO },
+                                    onAppearance = { overlays.settingsPage = DesktopSettingsPage.MAIN },
+                                    onDone = ::goBack,
+                                )
+                                DesktopSettingsPage.PILL_STUDIO -> DesktopPillStudioPage(
+                                    songTitle = selectedSong?.title,
+                                    artist = selectedSong?.artist,
+                                    artworkUrl = selectedSong?.thumbnailUrl,
+                                    isPlaying = playback.isPlaying,
+                                    onDismiss = ::goBack,
+                                    onApply = { pill ->
+                                        DesktopMiniPlayerAppearance.setPosition(DesktopMiniPlayerPosition.fromStored(pill.dockPosition))
+                                        DesktopMiniPlayerAppearance.setWidth(pill.maxWidth)
+                                        DesktopMiniPlayerAppearance.setBottomInset(pill.bottomInset)
+                                        DesktopMiniPlayerAppearance.setCornerRadius(pill.cornerRadius)
+                                        DesktopMiniPlayerAppearance.setContrast(pill.contrast)
+                                        DesktopMiniPlayerAppearance.setRim(pill.rim)
+                                        DesktopAdvancedAppearance.update { old ->
+                                            old.copy(
+                                                pillConfig = pill,
+                                                miniPlayerHeight = pill.height,
+                                                miniPlayerMaterial = pill.material,
+                                                miniPlayerArtwork = "artwork" in pill.zones.values.flatten() && "artwork" !in pill.hiddenElements && pill.artPlacement != DesktopPillArtPlacement.HIDDEN,
+                                                miniPlayerMetadata = "metadata" in pill.zones.values.flatten() && "metadata" !in pill.hiddenElements,
+                                                miniPlayerArtShape = pill.artShape,
+                                                miniPlayerShowShuffle = "shuffle" in pill.zones.values.flatten() && "shuffle" !in pill.hiddenElements,
+                                                miniPlayerShowRepeat = "repeat" in pill.zones.values.flatten() && "repeat" !in pill.hiddenElements,
+                                                miniPlayerTapExpands = pill.clickAction == DesktopPillClickAction.OPEN_PLAYER,
+                                            )
+                                        }
+                                        goBack()
+                                    },
+                                )
                                 DesktopSettingsPage.EQUALIZER -> DesktopEqualizerDialog(onDismiss = ::goBack)
                                 DesktopSettingsPage.AUDIO_OUTPUT -> DesktopAudioOutputDialog(onDismiss = ::goBack)
                                 DesktopSettingsPage.LISTEN_TOGETHER -> DesktopListenTogetherDialog(
@@ -4489,6 +4526,7 @@ internal fun DesktopFloatingMiniPlayer(
     onShuffleChange: (Boolean) -> Unit,
     onRepeatModeChange: (DesktopRepeatMode) -> Unit,
     onExpandPlayer: () -> Unit,
+    onOpenPillStudio: () -> Unit,
     artworkModifier: Modifier = Modifier,
     onPlayPause: () -> Unit,
     onPrevious: () -> Unit,
@@ -4498,18 +4536,26 @@ internal fun DesktopFloatingMiniPlayer(
     onMoreOutput: () -> Unit,
 ) {
     var moreOpen by remember { mutableStateOf(false) }
+    val dockInteraction = remember { MutableInteractionSource() }
+    val dockHovered by dockInteraction.collectIsHoveredAsState()
     val reduceMotion by DesktopAppearanceSettings.reduceAnimation.collectAsState()
     val maxWidth by DesktopMiniPlayerAppearance.width.collectAsState()
     val cornerRadius by DesktopMiniPlayerAppearance.cornerRadius.collectAsState()
     val surfaceContrast by DesktopMiniPlayerAppearance.contrast.collectAsState()
     val rimStrength by DesktopMiniPlayerAppearance.rim.collectAsState()
     val custom by DesktopAdvancedAppearance.config.collectAsState()
+    val pill = custom.pillConfig
     val entrance = remember { Animatable(0f) }
     LaunchedEffect(song.videoId, reduceMotion) {
         entrance.snapTo(0f)
         entrance.animateTo(1f, MusesMotion.settle(reduceMotion))
     }
-    val shape = RoundedCornerShape(cornerRadius.dp)
+    val shape: Shape = when (pill.shape) {
+        DesktopPillShape.PILL -> RoundedCornerShape(percent = 50)
+        DesktopPillShape.ROUNDED_RECTANGLE -> RoundedCornerShape(cornerRadius.coerceIn(0, 48).dp)
+        DesktopPillShape.SQUIRCLE -> RoundedCornerShape(percent = 36)
+        DesktopPillShape.CUSTOM_RADIUS -> RoundedCornerShape(pill.cornerRadius.coerceIn(0, 48).dp)
+    }
     val dockHeight = when (custom.miniPlayerHeight) {
         DesktopMiniPlayerHeight.COMPACT -> 60.dp
         DesktopMiniPlayerHeight.DEFAULT -> 72.dp
@@ -4520,6 +4566,35 @@ internal fun DesktopFloatingMiniPlayer(
         DesktopArtworkShape.ROUNDED -> RoundedCornerShape(10.dp)
         DesktopArtworkShape.CIRCLE -> CircleShape
     }
+    val artSize = when (pill.artSize) {
+        DesktopPillArtSize.SMALL -> 36.dp
+        DesktopPillArtSize.MEDIUM -> (dockHeight - 24.dp).coerceIn(40.dp, 52.dp)
+        DesktopPillArtSize.LARGE -> (dockHeight - 12.dp).coerceIn(48.dp, 64.dp)
+    }
+    val showArt = custom.miniPlayerArtwork && "artwork" in pill.zones.values.flatten() && "artwork" !in pill.hiddenElements && pill.artPlacement != DesktopPillArtPlacement.HIDDEN
+    val showMetadata = custom.miniPlayerMetadata && "metadata" in pill.zones.values.flatten() && "metadata" !in pill.hiddenElements
+    val spinAnim = remember { Animatable(0f) }
+    LaunchedEffect(isPlaying, reduceMotion, pill.spinWhilePlaying, pill.spinRpm, pill.spinClockwise, pill.spinPause) {
+        if (reduceMotion || !pill.spinWhilePlaying || !isPlaying) {
+            when {
+                reduceMotion -> spinAnim.snapTo(0f)
+                pill.spinPause == DesktopPillSpinPause.RETURN_TO_ZERO -> spinAnim.animateTo(0f, spring(stiffness = 420f))
+                pill.spinPause == DesktopPillSpinPause.EASE_TO_STOP -> {
+                    val stopAt = (spinAnim.value / 360f).roundToInt() * 360f
+                    spinAnim.animateTo(stopAt, spring(stiffness = 320f))
+                }
+                else -> spinAnim.stop()
+            }
+            return@LaunchedEffect
+        }
+        val direction = if (pill.spinClockwise) 360f else -360f
+        while (true) {
+            spinAnim.animateTo(
+                targetValue = spinAnim.value + direction,
+                animationSpec = tween(durationMillis = (60_000 / pill.spinRpm.coerceIn(5, 60)).coerceAtLeast(250), easing = LinearEasing),
+            )
+        }
+    }
     Box(
         Modifier
             .widthIn(max = maxWidth.dp)
@@ -4528,12 +4603,13 @@ internal fun DesktopFloatingMiniPlayer(
             .clip(shape)
             .then(
                 when (custom.miniPlayerMaterial) {
-                    DesktopMiniPlayerMaterial.GLASS -> Modifier.desktopBarGlass(shape)
-                    DesktopMiniPlayerMaterial.SOLID -> Modifier.background(Color(0xFF17171B), shape)
-                    DesktopMiniPlayerMaterial.ACCENT -> Modifier.background(DesktopAccent.copy(alpha = 0.36f), shape)
+                    DesktopMiniPlayerMaterial.GLASS -> Modifier.desktopBarGlass(shape, rimStrength)
+                    DesktopMiniPlayerMaterial.SOLID -> Modifier.background(Color(0xFF17171B), shape).border(1.dp, Color.White.copy(alpha = rimStrength), shape)
+                    DesktopMiniPlayerMaterial.ACCENT -> Modifier.background(DesktopAccent.copy(alpha = 0.36f), shape).border(1.dp, Color.White.copy(alpha = rimStrength), shape)
                 },
             )
-            .fluidClickable { if (custom.miniPlayerTapExpands) onExpandPlayer() }
+            .hoverable(dockInteraction)
+            .fluidClickable { if (pill.clickAction == DesktopPillClickAction.OPEN_PLAYER && custom.miniPlayerTapExpands) onExpandPlayer() }
             .graphicsLayer {
                 alpha = entrance.value
                 translationY = (1f - entrance.value) * 14.dp.toPx()
@@ -4544,15 +4620,11 @@ internal fun DesktopFloatingMiniPlayer(
         // transport icons remain legible over bright artwork. The underlying glass still shows.
         val veil = if (custom.miniPlayerMaterial == DesktopMiniPlayerMaterial.GLASS) surfaceContrast else surfaceContrast * 0.45f
         Box(Modifier.fillMaxSize().background(Color(0xFF080A12).copy(alpha = veil), shape))
-        Row(Modifier.fillMaxSize(), verticalAlignment = Alignment.CenterVertically) {
-            if (custom.miniPlayerArtwork) {
-                val artSize = (dockHeight - 24.dp).coerceIn(36.dp, 60.dp)
-                key(song.videoId) { DesktopArtwork(song.thumbnailUrl, artworkModifier.size(artSize).clip(artShape), px = ROW_ART_PX) }
-                Spacer(Modifier.width(10.dp))
-            }
-            if (custom.miniPlayerMetadata || custom.miniPlayerProgress != DesktopMiniProgress.HIDDEN) {
-                Column(Modifier.weight(1f)) {
-                    if (custom.miniPlayerMetadata) {
+        val drawPillElement: @Composable (String) -> Unit = { id ->
+            if (id !in pill.hiddenElements) when (id) {
+                "artwork" -> if (showArt) DesktopPillArtwork(song, artworkModifier, artSize, artShape, spinAnim.value, reduceMotion || pill.trackAnimation == DesktopPillAnimation.NONE, pill.trackAnimationMs)
+                "metadata" -> if (showMetadata || custom.miniPlayerProgress != DesktopMiniProgress.HIDDEN) Column(Modifier.fillMaxWidth()) {
+                    if (showMetadata) {
                         Text(song.title, maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.labelLarge)
                         Text(song.artist, color = DesktopSecondary, style = MaterialTheme.typography.labelSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
@@ -4562,54 +4634,80 @@ internal fun DesktopFloatingMiniPlayer(
                         Box(Modifier.fillMaxWidth().height(progressHeight).background(Color.White.copy(alpha = 0.20f))) {
                             Box(Modifier.fillMaxWidth(progress.coerceIn(0f, 1f)).fillMaxSize().background(DesktopAccent))
                         }
-                        Text(
-                            "${formatTime(positionMs)} / ${formatTime(durationMs)}",
-                            color = DesktopSecondary,
-                            style = MaterialTheme.typography.labelSmall,
-                            maxLines = 1,
-                        )
+                        Text("${formatTime(positionMs)} / ${formatTime(durationMs)}", color = DesktopSecondary, style = MaterialTheme.typography.labelSmall, maxLines = 1)
                     }
                 }
-            } else {
-                Spacer(Modifier.weight(1f))
-            }
-            DesktopSpringButton(onClick = onPrevious, enabled = previousEnabled, size = 34.dp) {
-                Icon(Icons.Rounded.FastRewind, "Previous", tint = if (previousEnabled) Color.White else DesktopSecondary.copy(alpha = 0.4f), modifier = Modifier.size(19.dp))
-            }
-            DesktopSpringButton(onClick = onPlayPause, size = 38.dp) {
-                Icon(if (isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow, if (isPlaying) "Pause" else "Play", tint = Color.White, modifier = Modifier.size(24.dp))
-            }
-            DesktopSpringButton(onClick = onNext, size = 34.dp) {
-                Icon(Icons.Rounded.FastForward, DesktopStrings["widget_next", "Next"], tint = Color.White, modifier = Modifier.size(19.dp))
-            }
-            if (custom.miniPlayerShowShuffle) {
-                DesktopSpringButton(onClick = { onShuffleChange(!shuffle) }, size = 34.dp) {
+                "previous" -> DesktopSpringButton(onClick = onPrevious, enabled = previousEnabled, size = 34.dp) {
+                    Icon(Icons.Rounded.FastRewind, "Previous", tint = if (previousEnabled) Color.White else DesktopSecondary.copy(alpha = 0.4f), modifier = Modifier.size(19.dp))
+                }
+                "play" -> DesktopSpringButton(onClick = onPlayPause, size = 38.dp) {
+                    Icon(if (isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow, if (isPlaying) "Pause" else "Play", tint = Color.White, modifier = Modifier.size(24.dp))
+                }
+                "next" -> DesktopSpringButton(onClick = onNext, size = 34.dp) { Icon(Icons.Rounded.FastForward, DesktopStrings["widget_next", "Next"], tint = Color.White, modifier = Modifier.size(19.dp)) }
+                "shuffle" -> if (custom.miniPlayerShowShuffle) DesktopSpringButton(onClick = { onShuffleChange(!shuffle) }, size = 34.dp) {
                     Icon(BitChordIcons.Shuffle, "Shuffle", tint = if (shuffle) DesktopAccent else DesktopSecondary, modifier = Modifier.size(17.dp))
                 }
-            }
-            if (custom.miniPlayerShowRepeat) {
-                DesktopSpringButton(onClick = { onRepeatModeChange(repeatMode.next()) }, size = 34.dp) {
-                    if (repeatMode == DesktopRepeatMode.ONE) {
-                        Text("1", color = DesktopAccent, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.labelMedium)
-                    } else {
-                        Icon(BitChordIcons.Repeat, "Repeat ${repeatMode.label()}", tint = if (repeatMode == DesktopRepeatMode.OFF) DesktopSecondary else DesktopAccent, modifier = Modifier.size(17.dp))
+                "repeat" -> if (custom.miniPlayerShowRepeat) DesktopSpringButton(onClick = { onRepeatModeChange(repeatMode.next()) }, size = 34.dp) {
+                    if (repeatMode == DesktopRepeatMode.ONE) Text("1", color = DesktopAccent, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.labelMedium)
+                    else Icon(BitChordIcons.Repeat, "Repeat ${repeatMode.label()}", tint = if (repeatMode == DesktopRepeatMode.OFF) DesktopSecondary else DesktopAccent, modifier = Modifier.size(17.dp))
+                }
+                "more" -> Box {
+                    DesktopSpringButton(onClick = { moreOpen = true }, size = 34.dp) { Icon(Icons.Rounded.MoreHoriz, "More playback options", tint = DesktopSecondary) }
+                    DropdownMenu(expanded = moreOpen, onDismissRequest = { moreOpen = false }) {
+                        if (!custom.miniPlayerShowShuffle || "shuffle" in pill.hiddenElements) DropdownMenuItem(text = { Text(if (shuffle) "Turn shuffle off" else "Turn shuffle on") }, onClick = { moreOpen = false; onShuffleChange(!shuffle) })
+                        if (!custom.miniPlayerShowRepeat || "repeat" in pill.hiddenElements) DropdownMenuItem(text = { Text("Repeat: ${repeatMode.label()}") }, onClick = { moreOpen = false; onRepeatModeChange(repeatMode.next()) })
+                        DropdownMenuItem(text = { Text("Lyrics") }, onClick = { moreOpen = false; onMoreLyrics() })
+                        DropdownMenuItem(text = { Text("Queue") }, onClick = { moreOpen = false; onMoreQueue() })
+                        DropdownMenuItem(text = { Text("Audio output") }, onClick = { moreOpen = false; onMoreOutput() })
+                        DropdownMenuItem(text = { Text("Customise pill…") }, onClick = { moreOpen = false; onOpenPillStudio() })
                     }
-                }
-            }
-            Box {
-                DesktopSpringButton(onClick = { moreOpen = true }, size = 34.dp) {
-                    Icon(Icons.Rounded.MoreHoriz, "More playback options", tint = DesktopSecondary)
-                }
-                DropdownMenu(expanded = moreOpen, onDismissRequest = { moreOpen = false }) {
-                    if (!custom.miniPlayerShowShuffle) DropdownMenuItem(text = { Text(if (shuffle) "Turn shuffle off" else "Turn shuffle on") }, onClick = { moreOpen = false; onShuffleChange(!shuffle) })
-                    if (!custom.miniPlayerShowRepeat) DropdownMenuItem(text = { Text("Repeat: ${repeatMode.label()}") }, onClick = { moreOpen = false; onRepeatModeChange(repeatMode.next()) })
-                    DropdownMenuItem(text = { Text("Lyrics") }, onClick = { moreOpen = false; onMoreLyrics() })
-                    DropdownMenuItem(text = { Text("Queue") }, onClick = { moreOpen = false; onMoreQueue() })
-                    DropdownMenuItem(text = { Text("Audio output") }, onClick = { moreOpen = false; onMoreOutput() })
                 }
             }
         }
-        Box(Modifier.fillMaxSize().border(1.dp, Color.White.copy(alpha = rimStrength), shape))
+        Row(Modifier.fillMaxSize(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                pill.zones["left"].orEmpty().forEach(drawPillElement)
+            }
+            Row(Modifier.weight(1f).fillMaxHeight(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                pill.zones["center"].orEmpty().forEach(drawPillElement)
+            }
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                pill.zones["right"].orEmpty().forEach(drawPillElement)
+            }
+        }
+        if (dockHovered) Box(Modifier.align(Alignment.TopEnd).padding(3.dp).zIndex(2f)) {
+            DesktopSpringButton(onClick = onOpenPillStudio, size = 26.dp) {
+                Icon(Icons.Rounded.Edit, "Customise pill", tint = Color.White.copy(alpha = 0.9f), modifier = Modifier.size(15.dp))
+            }
+        }
+        // desktopBarGlass/fluidGlass already paints the glass edge. A second inset outline here
+        // made the dock read like a box nested inside another box, especially over bright art.
+    }
+}
+
+@Composable
+private fun DesktopPillArtwork(
+    song: Song,
+    artworkModifier: Modifier,
+    size: Dp,
+    shape: Shape,
+    rotationDegrees: Float,
+    instantTrackChange: Boolean,
+    durationMs: Int,
+) {
+    Box(
+        artworkModifier.size(size).clip(shape).graphicsLayer { rotationZ = rotationDegrees },
+    ) {
+        val art = song.videoId to song.thumbnailUrl
+        if (instantTrackChange) {
+            DesktopArtwork(art.second, Modifier.fillMaxSize(), px = ROW_ART_PX)
+        } else {
+            Crossfade(
+                targetState = art,
+                animationSpec = tween(durationMillis = durationMs.coerceIn(100, 800)),
+                label = "pillArtworkTrackChange",
+            ) { (_, thumbnail) -> DesktopArtwork(thumbnail, Modifier.fillMaxSize(), px = ROW_ART_PX) }
+        }
     }
 }
 
@@ -5993,6 +6091,16 @@ private fun DesktopSettingsScreen(
                             CompositionLocalProvider(LocalSettingsQuery provides "") {
                                 DesktopAdvancedCustomizationSettings(onOpenHomeSections)
                                 SettingsNavigationRow(
+                                    title = "Customise hub",
+                                    subtitle = "Open the desktop appearance editors",
+                                    onClick = { overlays.settingsPage = DesktopSettingsPage.CUSTOMISE_HUB },
+                                )
+                                SettingsNavigationRow(
+                                    title = "Pill Studio",
+                                    subtitle = "Arrange, preview, and tune the floating player",
+                                    onClick = { overlays.settingsPage = DesktopSettingsPage.PILL_STUDIO },
+                                )
+                                SettingsNavigationRow(
                                     title = "Home sections",
                                     subtitle = "Choose which shelves appear on Home and set their order",
                                     onClick = onOpenHomeSections,
@@ -6842,10 +6950,10 @@ private fun DesktopMiniPlayerCustomizationSettings() {
         MiniPlayerAppearanceSlider("Maximum width", "$width dp", width.toFloat(), 560f..920f, 17) {
             DesktopMiniPlayerAppearance.setWidth(it.roundToInt())
         }
-        MiniPlayerAppearanceSlider("Bottom spacing", "$bottomInset dp", bottomInset.toFloat(), 8f..48f, 19) {
+        MiniPlayerAppearanceSlider("Bottom spacing", "$bottomInset dp", bottomInset.toFloat(), 0f..120f, 23) {
             DesktopMiniPlayerAppearance.setBottomInset(it.roundToInt())
         }
-        MiniPlayerAppearanceSlider("Corner curve", "$cornerRadius dp", cornerRadius.toFloat(), 12f..30f, 8) {
+        MiniPlayerAppearanceSlider("Corner curve", "$cornerRadius dp", cornerRadius.toFloat(), 0f..48f, 23) {
             DesktopMiniPlayerAppearance.setCornerRadius(it.roundToInt())
         }
         MiniPlayerAppearanceSlider("Glass contrast", "${(contrast * 100).roundToInt()}%", contrast, 0.48f..0.9f, 20) {
@@ -7565,12 +7673,16 @@ private fun Song.isNowPlaying(): Boolean = isSameTrackAs(LocalNowPlaying.current
 
 /** The frosted pane the floating bars are made of. */
 @Composable
-internal fun Modifier.desktopBarGlass(shape: Shape): Modifier {
+internal fun Modifier.desktopBarGlass(shape: Shape, customRim: Float? = null): Modifier {
     val fluid by DesktopFluiditySettings.enabled.collectAsState()
     return if (fluid) {
-        fluidGlass(shape, tint = 0.58f)
+        if (customRim == null) fluidGlass(shape, tint = 0.58f)
+        else fluidGlass(shape, tint = 0.58f, rimWidth = 0.dp)
+            .border(1.dp, Color.White.copy(alpha = customRim.coerceIn(0f, 0.7f)), shape)
     } else {
-        desktopFrosted(DesktopBarGlass, tintAlpha = 0.55f).border(0.5.dp, DesktopBarEdge, shape)
+        val surface = desktopFrosted(DesktopBarGlass, tintAlpha = 0.55f)
+        if (customRim == null) surface.border(0.5.dp, DesktopBarEdge, shape)
+        else surface.border(1.dp, Color.White.copy(alpha = customRim.coerceIn(0f, 0.7f)), shape)
     }
 }
 

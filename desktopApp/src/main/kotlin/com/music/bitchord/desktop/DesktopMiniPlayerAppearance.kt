@@ -23,8 +23,8 @@ internal object DesktopMiniPlayerAppearance {
         DesktopMiniPlayerPosition.fromStored(persistence.string(KEY + "position", "CENTER")),
     )
     private val _width = MutableStateFlow(persistence.int(KEY + "width", 720).coerceIn(560, 920))
-    private val _bottomInset = MutableStateFlow(persistence.int(KEY + "bottom_inset", 16).coerceIn(8, 48))
-    private val _cornerRadius = MutableStateFlow(persistence.int(KEY + "corner_radius", 20).coerceIn(12, 30))
+    private val _bottomInset = MutableStateFlow(persistence.int(KEY + "bottom_inset", 16).coerceIn(0, 120))
+    private val _cornerRadius = MutableStateFlow(persistence.int(KEY + "corner_radius", 20).coerceIn(0, 48))
     private val _contrast = MutableStateFlow(persistence.float(KEY + "contrast", 0.72f).coerceIn(0.48f, 0.9f))
     private val _rim = MutableStateFlow(persistence.float(KEY + "rim", 0.32f).coerceIn(0f, 0.7f))
 
@@ -47,13 +47,13 @@ internal object DesktopMiniPlayerAppearance {
     }
 
     fun setBottomInset(value: Int) {
-        val clamped = value.coerceIn(8, 48)
+        val clamped = value.coerceIn(0, 120)
         persistence.saveInt(KEY + "bottom_inset", clamped)
         _bottomInset.value = clamped
     }
 
     fun setCornerRadius(value: Int) {
-        val clamped = value.coerceIn(12, 30)
+        val clamped = value.coerceIn(0, 48)
         persistence.saveInt(KEY + "corner_radius", clamped)
         _cornerRadius.value = clamped
     }
