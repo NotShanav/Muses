@@ -2999,6 +2999,7 @@ fun BitChordDesktopApp() {
                             onDestinationSelected = ::selectDestination,
                             onOpenSettings = ::openSettings,
                             onOpenHistory = { selectDestination(DesktopDestination.HISTORY) },
+                            onOpenHomeSections = { overlays.settingsPage = DesktopSettingsPage.HOME_SECTIONS },
                             compact = compact,
                         )
                     } else {
@@ -3650,7 +3651,9 @@ fun BitChordDesktopApp() {
                                     },
                                     onOpenIntegrations = { overlays.settingsPage = DesktopSettingsPage.INTEGRATIONS },
                                     onOpenLicenses = { overlays.settingsPage = DesktopSettingsPage.LICENSES },
+                                    onOpenHomeSections = { overlays.settingsPage = DesktopSettingsPage.HOME_SECTIONS },
                                 )
+                                DesktopSettingsPage.HOME_SECTIONS -> DesktopHomeSectionManagerPage(onDismiss = ::goBack)
                                 DesktopSettingsPage.EQUALIZER -> DesktopEqualizerDialog(onDismiss = ::goBack)
                                 DesktopSettingsPage.AUDIO_OUTPUT -> DesktopAudioOutputDialog(onDismiss = ::goBack)
                                 DesktopSettingsPage.LISTEN_TOGETHER -> DesktopListenTogetherDialog(
@@ -3768,8 +3771,19 @@ fun BitChordDesktopApp() {
                             downloadInProgress = downloadInProgress,
                             contentPadding = contentPadding,
                         )
-                        destination == DesktopDestination.LISTEN_NOW -> HomeScreen(
-                            state = homeState,
+                        destination == DesktopDestination.LISTEN_NOW -> {
+                            val managedHomeState = rememberDesktopManagedHomeState(homeState)
+                            val visibleHomeShelves = (managedHomeState as? UiState.Success<List<HomeShelf>>)?.data
+                            if (visibleHomeShelves != null && visibleHomeShelves.isEmpty()) {
+                                DesktopEmptyPage(
+                                    BitChordIcons.Library,
+                                    "Your Home is clear",
+                                    "All Home shelves are hidden, or nothing has loaded yet. Choose what to show.",
+                                    onAction = { overlays.settingsPage = DesktopSettingsPage.HOME_SECTIONS },
+                                    actionLabel = "Customise Home",
+                                )
+                            } else HomeScreen(
+                            state = managedHomeState,
                             listState = homeListState,
                             onItemClick = { item, shelfTitle -> openShelfItem(item, shelfTitle) },
                             onRetry = ::loadHome,
@@ -3796,6 +3810,7 @@ fun BitChordDesktopApp() {
                                 }
                             } else null,
                         )
+                        }
                         destination == DesktopDestination.EXPLORE && selectedMoodGenre != null -> Column(Modifier.fillMaxSize()) {
                             MoodGenrePlaylistsScreen(
                                 title = selectedMoodGenre!!.title,
@@ -4057,6 +4072,7 @@ private fun DesktopTopBar(
     onDestinationSelected: (DesktopDestination) -> Unit,
     onOpenSettings: () -> Unit,
     onOpenHistory: () -> Unit,
+    onOpenHomeSections: () -> Unit,
     compact: Boolean,
 ) {
     val titleBarEnabled by DesktopTitleBarSetting.enabled.collectAsState()
@@ -4094,6 +4110,9 @@ private fun DesktopTopBar(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 if (inlineCaption) DesktopWindowButtons()
+                if (destination == DesktopDestination.LISTEN_NOW) DesktopSpringButton(onClick = onOpenHomeSections, size = 34.dp) {
+                    Icon(Icons.Rounded.Tune, "Customise Home", tint = DesktopSecondary, modifier = Modifier.size(19.dp))
+                }
                 Box(Modifier.height(40.dp)) {
                     Box(
                         Modifier.align(Alignment.CenterStart).width(tabWidth).fillMaxHeight()
@@ -5556,6 +5575,7 @@ private fun DesktopSettingsScreen(
     onTestSource: (DesktopSourceConfig) -> Unit,
     onOpenIntegrations: () -> Unit,
     onOpenLicenses: () -> Unit,
+    onOpenHomeSections: () -> Unit,
 ) {
     var editingSource by remember { mutableStateOf<DesktopSourceConfig?>(null) }
     val sourceProbeKey = sourceConfigs
@@ -5971,7 +5991,12 @@ private fun DesktopSettingsScreen(
                     SettingsGroup("Advanced customisation") {
                         if (settingsRowVisible("Advanced customisation", "Theme colour typography density glass blur motion navigation mini-player player background home library presets import export")) {
                             CompositionLocalProvider(LocalSettingsQuery provides "") {
-                                DesktopAdvancedCustomizationSettings()
+                                DesktopAdvancedCustomizationSettings(onOpenHomeSections)
+                                SettingsNavigationRow(
+                                    title = "Home sections",
+                                    subtitle = "Choose which shelves appear on Home and set their order",
+                                    onClick = onOpenHomeSections,
+                                )
                             }
                         }
                     }
@@ -6296,7 +6321,7 @@ private fun DesktopSettingsScreen(
 }
 
 @Composable
-private fun DesktopAdvancedCustomizationSettings() {
+private fun DesktopAdvancedCustomizationSettings(onOpenHomeSections: () -> Unit) {
     val config by DesktopAdvancedAppearance.config.collectAsState()
     val interfaceMode by DesktopInterfaceSettings.mode.collectAsState()
     val fluidity by DesktopFluiditySettings.enabled.collectAsState()
@@ -6331,6 +6356,7 @@ private fun DesktopAdvancedCustomizationSettings() {
         "desktop.density" -> config.density != DesktopUiDensity.COMFORTABLE
         "desktop.shelf_spacing" -> config.shelfSpacing != 30
         "desktop.home_lead_artwork" -> config.homeLeadArtwork
+        "desktop.home_sections" -> config.homeSections.hiddenIds.isNotEmpty() || config.homeSections.orderIds.isNotEmpty() || config.homeSections.pinnedIds.isNotEmpty()
         "desktop.palette_strength" -> config.paletteStrength != 1f
         "desktop.fixed_accent" -> config.fixedAccentArgb != null
         "desktop.amoled" -> config.amoledDark
@@ -6546,7 +6572,7 @@ private fun DesktopAdvancedCustomizationSettings() {
             TextButton(onClick = DesktopAdvancedAppearance::resetTypography) { Text("Reset typography") }
         }
 
-        if (matches("desktop.density") || matches("desktop.shelf_spacing") || matches("desktop.home_lead_artwork")) SettingsGroup("Density and home layout") {
+        if (matches("desktop.density") || matches("desktop.shelf_spacing") || matches("desktop.home_lead_artwork") || matches("desktop.home_sections")) SettingsGroup("Density and home layout") {
             if (matches("desktop.density")) {
                 Text("Home feed density${if (modified("desktop.density")) " · modified" else ""}", color = DesktopSecondary, style = MaterialTheme.typography.bodySmall)
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(vertical = 8.dp)) {
@@ -6569,6 +6595,13 @@ private fun DesktopAdvancedCustomizationSettings() {
                 SettingsToggle("Lead artwork${if (modified("desktop.home_lead_artwork")) " · modified" else ""}", "Use a larger lead card on the Modern Home feed", config.homeLeadArtwork) {
                     DesktopAdvancedAppearance.update { it.copy(homeLeadArtwork = !it.homeLeadArtwork) }
                 }
+            }
+            if (matches("desktop.home_sections")) {
+                SettingsNavigationRow(
+                    title = "Home section manager${if (modified("desktop.home_sections")) " · modified" else ""}",
+                    subtitle = "Show, hide, pin, and order Home shelves",
+                    onClick = onOpenHomeSections,
+                )
             }
             TextButton(onClick = DesktopAdvancedAppearance::resetHome) { Text("Reset density and layout") }
         }

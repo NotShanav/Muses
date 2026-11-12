@@ -29,6 +29,7 @@ internal data class DesktopAppearanceConfig(
     val paletteStrength: Float = 1f,
     val amoledDark: Boolean = false,
     val fixedAccentArgb: Long? = null,
+    val homeSections: DesktopHomeSectionPrefs = DesktopHomeSectionPrefs(),
 ) {
     fun validated() = copy(
         schemaVersion = CURRENT_SCHEMA,
@@ -36,6 +37,7 @@ internal data class DesktopAppearanceConfig(
         shelfSpacing = shelfSpacing.coerceIn(20, 44),
         paletteStrength = paletteStrength.takeIf(Float::isFinite)?.coerceIn(0f, 1f) ?: 1f,
         fixedAccentArgb = fixedAccentArgb?.takeIf { (it ushr 24) == 0xFFL && contrastRatio(it, if (amoledDark) 0xFF000000L else 0xFF202020L) >= 4.5 },
+        homeSections = homeSections.validated(),
     )
 
     private fun contrastRatio(foreground: Long, background: Long): Double {
@@ -52,7 +54,7 @@ internal data class DesktopAppearanceConfig(
     }
 
     companion object {
-        const val CURRENT_SCHEMA = 1
+        const val CURRENT_SCHEMA = 2
     }
 }
 
@@ -119,6 +121,7 @@ internal object DesktopAppearanceRegistry {
         DesktopAppearanceSetting("desktop.density", "Home and Library", "Home feed density", "Choose compact, comfortable, or spacious vertical spacing for Home shelves.", setOf("spacing", "compact", "comfortable", "spacious")),
         DesktopAppearanceSetting("desktop.shelf_spacing", "Home and Library", "Home shelf spacing", "Set the vertical gap between desktop home shelves.", setOf("home", "library", "feed", "sections")),
         DesktopAppearanceSetting("desktop.home_lead_artwork", "Home and Library", "Home lead artwork", "Enable the larger lead artwork treatment on the Modern home feed.", setOf("home", "hero", "artwork", "layout")),
+        DesktopAppearanceSetting("desktop.home_sections", "Home and Library", "Home section manager", "Choose which shelves appear on Home, pin them, and set their order.", setOf("home", "shelves", "sections", "hide", "reorder")),
         DesktopAppearanceSetting("desktop.palette_strength", "Theme and colour", "Artwork palette strength", "Adjust how strongly cover-derived colours affect Fluidity backgrounds.", setOf("palette", "artwork", "colour", "fluidity")),
         DesktopAppearanceSetting("desktop.fixed_accent", "Theme and colour", "Fixed accent colour", "Set an accent colour that passes the desktop contrast floor.", setOf("accent", "colour", "expert")),
         DesktopAppearanceSetting("desktop.amoled", "Theme and colour", "AMOLED dark surfaces", "Use true black for the desktop app background.", setOf("black", "dark", "amoled")),
@@ -134,20 +137,25 @@ internal object DesktopAppearanceRegistry {
 }
 
 internal object DesktopAdvancedAppearance {
-    private const val CONFIG_KEY = "desktop_appearance_config_v1"
+    private const val CONFIG_KEY = "desktop_appearance_config_v2"
+    private const val LEGACY_CONFIG_KEY = "desktop_appearance_config_v1"
     private const val PRESETS_KEY = "desktop_appearance_user_presets_v1"
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
     private val persistence = DesktopPersistence()
 
     private fun load(): DesktopAppearanceConfig {
-        val raw = persistence.string(CONFIG_KEY, "")
+        val raw = persistence.string(CONFIG_KEY, "").ifBlank { persistence.string(LEGACY_CONFIG_KEY, "") }
         val decoded = raw.takeIf(String::isNotBlank)?.let {
             runCatching { json.decodeFromString<DesktopAppearanceConfig>(it) }.getOrNull()
         }
         // Unknown future versions are ignored safely; known older payloads are forward-filled by
         // defaults and validated field by field.
-        return decoded?.takeIf { it.schemaVersion <= DesktopAppearanceConfig.CURRENT_SCHEMA }
-            ?.validated() ?: DesktopAppearanceConfig()
+        return (decoded?.takeIf { it.schemaVersion <= DesktopAppearanceConfig.CURRENT_SCHEMA }
+            ?.validated() ?: DesktopAppearanceConfig()).also { migrated ->
+            if (decoded != null && persistence.string(CONFIG_KEY, "").isBlank()) {
+                persistence.saveString(CONFIG_KEY, json.encodeToString(migrated))
+            }
+        }
     }
 
     private val _config = MutableStateFlow(load())
@@ -205,6 +213,8 @@ internal object DesktopAdvancedAppearance {
     }
     fun resetDensity() = update { it.copy(density = DesktopUiDensity.COMFORTABLE) }
     fun resetHome() = update { it.copy(density = DesktopUiDensity.COMFORTABLE, shelfSpacing = 30, homeLeadArtwork = false) }
+    fun updateHomeSections(transform: (DesktopHomeSectionPrefs) -> DesktopHomeSectionPrefs) =
+        update { it.copy(homeSections = transform(it.homeSections).validated()) }
     fun resetColors() = update { it.copy(amoledDark = false, fixedAccentArgb = null, paletteStrength = 1f) }
     fun resetAllNewValues() = update { DesktopAppearanceConfig() }
 
