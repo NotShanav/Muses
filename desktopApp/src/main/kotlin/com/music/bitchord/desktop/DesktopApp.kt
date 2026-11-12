@@ -61,8 +61,8 @@ import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -170,6 +170,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Surface
@@ -335,7 +336,9 @@ import org.jetbrains.compose.resources.painterResource
  */
 internal val DesktopPageGutter = PAGE_GUTTER
 
-internal val DesktopBackground = Color(0xFF202020)
+private val DesktopBaseBackground = Color(0xFF202020)
+internal val DesktopBackground: Color
+    get() = if (DesktopAdvancedAppearance.config.value.amoledDark) Color.Black else DesktopBaseBackground
 internal val DesktopSurface = Color(0xFF0D0D0F)
 private val DesktopSurfaceRaised = Color(0xFF1C1C1E)
 internal val DesktopGlass = Color(0x661C1C1E)
@@ -352,7 +355,8 @@ private val LocalDesktopBottomInset = staticCompositionLocalOf { 0.dp }
 
 /** Android's own edge on these bars: `Color.White.copy(alpha = 0.10f)`. */
 private val DesktopBarEdge = Color(0x1AFFFFFF)
-internal val DesktopAccent = Color.White
+internal val DesktopAccent: Color
+    get() = DesktopAdvancedAppearance.config.value.fixedAccentArgb?.let { Color(it.toULong()) } ?: Color.White
 
 /** Deleting, signing out, and anything that failed — the one place a colour survives, as on Android. */
 internal val DesktopDestructive = Color(0xFFFF453A)
@@ -436,6 +440,7 @@ internal fun desktopColorScheme() = darkColorScheme(
 
 @Composable
 internal fun desktopTypography(): Typography {
+    val appearance by DesktopAdvancedAppearance.config.collectAsState()
     val sfProDisplay = FontFamily(
         composeFont(Res.font.sf_pro_display_regular, FontWeight.W400),
         composeFont(Res.font.sf_pro_display_medium, FontWeight.W500),
@@ -444,22 +449,39 @@ internal fun desktopTypography(): Typography {
         composeFont(Res.font.sf_pro_display_heavy, FontWeight.W800),
     )
     val defaults = Typography()
-    return defaults.copy(
-        displayLarge = defaults.displayLarge.copy(fontFamily = sfProDisplay, fontWeight = FontWeight.W800, fontSize = 34.sp, letterSpacing = (-0.8).sp),
-        displayMedium = defaults.displayMedium.copy(fontFamily = sfProDisplay),
-        displaySmall = defaults.displaySmall.copy(fontFamily = sfProDisplay),
-        headlineLarge = defaults.headlineLarge.copy(fontFamily = sfProDisplay, fontWeight = FontWeight.W800, fontSize = 30.sp, letterSpacing = (-0.7).sp),
-        headlineMedium = defaults.headlineMedium.copy(fontFamily = sfProDisplay, fontWeight = FontWeight.W700, fontSize = 22.sp, letterSpacing = (-0.4).sp),
-        headlineSmall = defaults.headlineSmall.copy(fontFamily = sfProDisplay),
-        titleLarge = defaults.titleLarge.copy(fontFamily = sfProDisplay, fontWeight = FontWeight.W700, fontSize = 20.sp, letterSpacing = (-0.3).sp),
-        titleMedium = defaults.titleMedium.copy(fontFamily = sfProDisplay, fontWeight = FontWeight.W600, fontSize = 16.sp, letterSpacing = (-0.2).sp),
-        titleSmall = defaults.titleSmall.copy(fontFamily = sfProDisplay),
-        bodyLarge = defaults.bodyLarge.copy(fontFamily = sfProDisplay, fontWeight = FontWeight.W400, fontSize = 16.sp),
-        bodyMedium = defaults.bodyMedium.copy(fontFamily = sfProDisplay, fontWeight = FontWeight.W400, fontSize = 14.sp),
-        bodySmall = defaults.bodySmall.copy(fontFamily = sfProDisplay),
-        labelLarge = defaults.labelLarge.copy(fontFamily = sfProDisplay),
-        labelMedium = defaults.labelMedium.copy(fontFamily = sfProDisplay, fontWeight = FontWeight.W600, fontSize = 12.sp),
-        labelSmall = defaults.labelSmall.copy(fontFamily = sfProDisplay, fontWeight = FontWeight.W600, fontSize = 11.sp),
+    val family = when (appearance.fontFamily) {
+        DesktopFontFamily.MUSES -> sfProDisplay
+        DesktopFontFamily.SYSTEM -> FontFamily.SansSerif
+        DesktopFontFamily.SERIF -> FontFamily.Serif
+        DesktopFontFamily.MONOSPACE -> FontFamily.Monospace
+    }
+    val base = defaults.copy(
+        displayLarge = defaults.displayLarge.copy(fontFamily = family, fontWeight = FontWeight.W800, fontSize = 34.sp, letterSpacing = (-0.8).sp),
+        displayMedium = defaults.displayMedium.copy(fontFamily = family),
+        displaySmall = defaults.displaySmall.copy(fontFamily = family),
+        headlineLarge = defaults.headlineLarge.copy(fontFamily = family, fontWeight = FontWeight.W800, fontSize = 30.sp, letterSpacing = (-0.7).sp),
+        headlineMedium = defaults.headlineMedium.copy(fontFamily = family, fontWeight = FontWeight.W700, fontSize = 22.sp, letterSpacing = (-0.4).sp),
+        headlineSmall = defaults.headlineSmall.copy(fontFamily = family),
+        titleLarge = defaults.titleLarge.copy(fontFamily = family, fontWeight = FontWeight.W700, fontSize = 20.sp, letterSpacing = (-0.3).sp),
+        titleMedium = defaults.titleMedium.copy(fontFamily = family, fontWeight = FontWeight.W600, fontSize = 16.sp, letterSpacing = (-0.2).sp),
+        titleSmall = defaults.titleSmall.copy(fontFamily = family),
+        bodyLarge = defaults.bodyLarge.copy(fontFamily = family, fontWeight = FontWeight.W400, fontSize = 16.sp),
+        bodyMedium = defaults.bodyMedium.copy(fontFamily = family, fontWeight = FontWeight.W400, fontSize = 14.sp),
+        bodySmall = defaults.bodySmall.copy(fontFamily = family),
+        labelLarge = defaults.labelLarge.copy(fontFamily = family),
+        labelMedium = defaults.labelMedium.copy(fontFamily = family, fontWeight = FontWeight.W600, fontSize = 12.sp),
+        labelSmall = defaults.labelSmall.copy(fontFamily = family, fontWeight = FontWeight.W600, fontSize = 11.sp),
+    )
+    fun TextStyle.scaled(minimum: androidx.compose.ui.unit.TextUnit = 11.sp): TextStyle = copy(
+        fontSize = (fontSize.value * appearance.textScale).coerceAtLeast(minimum.value).sp,
+        lineHeight = lineHeight * appearance.textScale,
+    )
+    return base.copy(
+        displayLarge = base.displayLarge.scaled(), displayMedium = base.displayMedium.scaled(), displaySmall = base.displaySmall.scaled(),
+        headlineLarge = base.headlineLarge.scaled(), headlineMedium = base.headlineMedium.scaled(), headlineSmall = base.headlineSmall.scaled(),
+        titleLarge = base.titleLarge.scaled(), titleMedium = base.titleMedium.scaled(), titleSmall = base.titleSmall.scaled(),
+        bodyLarge = base.bodyLarge.scaled(12.sp), bodyMedium = base.bodyMedium.scaled(12.sp), bodySmall = base.bodySmall.scaled(12.sp),
+        labelLarge = base.labelLarge.scaled(), labelMedium = base.labelMedium.scaled(), labelSmall = base.labelSmall.scaled(),
     )
 }
 
@@ -3762,10 +3784,10 @@ fun BitChordDesktopApp() {
                             onLoadMore = ::loadMoreHome,
                             loadingMore = homeLoadingMore,
                             recentlyPlayedLoading = homeRecentsLoading,
-                            leadHero = false,
+                            leadHero = modernInterface && DesktopAdvancedAppearance.config.value.homeLeadArtwork,
                             desktopCardHoverSpec = if (modernInterface) MusesMotion.press(reduceAnimation) else null,
                             desktopGutter = if (modernInterface) 24.dp else null,
-                            desktopSectionSpacing = if (modernInterface) 30.dp else null,
+                            desktopSectionSpacing = if (modernInterface) DesktopAdvancedAppearance.config.value.shelfSpacing.dp else null,
                             compactQuickPicks = modernInterface,
                             onShowAll = if (modernInterface) {
                                 { shelf ->
@@ -4462,20 +4484,37 @@ internal fun DesktopFloatingMiniPlayer(
     val cornerRadius by DesktopMiniPlayerAppearance.cornerRadius.collectAsState()
     val surfaceContrast by DesktopMiniPlayerAppearance.contrast.collectAsState()
     val rimStrength by DesktopMiniPlayerAppearance.rim.collectAsState()
+    val custom by DesktopAdvancedAppearance.config.collectAsState()
     val entrance = remember { Animatable(0f) }
     LaunchedEffect(song.videoId, reduceMotion) {
         entrance.snapTo(0f)
         entrance.animateTo(1f, MusesMotion.settle(reduceMotion))
     }
     val shape = RoundedCornerShape(cornerRadius.dp)
+    val dockHeight = when (custom.miniPlayerHeight) {
+        DesktopMiniPlayerHeight.COMPACT -> 60.dp
+        DesktopMiniPlayerHeight.DEFAULT -> 72.dp
+        DesktopMiniPlayerHeight.LARGE -> 84.dp
+    }
+    val artShape = when (custom.miniPlayerArtShape) {
+        DesktopArtworkShape.SQUARE -> RoundedCornerShape(0.dp)
+        DesktopArtworkShape.ROUNDED -> RoundedCornerShape(10.dp)
+        DesktopArtworkShape.CIRCLE -> CircleShape
+    }
     Box(
         Modifier
             .widthIn(max = maxWidth.dp)
             .fillMaxWidth()
-            .height(72.dp)
+            .height(dockHeight)
             .clip(shape)
-            .desktopBarGlass(shape)
-            .fluidClickable(onExpandPlayer)
+            .then(
+                when (custom.miniPlayerMaterial) {
+                    DesktopMiniPlayerMaterial.GLASS -> Modifier.desktopBarGlass(shape)
+                    DesktopMiniPlayerMaterial.SOLID -> Modifier.background(Color(0xFF17171B), shape)
+                    DesktopMiniPlayerMaterial.ACCENT -> Modifier.background(DesktopAccent.copy(alpha = 0.36f), shape)
+                },
+            )
+            .fluidClickable { if (custom.miniPlayerTapExpands) onExpandPlayer() }
             .graphicsLayer {
                 alpha = entrance.value
                 translationY = (1f - entrance.value) * 14.dp.toPx()
@@ -4484,25 +4523,36 @@ internal fun DesktopFloatingMiniPlayer(
     ) {
         // Keep a controlled dark veil over the moving album palette so the title, time and
         // transport icons remain legible over bright artwork. The underlying glass still shows.
-        Box(
-            Modifier.fillMaxSize().background(Color(0xFF080A12).copy(alpha = surfaceContrast), shape),
-        )
+        val veil = if (custom.miniPlayerMaterial == DesktopMiniPlayerMaterial.GLASS) surfaceContrast else surfaceContrast * 0.45f
+        Box(Modifier.fillMaxSize().background(Color(0xFF080A12).copy(alpha = veil), shape))
         Row(Modifier.fillMaxSize(), verticalAlignment = Alignment.CenterVertically) {
-            key(song.videoId) { DesktopArtwork(song.thumbnailUrl, artworkModifier.size(48.dp).clip(RoundedCornerShape(10.dp)), px = ROW_ART_PX) }
-            Spacer(Modifier.width(10.dp))
-            Column(Modifier.weight(1f)) {
-                Text(song.title, maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.labelLarge)
-                Text(song.artist, color = DesktopSecondary, style = MaterialTheme.typography.labelSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Spacer(Modifier.height(3.dp))
-                Box(Modifier.fillMaxWidth().height(2.dp).background(Color.White.copy(alpha = 0.20f))) {
-                    Box(Modifier.fillMaxWidth(progress.coerceIn(0f, 1f)).fillMaxSize().background(DesktopAccent))
+            if (custom.miniPlayerArtwork) {
+                val artSize = (dockHeight - 24.dp).coerceIn(36.dp, 60.dp)
+                key(song.videoId) { DesktopArtwork(song.thumbnailUrl, artworkModifier.size(artSize).clip(artShape), px = ROW_ART_PX) }
+                Spacer(Modifier.width(10.dp))
+            }
+            if (custom.miniPlayerMetadata || custom.miniPlayerProgress != DesktopMiniProgress.HIDDEN) {
+                Column(Modifier.weight(1f)) {
+                    if (custom.miniPlayerMetadata) {
+                        Text(song.title, maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.labelLarge)
+                        Text(song.artist, color = DesktopSecondary, style = MaterialTheme.typography.labelSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+                    if (custom.miniPlayerProgress != DesktopMiniProgress.HIDDEN) {
+                        Spacer(Modifier.height(3.dp))
+                        val progressHeight = if (custom.miniPlayerProgress == DesktopMiniProgress.FULL) 4.dp else 2.dp
+                        Box(Modifier.fillMaxWidth().height(progressHeight).background(Color.White.copy(alpha = 0.20f))) {
+                            Box(Modifier.fillMaxWidth(progress.coerceIn(0f, 1f)).fillMaxSize().background(DesktopAccent))
+                        }
+                        Text(
+                            "${formatTime(positionMs)} / ${formatTime(durationMs)}",
+                            color = DesktopSecondary,
+                            style = MaterialTheme.typography.labelSmall,
+                            maxLines = 1,
+                        )
+                    }
                 }
-                Text(
-                    "${formatTime(positionMs)} / ${formatTime(durationMs)}",
-                    color = DesktopSecondary,
-                    style = MaterialTheme.typography.labelSmall,
-                    maxLines = 1,
-                )
+            } else {
+                Spacer(Modifier.weight(1f))
             }
             DesktopSpringButton(onClick = onPrevious, enabled = previousEnabled, size = 34.dp) {
                 Icon(Icons.Rounded.FastRewind, "Previous", tint = if (previousEnabled) Color.White else DesktopSecondary.copy(alpha = 0.4f), modifier = Modifier.size(19.dp))
@@ -4513,14 +4563,18 @@ internal fun DesktopFloatingMiniPlayer(
             DesktopSpringButton(onClick = onNext, size = 34.dp) {
                 Icon(Icons.Rounded.FastForward, DesktopStrings["widget_next", "Next"], tint = Color.White, modifier = Modifier.size(19.dp))
             }
-            DesktopSpringButton(onClick = { onShuffleChange(!shuffle) }, size = 34.dp) {
-                Icon(BitChordIcons.Shuffle, "Shuffle", tint = if (shuffle) DesktopAccent else DesktopSecondary, modifier = Modifier.size(17.dp))
+            if (custom.miniPlayerShowShuffle) {
+                DesktopSpringButton(onClick = { onShuffleChange(!shuffle) }, size = 34.dp) {
+                    Icon(BitChordIcons.Shuffle, "Shuffle", tint = if (shuffle) DesktopAccent else DesktopSecondary, modifier = Modifier.size(17.dp))
+                }
             }
-            DesktopSpringButton(onClick = { onRepeatModeChange(repeatMode.next()) }, size = 34.dp) {
-                if (repeatMode == DesktopRepeatMode.ONE) {
-                    Text("1", color = DesktopAccent, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.labelMedium)
-                } else {
-                    Icon(BitChordIcons.Repeat, "Repeat ${repeatMode.label()}", tint = if (repeatMode == DesktopRepeatMode.OFF) DesktopSecondary else DesktopAccent, modifier = Modifier.size(17.dp))
+            if (custom.miniPlayerShowRepeat) {
+                DesktopSpringButton(onClick = { onRepeatModeChange(repeatMode.next()) }, size = 34.dp) {
+                    if (repeatMode == DesktopRepeatMode.ONE) {
+                        Text("1", color = DesktopAccent, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.labelMedium)
+                    } else {
+                        Icon(BitChordIcons.Repeat, "Repeat ${repeatMode.label()}", tint = if (repeatMode == DesktopRepeatMode.OFF) DesktopSecondary else DesktopAccent, modifier = Modifier.size(17.dp))
+                    }
                 }
             }
             Box {
@@ -4528,6 +4582,8 @@ internal fun DesktopFloatingMiniPlayer(
                     Icon(Icons.Rounded.MoreHoriz, "More playback options", tint = DesktopSecondary)
                 }
                 DropdownMenu(expanded = moreOpen, onDismissRequest = { moreOpen = false }) {
+                    if (!custom.miniPlayerShowShuffle) DropdownMenuItem(text = { Text(if (shuffle) "Turn shuffle off" else "Turn shuffle on") }, onClick = { moreOpen = false; onShuffleChange(!shuffle) })
+                    if (!custom.miniPlayerShowRepeat) DropdownMenuItem(text = { Text("Repeat: ${repeatMode.label()}") }, onClick = { moreOpen = false; onRepeatModeChange(repeatMode.next()) })
                     DropdownMenuItem(text = { Text("Lyrics") }, onClick = { moreOpen = false; onMoreLyrics() })
                     DropdownMenuItem(text = { Text("Queue") }, onClick = { moreOpen = false; onMoreQueue() })
                     DropdownMenuItem(text = { Text("Audio output") }, onClick = { moreOpen = false; onMoreOutput() })
@@ -4829,10 +4885,11 @@ private fun DesktopFrame(
  */
 @Composable
 private fun DesktopPageBackdrop(artworkUrl: String?, transparentBase: Boolean) {
+    val appearance by DesktopAdvancedAppearance.config.collectAsState()
     Box(
         Modifier
             .fillMaxSize()
-            .then(if (transparentBase) Modifier else Modifier.background(DesktopBackground)),
+            .then(if (transparentBase) Modifier else Modifier.background(if (appearance.amoledDark) Color.Black else DesktopBaseBackground)),
     ) {
         if (artworkUrl == null) return@Box
         DesktopMesh(artworkUrl)
@@ -5911,6 +5968,13 @@ private fun DesktopSettingsScreen(
                             )
                         }
                     }
+                    SettingsGroup("Advanced customisation") {
+                        if (settingsRowVisible("Advanced customisation", "Theme colour typography density glass blur motion navigation mini-player player background home library presets import export")) {
+                            CompositionLocalProvider(LocalSettingsQuery provides "") {
+                                DesktopAdvancedCustomizationSettings()
+                            }
+                        }
+                    }
                     // Window furniture belongs beside the visual settings it changes, rather than
                     // interrupting playback controls. These rows remain Windows-only.
                     if (DesktopPlatform.drawsOwnWindowFrame) {
@@ -6232,6 +6296,473 @@ private fun DesktopSettingsScreen(
 }
 
 @Composable
+private fun DesktopAdvancedCustomizationSettings() {
+    val config by DesktopAdvancedAppearance.config.collectAsState()
+    val interfaceMode by DesktopInterfaceSettings.mode.collectAsState()
+    val fluidity by DesktopFluiditySettings.enabled.collectAsState()
+    val reduceBlur by DesktopAppearanceSettings.reduceDynamicBlur.collectAsState()
+    val reduceMotion by DesktopAppearanceSettings.reduceAnimation.collectAsState()
+    val playerBackground by DesktopPlayerBackgroundSettings.mode.collectAsState()
+    val isPreviewing by DesktopAdvancedAppearance.previewing.collectAsState()
+    val dockPosition by DesktopMiniPlayerAppearance.position.collectAsState()
+    val dockWidth by DesktopMiniPlayerAppearance.width.collectAsState()
+    val dockBottom by DesktopMiniPlayerAppearance.bottomInset.collectAsState()
+    val dockCorner by DesktopMiniPlayerAppearance.cornerRadius.collectAsState()
+    val dockContrast by DesktopMiniPlayerAppearance.contrast.collectAsState()
+    val dockRim by DesktopMiniPlayerAppearance.rim.collectAsState()
+    val windowMaterial by DesktopWindowBackdrop.selected.collectAsState()
+    val titleBarEnabled by DesktopTitleBarSetting.enabled.collectAsState()
+    var search by remember { mutableStateOf("") }
+    var onlyModified by remember { mutableStateOf(false) }
+    var accentInput by remember(config.fixedAccentArgb) {
+        mutableStateOf(config.fixedAccentArgb?.toString(16)?.uppercase()?.takeLast(6) ?: "FFFFFF")
+    }
+    var status by remember { mutableStateOf<String?>(null) }
+    var imported by remember { mutableStateOf<DesktopAppearanceImport?>(null) }
+    var presetRevision by remember { mutableStateOf(0) }
+    var presetName by remember { mutableStateOf("") }
+    var renameFrom by remember { mutableStateOf<String?>(null) }
+    val userPresets = remember(presetRevision) { DesktopAdvancedAppearance.savedPresets() }
+
+    fun modified(id: String): Boolean = when (id) {
+        "desktop.interface" -> interfaceMode != DesktopInterfaceMode.DEFAULT
+        "desktop.text_scale" -> config.textScale != 1f
+        "desktop.font_family" -> config.fontFamily != DesktopFontFamily.MUSES
+        "desktop.density" -> config.density != DesktopUiDensity.COMFORTABLE
+        "desktop.shelf_spacing" -> config.shelfSpacing != 30
+        "desktop.home_lead_artwork" -> config.homeLeadArtwork
+        "desktop.palette_strength" -> config.paletteStrength != 1f
+        "desktop.fixed_accent" -> config.fixedAccentArgb != null
+        "desktop.amoled" -> config.amoledDark
+        "desktop.player_background" -> playerBackground != PlayerBackgroundMode.ACRYLIC_GLASS
+        "desktop.fluidity" -> fluidity
+        "desktop.reduce_blur" -> reduceBlur
+        "desktop.reduce_motion" -> reduceMotion
+        "desktop.dock" -> dockPosition != DesktopMiniPlayerPosition.CENTER || dockWidth != 720 || dockBottom != 16 ||
+            dockCorner != 20 || dockContrast != 0.72f || dockRim != 0.32f
+        "desktop.dock_contents" -> config.miniPlayerHeight != DesktopMiniPlayerHeight.DEFAULT || !config.miniPlayerArtwork ||
+            !config.miniPlayerMetadata || config.miniPlayerProgress != DesktopMiniProgress.THIN ||
+            config.miniPlayerArtShape != DesktopArtworkShape.ROUNDED || !config.miniPlayerShowShuffle ||
+            !config.miniPlayerShowRepeat || !config.miniPlayerTapExpands
+        "desktop.dock_material" -> config.miniPlayerMaterial != DesktopMiniPlayerMaterial.GLASS
+        "desktop.window_material" -> windowMaterial != DesktopBackdrop.MICA
+        else -> false
+    }
+
+    fun matches(id: String): Boolean {
+        val setting = DesktopAppearanceRegistry.settings.firstOrNull { it.id == id } ?: return true
+        val query = search.trim()
+        val matchesSearch = query.isBlank() || listOf(setting.label, setting.description, setting.category)
+            .plus(setting.keywords).any { it.contains(query, ignoreCase = true) }
+        return matchesSearch && (!onlyModified || modified(id))
+    }
+
+    fun applyPreset(name: String) {
+        when (name) {
+            "Default" -> {
+                DesktopAdvancedAppearance.resetAllNewValues()
+                DesktopInterfaceSettings.setMode(DesktopInterfaceMode.MODERN)
+                DesktopFluiditySettings.setEnabled(false)
+                DesktopFluiditySettings.setSubtle(false)
+                DesktopAppearanceSettings.setReduceDynamicBlur(false)
+                DesktopAppearanceSettings.setReduceAnimation(false)
+                DesktopPlayerBackgroundSettings.set(PlayerBackgroundMode.ACRYLIC_GLASS)
+                DesktopMiniPlayerAppearance.setPosition(DesktopMiniPlayerPosition.CENTER)
+                DesktopMiniPlayerAppearance.setWidth(720)
+                DesktopMiniPlayerAppearance.setBottomInset(16)
+                DesktopMiniPlayerAppearance.setCornerRadius(20)
+                DesktopMiniPlayerAppearance.setContrast(0.72f)
+                DesktopMiniPlayerAppearance.setRim(0.32f)
+                DesktopTitleBarSetting.set(false)
+                if (DesktopWindowBackdrop.available) DesktopWindowBackdrop.set(DesktopBackdrop.MICA)
+            }
+            "Minimal" -> {
+                DesktopAdvancedAppearance.update { it.copy(density = DesktopUiDensity.COMPACT, shelfSpacing = 24, textScale = 1f, paletteStrength = 0.55f) }
+                DesktopFluiditySettings.setEnabled(false)
+                DesktopAppearanceSettings.setReduceDynamicBlur(true)
+                DesktopMiniPlayerAppearance.setWidth(640)
+                DesktopMiniPlayerAppearance.setContrast(0.82f)
+                DesktopMiniPlayerAppearance.setRim(0.12f)
+            }
+            "High contrast" -> {
+                DesktopAdvancedAppearance.update { it.copy(amoledDark = true, fixedAccentArgb = null, paletteStrength = 0f) }
+                DesktopFluiditySettings.setEnabled(false)
+                DesktopAppearanceSettings.setReduceDynamicBlur(true)
+                DesktopMiniPlayerAppearance.setContrast(0.9f)
+                DesktopMiniPlayerAppearance.setRim(0.45f)
+            }
+            "Glass" -> {
+                DesktopAdvancedAppearance.update { it.copy(amoledDark = false, fixedAccentArgb = null, paletteStrength = 1f) }
+                DesktopFluiditySettings.setEnabled(true)
+                DesktopAppearanceSettings.setReduceDynamicBlur(false)
+                DesktopMiniPlayerAppearance.setContrast(0.66f)
+                DesktopMiniPlayerAppearance.setRim(0.5f)
+            }
+            "AMOLED dark" -> {
+                DesktopAdvancedAppearance.update { it.copy(amoledDark = true, paletteStrength = 0.75f) }
+                DesktopAppearanceSettings.setReduceDynamicBlur(true)
+            }
+            "Compact" -> {
+                DesktopAdvancedAppearance.update { it.copy(density = DesktopUiDensity.COMPACT, shelfSpacing = 22) }
+                DesktopMiniPlayerAppearance.setWidth(620)
+                DesktopMiniPlayerAppearance.setBottomInset(12)
+            }
+        }
+        DesktopAdvancedAppearance.update { it.copy(activePresetId = name.lowercase().replace(' ', '-')) }
+        status = "$name preset applied. Changes are live; use Reset to restore defaults."
+    }
+
+    fun applyUserPreset(preset: DesktopSavedAppearancePreset) {
+        DesktopAdvancedAppearance.update { preset.appearance.copy(activePresetId = "user:${preset.name}") }
+        DesktopInterfaceSettings.setMode(runCatching { DesktopInterfaceMode.valueOf(preset.interfaceMode) }.getOrDefault(DesktopInterfaceMode.DEFAULT))
+        DesktopFluiditySettings.setEnabled(preset.fluidity)
+        DesktopAppearanceSettings.setReduceDynamicBlur(preset.reduceBlur)
+        DesktopAppearanceSettings.setReduceAnimation(preset.reduceMotion)
+        DesktopPlayerBackgroundSettings.set(PlayerBackgroundMode.fromStored(preset.playerBackground))
+        DesktopMiniPlayerAppearance.setPosition(DesktopMiniPlayerPosition.fromStored(preset.dockPosition))
+        DesktopMiniPlayerAppearance.setWidth(preset.dockWidth)
+        DesktopMiniPlayerAppearance.setBottomInset(preset.dockBottomInset)
+        DesktopMiniPlayerAppearance.setCornerRadius(preset.dockCornerRadius)
+        DesktopMiniPlayerAppearance.setContrast(preset.dockContrast)
+        DesktopMiniPlayerAppearance.setRim(preset.dockRim)
+        DesktopTitleBarSetting.set(preset.titleBar)
+        if (DesktopWindowBackdrop.available) {
+            DesktopWindowBackdrop.set(runCatching { DesktopBackdrop.valueOf(preset.windowMaterial) }.getOrDefault(DesktopBackdrop.MICA))
+        }
+        status = "${preset.name} applied."
+    }
+
+    Column(Modifier.fillMaxWidth().padding(vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Text(
+            "Changes preview as you adjust them and save automatically. Existing desktop settings are reused; Android settings are not shown here.",
+            color = DesktopSecondary,
+            style = MaterialTheme.typography.bodySmall,
+        )
+        OutlinedTextField(
+            value = search,
+            onValueChange = { search = it },
+            modifier = Modifier.fillMaxWidth(),
+            singleLine = true,
+            label = { Text("Search appearance settings") },
+            placeholder = { Text("Try glass, spacing, dock, or font") },
+        )
+        SettingsToggle("Show only modified", "Filter the editor to values away from their defaults", onlyModified) { onlyModified = it }
+        if (isPreviewing) {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Previewing changes", color = DesktopSecondary, style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f).padding(top = 10.dp))
+                TextButton(onClick = DesktopAdvancedAppearance::cancelPreview) { Text("Cancel") }
+                TextButton(onClick = DesktopAdvancedAppearance::commitPreview) { Text("Keep") }
+            }
+        }
+        Text("Presets", style = MaterialTheme.typography.titleMedium)
+        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            listOf("Default", "Minimal", "High contrast", "Glass", "AMOLED dark", "Compact").forEach { name ->
+                FilterChip(
+                    colors = desktopChipColors(), selected = config.activePresetId == name.lowercase().replace(' ', '-'), onClick = { applyPreset(name) },
+                    label = { Text(name) },
+                )
+            }
+        }
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedTextField(
+                value = presetName,
+                onValueChange = { presetName = it.take(32) },
+                modifier = Modifier.weight(1f), singleLine = true,
+                label = { Text(if (renameFrom == null) "Save current preset" else "Rename preset") },
+            )
+            Button(onClick = {
+                val old = renameFrom
+                val ok = if (old != null) DesktopAdvancedAppearance.renamePreset(old, presetName) else {
+                    DesktopAdvancedAppearance.savePreset(
+                        DesktopSavedAppearancePreset(
+                            name = presetName,
+                            appearance = config,
+                            interfaceMode = interfaceMode.name,
+                            fluidity = fluidity,
+                            reduceBlur = reduceBlur,
+                            reduceMotion = reduceMotion,
+                            playerBackground = playerBackground.name,
+                            dockPosition = dockPosition.name,
+                            dockWidth = dockWidth,
+                            dockBottomInset = dockBottom,
+                            dockCornerRadius = dockCorner,
+                            dockContrast = dockContrast,
+                            dockRim = dockRim,
+                            titleBar = titleBarEnabled,
+                            windowMaterial = windowMaterial.name,
+                        ),
+                    )
+                }
+                status = if (ok) "Preset saved." else "Choose a unique preset name."
+                if (ok) { presetRevision++; renameFrom = null }
+            }) { Text(if (renameFrom == null) "Save" else "Rename") }
+            if (renameFrom != null) TextButton(onClick = { renameFrom = null; presetName = "" }) { Text("Cancel") }
+        }
+        userPresets.forEach { preset ->
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                TextButton(onClick = { applyUserPreset(preset) }) { Text(preset.name) }
+                TextButton(onClick = {
+                    val ok = DesktopAdvancedAppearance.savePreset(preset.copy(name = "${preset.name} copy"))
+                    status = if (ok) "Preset duplicated." else "Choose a unique preset name."
+                    if (ok) presetRevision++
+                }) { Text("Duplicate") }
+                TextButton(onClick = { presetName = preset.name; renameFrom = preset.name }) { Text("Rename") }
+                TextButton(onClick = { DesktopAdvancedAppearance.deletePreset(preset.name); presetRevision++ }) { Text("Delete") }
+            }
+        }
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(16.dp),
+            color = if (config.amoledDark) Color.Black else DesktopSurfaceRaised,
+            border = BorderStroke(1.dp, DesktopDivider),
+        ) {
+            Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                Box(Modifier.size(38.dp).clip(RoundedCornerShape(10.dp)).background(DesktopAccent))
+                Column(Modifier.weight(1f)) {
+                    Text("Live preview", style = MaterialTheme.typography.titleMedium)
+                    Text("Muses · Home · Album shelf · Floating player", color = DesktopSecondary, style = MaterialTheme.typography.bodySmall)
+                }
+                Text("Aa", color = DesktopAccent, style = MaterialTheme.typography.headlineMedium)
+            }
+        }
+
+        if (matches("desktop.text_scale") || matches("desktop.font_family")) SettingsGroup("Typography") {
+            if (matches("desktop.text_scale")) {
+                MiniPlayerAppearanceSlider(
+                    "Text scale${if (modified("desktop.text_scale")) " · modified" else ""}",
+                    "${(config.textScale * 100).roundToInt()}%", config.textScale, 0.85f..1.30f, 8,
+                ) { value -> DesktopAdvancedAppearance.preview { it.copy(textScale = value) } }
+            }
+            if (matches("desktop.font_family")) {
+                Text("Font family${if (modified("desktop.font_family")) " · modified" else ""}", color = DesktopSecondary, style = MaterialTheme.typography.bodySmall)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(vertical = 8.dp)) {
+                    DesktopFontFamily.entries.forEach { option ->
+                        FilterChip(colors = desktopChipColors(), selected = config.fontFamily == option,
+                            onClick = { DesktopAdvancedAppearance.update { it.copy(fontFamily = option) } },
+                            label = { Text(option.name.lowercase().replaceFirstChar(Char::uppercase)) })
+                    }
+                }
+            }
+            TextButton(onClick = DesktopAdvancedAppearance::resetTypography) { Text("Reset typography") }
+        }
+
+        if (matches("desktop.density") || matches("desktop.shelf_spacing") || matches("desktop.home_lead_artwork")) SettingsGroup("Density and home layout") {
+            if (matches("desktop.density")) {
+                Text("Home feed density${if (modified("desktop.density")) " · modified" else ""}", color = DesktopSecondary, style = MaterialTheme.typography.bodySmall)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(vertical = 8.dp)) {
+                    DesktopUiDensity.entries.forEach { option ->
+                        FilterChip(colors = desktopChipColors(), selected = config.density == option,
+                            onClick = {
+                                val spacing = when (option) { DesktopUiDensity.COMPACT -> 24; DesktopUiDensity.COMFORTABLE -> 30; DesktopUiDensity.SPACIOUS -> 38 }
+                                DesktopAdvancedAppearance.update { it.copy(density = option, shelfSpacing = spacing) }
+                            }, label = { Text(option.name.lowercase().replaceFirstChar(Char::uppercase)) })
+                    }
+                }
+            }
+            if (matches("desktop.shelf_spacing")) {
+                MiniPlayerAppearanceSlider(
+                    "Home shelf spacing${if (modified("desktop.shelf_spacing")) " · modified" else ""}",
+                    "${config.shelfSpacing} dp", config.shelfSpacing.toFloat(), 20f..44f, 11,
+                ) { value -> DesktopAdvancedAppearance.preview { it.copy(shelfSpacing = value.roundToInt()) } }
+            }
+            if (matches("desktop.home_lead_artwork")) {
+                SettingsToggle("Lead artwork${if (modified("desktop.home_lead_artwork")) " · modified" else ""}", "Use a larger lead card on the Modern Home feed", config.homeLeadArtwork) {
+                    DesktopAdvancedAppearance.update { it.copy(homeLeadArtwork = !it.homeLeadArtwork) }
+                }
+            }
+            TextButton(onClick = DesktopAdvancedAppearance::resetHome) { Text("Reset density and layout") }
+        }
+
+        if (matches("desktop.palette_strength") || matches("desktop.fixed_accent") || matches("desktop.amoled")) SettingsGroup("Theme and colour") {
+            if (matches("desktop.amoled")) SettingsToggle("AMOLED dark${if (modified("desktop.amoled")) " · modified" else ""}", "Use true black for the desktop background", config.amoledDark) {
+                DesktopAdvancedAppearance.update { it.copy(amoledDark = !it.amoledDark) }
+            }
+            if (matches("desktop.fixed_accent")) {
+                Text("Fixed accent${if (modified("desktop.fixed_accent")) " · modified" else ""}", style = MaterialTheme.typography.bodyMedium)
+                Text("Enter a six-digit hex colour. Colours below the 4.5:1 contrast floor are rejected.", color = DesktopSecondary, style = MaterialTheme.typography.bodySmall)
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(accentInput, { accentInput = it.filter(Char::isLetterOrDigit).take(8) }, modifier = Modifier.weight(1f), singleLine = true, label = { Text("Hex accent") })
+                    Button(onClick = {
+                        val hex = accentInput.removePrefix("#")
+                        val parsed = runCatching { (if (hex.length == 6) "FF$hex" else hex).toLong(16) }.getOrNull()
+                        status = if (parsed != null && DesktopAdvancedAppearance.setFixedAccent(parsed)) "Accent applied." else "That accent does not meet the contrast floor."
+                    }) { Text("Apply") }
+                    TextButton(onClick = { DesktopAdvancedAppearance.setFixedAccent(null); accentInput = "FFFFFF" }) { Text("Reset") }
+                }
+            }
+            if (matches("desktop.palette_strength")) MiniPlayerAppearanceSlider(
+                "Artwork palette strength${if (modified("desktop.palette_strength")) " · modified" else ""}",
+                "${(config.paletteStrength * 100).roundToInt()}%", config.paletteStrength, 0f..1f, 19,
+            ) { value -> DesktopAdvancedAppearance.preview { it.copy(paletteStrength = value) } }
+            TextButton(onClick = DesktopAdvancedAppearance::resetColors) { Text("Reset colours") }
+        }
+
+        if (matches("desktop.interface")) SettingsGroup("Navigation shell") {
+            SettingsToggle("Modern interface${if (modified("desktop.interface")) " · modified" else ""}", "Turn off to restore the classic Legacy sidebar", interfaceMode == DesktopInterfaceMode.MODERN) {
+                DesktopInterfaceSettings.setMode(if (it) DesktopInterfaceMode.MODERN else DesktopInterfaceMode.LEGACY)
+            }
+            TextButton(onClick = { DesktopInterfaceSettings.setMode(DesktopInterfaceMode.DEFAULT) }) { Text("Reset navigation") }
+        }
+        if (matches("desktop.fluidity") || matches("desktop.reduce_blur") || matches("desktop.reduce_motion")) SettingsGroup("Glass and motion") {
+            if (matches("desktop.fluidity")) SettingsToggle("Fluidity${if (modified("desktop.fluidity")) " · modified" else ""}", "Artwork-coloured glass and motion across the desktop shell", fluidity, DesktopFluiditySettings::setEnabled)
+            if (matches("desktop.reduce_blur")) SettingsToggle("Reduce dynamic blur${if (modified("desktop.reduce_blur")) " · modified" else ""}", "Accessibility/performance override; solid fallbacks win over glass choices", reduceBlur, DesktopAppearanceSettings::setReduceDynamicBlur)
+            if (matches("desktop.reduce_motion")) SettingsToggle("Reduce animations${if (modified("desktop.reduce_motion")) " · modified" else ""}", "Accessibility override; disables motion-heavy transitions", reduceMotion, DesktopAppearanceSettings::setReduceAnimation)
+            TextButton(onClick = {
+                DesktopFluiditySettings.setEnabled(false)
+                DesktopFluiditySettings.setSubtle(false)
+                DesktopAppearanceSettings.setReduceDynamicBlur(false)
+                DesktopAppearanceSettings.setReduceAnimation(false)
+            }) { Text("Reset glass and motion") }
+        }
+        if (matches("desktop.player_background")) SettingsGroup("Full-screen player") {
+            Text("Player background${if (modified("desktop.player_background")) " · modified" else ""}", color = DesktopSecondary, style = MaterialTheme.typography.bodySmall)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(vertical = 8.dp)) {
+                PlayerBackgroundMode.entries.forEach { option ->
+                    FilterChip(colors = desktopChipColors(), selected = playerBackground == option,
+                        onClick = { DesktopPlayerBackgroundSettings.set(option) }, label = {
+                            Text(if (option == PlayerBackgroundMode.ALBUM_REACTIVE) "Album reactive" else "Acrylic glass")
+                        })
+                }
+            }
+            TextButton(onClick = { DesktopPlayerBackgroundSettings.set(PlayerBackgroundMode.DEFAULT) }) { Text("Reset player background") }
+        }
+        if (matches("desktop.dock") || matches("desktop.dock_contents") || matches("desktop.dock_material")) SettingsGroup("Floating mini-player") {
+            if (matches("desktop.dock")) DesktopMiniPlayerCustomizationSettings()
+            if (matches("desktop.dock_contents")) {
+                Text("Contents", color = DesktopSecondary, style = MaterialTheme.typography.bodySmall)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(vertical = 8.dp)) {
+                    DesktopMiniPlayerHeight.entries.forEach { option ->
+                        FilterChip(colors = desktopChipColors(), selected = config.miniPlayerHeight == option,
+                            onClick = { DesktopAdvancedAppearance.update { it.copy(miniPlayerHeight = option) } },
+                            label = { Text(option.name.lowercase().replaceFirstChar(Char::uppercase)) })
+                    }
+                }
+                SettingsToggle("Show artwork", "Display the track cover in the floating player", config.miniPlayerArtwork) { value ->
+                    DesktopAdvancedAppearance.update { it.copy(miniPlayerArtwork = value) }
+                }
+                SettingsToggle("Show title and artist", "Keep track information in the floating player", config.miniPlayerMetadata) { value ->
+                    DesktopAdvancedAppearance.update { it.copy(miniPlayerMetadata = value) }
+                }
+                Text("Progress style", color = DesktopSecondary, style = MaterialTheme.typography.bodySmall)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(vertical = 8.dp)) {
+                    DesktopMiniProgress.entries.forEach { option ->
+                        FilterChip(colors = desktopChipColors(), selected = config.miniPlayerProgress == option,
+                            onClick = { DesktopAdvancedAppearance.update { it.copy(miniPlayerProgress = option) } },
+                            label = { Text(option.name.lowercase().replaceFirstChar(Char::uppercase)) })
+                    }
+                }
+                Text("Artwork shape", color = DesktopSecondary, style = MaterialTheme.typography.bodySmall)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(vertical = 8.dp)) {
+                    DesktopArtworkShape.entries.forEach { option ->
+                        FilterChip(colors = desktopChipColors(), selected = config.miniPlayerArtShape == option,
+                            onClick = { DesktopAdvancedAppearance.update { it.copy(miniPlayerArtShape = option) } },
+                            label = { Text(option.name.lowercase().replaceFirstChar(Char::uppercase)) })
+                    }
+                }
+                SettingsToggle("Shuffle shortcut", "When hidden, shuffle stays available in the More menu", config.miniPlayerShowShuffle) { value ->
+                    DesktopAdvancedAppearance.update { it.copy(miniPlayerShowShuffle = value) }
+                }
+                SettingsToggle("Repeat shortcut", "When hidden, repeat stays available in the More menu", config.miniPlayerShowRepeat) { value ->
+                    DesktopAdvancedAppearance.update { it.copy(miniPlayerShowRepeat = value) }
+                }
+                SettingsToggle("Tap player to expand", "Open the full-screen player when its body is clicked", config.miniPlayerTapExpands) { value ->
+                    DesktopAdvancedAppearance.update { it.copy(miniPlayerTapExpands = value) }
+                }
+                TextButton(onClick = {
+                    DesktopAdvancedAppearance.update {
+                        it.copy(
+                            miniPlayerHeight = DesktopMiniPlayerHeight.DEFAULT,
+                            miniPlayerArtwork = true,
+                            miniPlayerMetadata = true,
+                            miniPlayerProgress = DesktopMiniProgress.THIN,
+                            miniPlayerArtShape = DesktopArtworkShape.ROUNDED,
+                            miniPlayerShowShuffle = true,
+                            miniPlayerShowRepeat = true,
+                            miniPlayerTapExpands = true,
+                            miniPlayerMaterial = DesktopMiniPlayerMaterial.GLASS,
+                        )
+                    }
+                }) { Text("Reset mini-player contents") }
+            }
+            if (matches("desktop.dock_material")) {
+                Text("Mini-player surface", color = DesktopSecondary, style = MaterialTheme.typography.bodySmall)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(vertical = 8.dp)) {
+                    DesktopMiniPlayerMaterial.entries.forEach { option ->
+                        FilterChip(colors = desktopChipColors(), selected = config.miniPlayerMaterial == option,
+                            onClick = { DesktopAdvancedAppearance.update { it.copy(miniPlayerMaterial = option) } },
+                            label = { Text(option.name.lowercase().replaceFirstChar(Char::uppercase)) })
+                    }
+                }
+            }
+        }
+        if (matches("desktop.window_material") && DesktopWindowBackdrop.available) SettingsGroup("Window material") {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.horizontalScroll(rememberScrollState())) {
+                DesktopBackdrop.entries.forEach { option ->
+                    FilterChip(colors = desktopChipColors(), selected = windowMaterial == option,
+                        onClick = { DesktopWindowBackdrop.set(option) }, label = { Text(option.label) })
+                }
+            }
+            Text("Mica/Acrylic require Windows 11 version 22H2 or later.", color = DesktopSecondary, style = MaterialTheme.typography.bodySmall)
+            TextButton(onClick = { DesktopWindowBackdrop.set(DesktopBackdrop.MICA) }) { Text("Reset window material") }
+        }
+
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(onClick = {
+                val chooser = javax.swing.JFileChooser().apply { dialogTitle = "Export Muses appearance"; selectedFile = java.io.File("muses-appearance.json") }
+                if (chooser.showSaveDialog(null) == javax.swing.JFileChooser.APPROVE_OPTION) {
+                    runCatching { chooser.selectedFile.writeText(DesktopAdvancedAppearance.export(System.getProperty("bitchord.version") ?: "unknown")) }
+                        .onSuccess { status = "Appearance exported." }.onFailure { status = "Export failed: ${it.message}" }
+                }
+            }) { Text("Export JSON") }
+            OutlinedButton(onClick = {
+                val chooser = javax.swing.JFileChooser().apply { dialogTitle = "Import Muses appearance" }
+                if (chooser.showOpenDialog(null) == javax.swing.JFileChooser.APPROVE_OPTION) {
+                    runCatching {
+                        require(chooser.selectedFile.length() <= 65_536L) { "Appearance file is larger than 64 KB" }
+                        DesktopAdvancedAppearance.decode(chooser.selectedFile.readText())
+                    }
+                        .onSuccess { imported = it }.onFailure { status = "Import rejected: ${it.message}" }
+                }
+            }) { Text("Import JSON") }
+            TextButton(onClick = { applyPreset("Default") }) { Text("Reset all") }
+        }
+        status?.let { Text(it, color = DesktopSecondary, style = MaterialTheme.typography.bodySmall) }
+    }
+
+    imported?.let { candidate ->
+        AlertDialog(
+            onDismissRequest = { imported = null },
+            title = { Text("Import appearance settings?") },
+            text = {
+                val differences = buildList {
+                    if (config.textScale != candidate.appearance.textScale) add("Text scale ${config.textScale} → ${candidate.appearance.textScale}")
+                    if (config.fontFamily != candidate.appearance.fontFamily) add("Font ${config.fontFamily} → ${candidate.appearance.fontFamily}")
+                    if (config.density != candidate.appearance.density) add("Density ${config.density} → ${candidate.appearance.density}")
+                    if (config.shelfSpacing != candidate.appearance.shelfSpacing) add("Home spacing ${config.shelfSpacing} → ${candidate.appearance.shelfSpacing} dp")
+                    if (config.amoledDark != candidate.appearance.amoledDark) add("AMOLED background ${config.amoledDark} → ${candidate.appearance.amoledDark}")
+                    if (config.fixedAccentArgb != candidate.appearance.fixedAccentArgb) add("Fixed accent changes")
+                    if (config.paletteStrength != candidate.appearance.paletteStrength) add("Artwork palette strength changes")
+                    if (candidate.desktopSettings != null) add("Existing interface, glass, player background, dock, and window settings are included")
+                }
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text(if (differences.isEmpty()) "No settings differ from the current appearance." else differences.joinToString("\n"))
+                    Text("Values are validated and clamped before applying. Unknown fields are ignored.", color = DesktopSecondary, style = MaterialTheme.typography.bodySmall)
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    DesktopAdvancedAppearance.update { candidate.appearance }
+                    candidate.desktopSettings?.let(::applyUserPreset)
+                    imported = null
+                    status = "Appearance imported."
+                }) { Text("Import") }
+            },
+            dismissButton = { TextButton(onClick = { imported = null }) { Text("Cancel") } },
+        )
+    }
+}
+
+@Composable
 private fun DesktopMiniPlayerCustomizationSettings() {
     var expanded by remember { mutableStateOf(false) }
     val title = DesktopStrings["floating_player_appearance", "Floating player appearance"]
@@ -6295,6 +6826,14 @@ private fun DesktopMiniPlayerCustomizationSettings() {
             color = DesktopSecondary,
             style = MaterialTheme.typography.bodySmall,
         )
+        TextButton(onClick = {
+            DesktopMiniPlayerAppearance.setPosition(DesktopMiniPlayerPosition.CENTER)
+            DesktopMiniPlayerAppearance.setWidth(720)
+            DesktopMiniPlayerAppearance.setBottomInset(16)
+            DesktopMiniPlayerAppearance.setCornerRadius(20)
+            DesktopMiniPlayerAppearance.setContrast(0.72f)
+            DesktopMiniPlayerAppearance.setRim(0.32f)
+        }) { Text("Reset dock appearance") }
     }
 }
 
@@ -6305,6 +6844,7 @@ private fun MiniPlayerAppearanceSlider(
     value: Float,
     valueRange: ClosedFloatingPointRange<Float>,
     steps: Int,
+    onValueChangeFinished: () -> Unit = {},
     onValueChange: (Float) -> Unit,
 ) {
     Column(Modifier.fillMaxWidth().padding(top = 8.dp)) {
@@ -6312,7 +6852,7 @@ private fun MiniPlayerAppearanceSlider(
             Text(title, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
             Text(valueLabel, color = DesktopSecondary, style = MaterialTheme.typography.bodySmall)
         }
-        DesktopBareSlider(value, onValueChange, valueRange = valueRange, steps = steps)
+        DesktopBareSlider(value, onValueChange, valueRange = valueRange, steps = steps, onValueChangeFinished = onValueChangeFinished)
     }
 }
 

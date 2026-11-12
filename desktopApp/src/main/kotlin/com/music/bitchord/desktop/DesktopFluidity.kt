@@ -5,6 +5,7 @@ import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.LocalIndication
@@ -277,6 +278,7 @@ internal fun DesktopFluidBackdrop(
     val reduceAnimation by DesktopAppearanceSettings.reduceAnimation.collectAsState()
     val windowVisible by DesktopWindowVisibility.visible.collectAsState()
     val material by DesktopWindowBackdrop.active.collectAsState()
+    val appearance by DesktopAdvancedAppearance.config.collectAsState()
     val translucent = overMaterial && material != DesktopBackdrop.OFF
     val running = windowVisible && !reduceAnimation
 
@@ -285,7 +287,11 @@ internal fun DesktopFluidBackdrop(
         animateColorAsState(color, tween(1400), label = "fluidGlow$index").value
     }
     val base by animateColorAsState(palette.base, tween(1400), label = "fluidBase")
-    val intensity by animateFloatAsState(palette.intensity, tween(1400), label = "fluidIntensity")
+    val intensity by animateFloatAsState(
+        palette.intensity * appearance.paletteStrength,
+        if (reduceAnimation) snap() else tween(1400),
+        label = "fluidIntensity",
+    )
 
     // A swell of glow whenever the cover changes, so a skip is something you see.
     val burst = remember { Animatable(0f) }

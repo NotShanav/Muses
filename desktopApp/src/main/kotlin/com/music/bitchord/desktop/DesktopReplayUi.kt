@@ -33,6 +33,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.produceState
 import androidx.compose.ui.Alignment
@@ -389,6 +390,7 @@ private fun EmptyReplay(period: DesktopReplayPeriod) {
 /** The artwork's own colours, averaged into a mesh and held still. */
 @Composable
 internal fun DesktopMesh(url: String?) {
+    val appearance by DesktopAdvancedAppearance.config.collectAsState()
     val mesh by produceState<ImageBitmap?>(initialValue = null, key1 = url) {
         value = withContext(Dispatchers.IO) {
             DesktopArtworkCache.load(url.artworkAt(MESH_SOURCE_PX) ?: url)
@@ -397,7 +399,7 @@ internal fun DesktopMesh(url: String?) {
     }
     val texture = mesh
     if (texture == null) {
-        Box(Modifier.fillMaxSize().background(DesktopBackground))
+        Box(Modifier.fillMaxSize().background(if (appearance.amoledDark) Color.Black else Color(0xFF202020)))
         return
     }
     Canvas(Modifier.fillMaxSize()) {
