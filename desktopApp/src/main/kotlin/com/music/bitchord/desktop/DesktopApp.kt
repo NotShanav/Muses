@@ -3654,6 +3654,8 @@ fun BitChordDesktopApp() {
                                     onOpenIntegrations = { overlays.settingsPage = DesktopSettingsPage.INTEGRATIONS },
                                     onOpenLicenses = { overlays.settingsPage = DesktopSettingsPage.LICENSES },
                                     onOpenHomeSections = { overlays.settingsPage = DesktopSettingsPage.HOME_SECTIONS },
+                                    onOpenCustomiseHub = { overlays.settingsPage = DesktopSettingsPage.CUSTOMISE_HUB },
+                                    onOpenPillStudio = { overlays.settingsPage = DesktopSettingsPage.PILL_STUDIO },
                                 )
                                 DesktopSettingsPage.HOME_SECTIONS -> DesktopHomeSectionManagerPage(onDismiss = ::goBack)
                                 DesktopSettingsPage.CUSTOMISE_HUB -> DesktopCustomiseHubPage(
@@ -4666,13 +4668,13 @@ internal fun DesktopFloatingMiniPlayer(
         }
         Row(Modifier.fillMaxSize(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                pill.zones["left"].orEmpty().forEach(drawPillElement)
+                for (id in pill.zones["left"].orEmpty()) drawPillElement(id)
             }
             Row(Modifier.weight(1f).fillMaxHeight(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                pill.zones["center"].orEmpty().forEach(drawPillElement)
+                for (id in pill.zones["center"].orEmpty()) drawPillElement(id)
             }
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                pill.zones["right"].orEmpty().forEach(drawPillElement)
+                for (id in pill.zones["right"].orEmpty()) drawPillElement(id)
             }
         }
         if (dockHovered) Box(Modifier.align(Alignment.TopEnd).padding(3.dp).zIndex(2f)) {
@@ -5674,6 +5676,8 @@ private fun DesktopSettingsScreen(
     onOpenIntegrations: () -> Unit,
     onOpenLicenses: () -> Unit,
     onOpenHomeSections: () -> Unit,
+    onOpenCustomiseHub: () -> Unit,
+    onOpenPillStudio: () -> Unit,
 ) {
     var editingSource by remember { mutableStateOf<DesktopSourceConfig?>(null) }
     val sourceProbeKey = sourceConfigs
@@ -6093,12 +6097,12 @@ private fun DesktopSettingsScreen(
                                 SettingsNavigationRow(
                                     title = "Customise hub",
                                     subtitle = "Open the desktop appearance editors",
-                                    onClick = { overlays.settingsPage = DesktopSettingsPage.CUSTOMISE_HUB },
+                                    onClick = onOpenCustomiseHub,
                                 )
                                 SettingsNavigationRow(
                                     title = "Pill Studio",
                                     subtitle = "Arrange, preview, and tune the floating player",
-                                    onClick = { overlays.settingsPage = DesktopSettingsPage.PILL_STUDIO },
+                                    onClick = onOpenPillStudio,
                                 )
                                 SettingsNavigationRow(
                                     title = "Home sections",

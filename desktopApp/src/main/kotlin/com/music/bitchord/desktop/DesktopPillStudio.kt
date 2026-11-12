@@ -448,9 +448,15 @@ private fun PillStudioPreview(config: DesktopPillConfig, songTitle: String?, art
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(4.dp),
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) { config.zones["left"].orEmpty().forEach(drawElement) }
-        Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) { config.zones["center"].orEmpty().forEach(drawElement) }
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) { config.zones["right"].orEmpty().forEach(drawElement) }
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            for (id in config.zones["left"].orEmpty()) drawElement(id)
+        }
+        Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            for (id in config.zones["center"].orEmpty()) drawElement(id)
+        }
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            for (id in config.zones["right"].orEmpty()) drawElement(id)
+        }
     }
 }
 
