@@ -494,6 +494,7 @@ private enum class DesktopDestination(val id: String, val label: String) {
     HISTORY("history", "History"),
     DOWNLOADS("downloads", "Downloads"),
     LOCAL_MUSIC("local-music", "Local Music"),
+    HUB("hub", "Media Hub"), // MUSES-HUB hook (1/6): destination
     SETTINGS("settings", "Settings"),
 }
 
@@ -1553,6 +1554,24 @@ fun BitChordDesktopApp() {
         playbackEngine.pause()
         partySync.onLocalIntent()
     }
+    // MUSES-HUB hook (2/6): the one Hub controller. Starting a service pauses Muses (only if it is
+    // playing) through the same pauseFromUser the media keys use. rememberUpdatedState keeps the
+    // lambda current although the controller is created once.
+    val hubPauseMusic = rememberUpdatedState<() -> Unit>({
+        if (playbackEngine.state.value.isPlaying) pauseFromUser()
+    })
+    val hubController = remember { HubController.forSystem(onServiceActivated = { hubPauseMusic.value() }) }
+    // Window close (exitApplication) reaches this; the tray's Quit uses exitProcess and is handled
+    // in onQuit below. shutdown() closes the Hub browser and is safe to call twice. It runs on its
+    // own thread so closing the window is not held up by the browser's graceful-close wait.
+    DisposableEffect(hubController) {
+        onDispose {
+            Thread(
+                { runCatching { kotlinx.coroutines.runBlocking { hubController.shutdown() } } },
+                "muses-hub-shutdown",
+            ).start()
+        }
+    }
     val mprisController = remember(playbackEngine) {
         DesktopMprisController(
             onPlay = ::playFromUser,
@@ -2363,6 +2382,8 @@ fun BitChordDesktopApp() {
                 // WASAPI and WinRT, and exitProcess would unload those libraries under them.
                 playbackEngine.shutdown()
                 DesktopWindowsMedia.stop()
+                // MUSES-HUB hook (3/6): close the Hub browser before the process ends.
+                runCatching { kotlinx.coroutines.runBlocking { hubController.shutdown() } }
                 exitProcess(0)
             },
         )
@@ -4062,6 +4083,8 @@ fun BitChordDesktopApp() {
                             contentPadding = contentPadding,
                             menu = { song -> songMenu(song) },
                         )
+                        // MUSES-HUB hook (4/6): the page
+                        destination == DesktopDestination.HUB -> DesktopHubPage(hubController, contentPadding)
                     }
                 }
                 }
@@ -4191,6 +4214,7 @@ private fun DesktopTopBar(
                     DropdownMenu(expanded = accountMenuOpen, onDismissRequest = { accountMenuOpen = false }) {
                         DropdownMenuItem(text = { Text("Switch account") }, onClick = { accountMenuOpen = false; common.onOpenAccounts() })
                         DropdownMenuItem(text = { Text("History") }, onClick = { accountMenuOpen = false; onOpenHistory() })
+                        DropdownMenuItem(text = { Text("Media Hub") }, onClick = { accountMenuOpen = false; onDestinationSelected(DesktopDestination.HUB) }) // MUSES-HUB hook (5/6): entry point
                         DropdownMenuItem(text = { Text("Settings") }, onClick = { accountMenuOpen = false; onOpenSettings() })
                     }
                 }
@@ -4431,6 +4455,10 @@ private fun DesktopSidebar(
             }
             DesktopSidebarItem(BitChordIcons.Library, "Local Music", destination == DesktopDestination.LOCAL_MUSIC) {
                 onDestinationSelected(DesktopDestination.LOCAL_MUSIC)
+            }
+            // MUSES-HUB hook (6/6): entry point for the classic layout (the modern one uses the profile menu)
+            DesktopSidebarItem(BitChordIcons.Play, "Media Hub", destination == DesktopDestination.HUB) {
+                onDestinationSelected(DesktopDestination.HUB)
             }
             Spacer(Modifier.height(6.dp))
             HorizontalDivider(color = desktopChromeDivider())
