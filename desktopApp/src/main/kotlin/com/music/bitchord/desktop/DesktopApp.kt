@@ -6041,6 +6041,10 @@ private fun DesktopSettingsScreen(
                             DesktopFluiditySettings::setSubtle,
                         )
                     }
+                    // UPGRADE M3: diagnostic memory report switch and button (DesktopMemoryReport.kt).
+                    DesktopMemoryReportSettingsRows { title, subtitle, checked, onChange ->
+                        SettingsToggle(title, subtitle, checked, onChange)
+                    }
                     val playerBackgroundTitle = DesktopStrings["player_background", "Player background"]
                     val playerBackgroundSubtitle = DesktopStrings[
                         "player_background_subtitle",

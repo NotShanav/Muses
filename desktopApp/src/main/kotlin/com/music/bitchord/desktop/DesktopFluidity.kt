@@ -1,6 +1,5 @@
 package com.music.bitchord.desktop
 
-import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.animateFloatAsState
@@ -30,10 +29,10 @@ import androidx.compose.ui.composed
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.unit.Dp
@@ -91,12 +90,18 @@ internal object DesktopFluiditySettings {
 
 // ── Palette: the colours of the cover ────────────────────────────────────────────────────────────
 
-/** Glow colours read off a cover, and how vivid that cover is. */
-private class FluidPalette(
+/**
+ * Glow colours read off a cover, and how vivid that cover is.
+ * UPGRADE M1: now `internal` (the pure extraction lives in DesktopAlbumPalette.kt).
+ * Roles of [colors] (always 4): [0] dominant, [1] second, [2] third, [3] lighter tint of the dominant.
+ */
+internal class FluidPalette(
     val colors: List<Color>,
     val base: Color,
     /** 0..1: a mostly black or grey sleeve glows softly, a colourful one at full strength. */
     val intensity: Float,
+    /** UPGRADE M1: how much of the cover's colour each of colors[0..2] stands for (0..1, a missing colour is 0). */
+    val shares: List<Float> = listOf(1f, 0f, 0f),
 )
 
 private val FluidDefaultPalette = FluidPalette(
@@ -106,27 +111,52 @@ private val FluidDefaultPalette = FluidPalette(
 )
 
 private const val FLUID_ART_PX = 120
-private const val HUE_BINS = 24
 
 /** Palettes already read, by artwork URL, so a track heard before does not decode its cover again. */
 private const val FLUID_PALETTE_CACHE_ENTRIES = 24
 private val FluidPaletteCache = DesktopCountLru<FluidPalette>(FLUID_PALETTE_CACHE_ENTRIES)
 
+// UPGRADE M2: session-wide memory of what has been shown, so the default palette never returns after a song.
+/** True once any song's cover has been asked for this session. */
+@Volatile
+private var fluidHasPlayed = false
+
+/** The most recent palette read off a real cover. */
+@Volatile
+private var fluidLastAlbumPalette: FluidPalette? = null
+
 /**
- * The palette for [url]. The last palette stays on screen while the next cover loads, so a track
- * change crossfades from one cover's colours to the next instead of passing through a default.
+ * The palette for [url], or null while there is nothing to show yet (UPGRADE M2).
+ *  - [url] null and nothing ever selected this session: the default palette (idle startup only).
+ *  - [url] set and the cover not cached: the PREVIOUS album palette stays on screen; with none yet
+ *    (the first song) null, so the caller draws only the base and fades the glows in on arrival.
+ *  - [url] null after a song has played: the last album palette is kept, never the default.
  * A cover seen recently is answered from [FluidPaletteCache]; extraction stays on Dispatchers.IO.
  */
 @Composable
-private fun rememberFluidPalette(url: String?): FluidPalette {
-    var palette by remember { mutableStateOf(url?.let(FluidPaletteCache::get) ?: FluidDefaultPalette) }
+private fun rememberFluidPalette(url: String?): FluidPalette? {
+    var palette by remember {
+        mutableStateOf(
+            when {
+                url != null -> FluidPaletteCache.get(url) ?: fluidLastAlbumPalette
+                fluidHasPlayed -> fluidLastAlbumPalette
+                else -> FluidDefaultPalette
+            },
+        )
+    }
     LaunchedEffect(url) {
         if (url == null) {
-            palette = FluidDefaultPalette
+            if (!fluidHasPlayed) {
+                palette = FluidDefaultPalette
+            } else {
+                fluidLastAlbumPalette?.let { palette = it }
+            }
             return@LaunchedEffect
         }
+        fluidHasPlayed = true
         val cached = FluidPaletteCache.get(url)
         if (cached != null) {
+            fluidLastAlbumPalette = cached
             palette = cached
             return@LaunchedEffect
         }
@@ -137,16 +167,18 @@ private fun rememberFluidPalette(url: String?): FluidPalette {
         }
         if (found != null) {
             FluidPaletteCache.put(url, found)
+            fluidLastAlbumPalette = found
             palette = found
         }
     }
-    return palette
+    // The idle default must not show for a frame once a song is selected: until its cover is
+    // read, show the previous album palette, or nothing.
+    return if (url != null && palette === FluidDefaultPalette) fluidLastAlbumPalette else palette
 }
 
 /**
- * Hue-binned, saturation-weighted: the colours that make a cover look the way it does, rather than
- * its average (a mean of a red stripe on black is a dull maroon). Near-black and near-white pixels
- * are ignored, so letterbox bars and blank borders do not count.
+ * Reads the cover's pixels and hands them to the pure [extractAlbumPalette] (DesktopAlbumPalette.kt),
+ * which does the hue binning and the three-colour choice. UPGRADE M1: the pixel work moved there so it can be tested.
  */
 private fun extractFluidPalette(bitmap: ImageBitmap): FluidPalette? {
     val width = bitmap.width
@@ -154,83 +186,11 @@ private fun extractFluidPalette(bitmap: ImageBitmap): FluidPalette? {
     if (width < 2 || height < 2) return null
     val pixels = IntArray(width * height)
     bitmap.readPixels(pixels, 0, 0, width, height)
-
-    val weight = FloatArray(HUE_BINS)
-    val satSum = FloatArray(HUE_BINS)
-    val valSum = FloatArray(HUE_BINS)
-    var counted = 0
-    var chromatic = 0
-    // An odd stride, so sampling does not line up on one column of the cover.
-    val step = (max(1, pixels.size / 3600)) or 1
-    var i = 0
-    while (i < pixels.size) {
-        val p = pixels[i]
-        i += step
-        val r = ((p shr 16) and 0xFF) / 255f
-        val g = ((p shr 8) and 0xFF) / 255f
-        val b = (p and 0xFF) / 255f
-        val maxC = max(r, max(g, b))
-        val minC = min(r, min(g, b))
-        val v = maxC
-        val d = maxC - minC
-        val s = if (maxC == 0f) 0f else d / maxC
-        counted++
-        if (v < 0.16f || s < 0.14f) continue
-        chromatic++
-        var h = when (maxC) {
-            r -> 60f * (((g - b) / d) % 6f)
-            g -> 60f * (((b - r) / d) + 2f)
-            else -> 60f * (((r - g) / d) + 4f)
-        }
-        if (h < 0f) h += 360f
-        val bin = ((h / 360f) * HUE_BINS).toInt().coerceIn(0, HUE_BINS - 1)
-        val w = (0.2f + s) * (0.35f + v)
-        weight[bin] += w
-        satSum[bin] += s * w
-        valSum[bin] += v * w
-    }
-    if (counted == 0) return null
-
-    // Bins are merged with their neighbours first: one hue straddling a bin edge is one colour.
-    val smoothed = FloatArray(HUE_BINS) { weight[it] + 0.5f * (weight[(it + 1) % HUE_BINS] + weight[(it + HUE_BINS - 1) % HUE_BINS]) }
-    val ranked = (0 until HUE_BINS).filter { weight[it] > 0f }.sortedByDescending { smoothed[it] }
-    val chosen = mutableListOf<Int>()
-    for (bin in ranked) {
-        if (chosen.size == 4) break
-        val hue = (bin + 0.5f) * 360f / HUE_BINS
-        if (chosen.none { hueGap(hue, (it + 0.5f) * 360f / HUE_BINS) < 34f }) chosen += bin
-    }
-
-    val fraction = chromatic.toFloat() / counted
-    val intensity = (0.4f + fraction * 1.6f).coerceIn(0.4f, 1f)
-
-    if (chosen.isEmpty()) {
-        // A grey or black-and-white sleeve: a soft silver-blue glow rather than an invented hue.
-        return FluidPalette(
-            colors = listOf(Color(0xFF9AA6C0), Color(0xFF6F7C99), Color(0xFFB9C2D6), Color(0xFF55627F)),
-            base = Color(0xFF0B0D12),
-            intensity = 0.45f,
-        )
-    }
-
-    val found = chosen.map { bin ->
-        val w = weight[bin].coerceAtLeast(1e-4f)
-        val s = (satSum[bin] / w * 1.15f).coerceIn(0.5f, 1f)
-        val v = valSum[bin] / w
-        hslColor((bin + 0.5f) * 360f / HUE_BINS, s, (0.42f + v * 0.2f).coerceIn(0.46f, 0.6f))
-    }.toMutableList()
-    // A cover with fewer than four distinct colours is fanned out around its own, never borrowed.
-    var k = 1
-    while (found.size < 4) {
-        val from = found[(found.size - chosen.size).coerceAtLeast(0) % chosen.size]
-        found += from.hueShifted(if (k % 2 == 1) 26f * k else -26f * k)
-        k++
-    }
-    val lead = found.first().toHsl()
-    return FluidPalette(found, hslColor(lead.h, lead.s.coerceAtMost(0.6f), 0.07f), intensity)
+    return extractAlbumPalette(pixels, width, height)
 }
 
-private fun hueGap(a: Float, b: Float): Float {
+// UPGRADE M1: visibility only (was private)
+internal fun hueGap(a: Float, b: Float): Float {
     val d = abs(a - b) % 360f
     return min(d, 360f - d)
 }
@@ -240,6 +200,16 @@ private fun hueGap(a: Float, b: Float): Float {
 private const val BLOB_COUNT = 4
 private const val FRAME_STEP_SECONDS = 1f / 30f
 private const val TWO_PI = 6.2831855f
+
+// UPGRADE M2
+private const val DISSOLVE_MS = 1400
+private const val FIRST_GLOW_FADE_MS = 800
+
+/** The dark neutral base shown while a cover has no palette yet. */
+private val FluidNeutralBase = Color(0xFF0B0D12)
+
+/** Glow alpha by role: dominant, second, third, tint of the dominant. */
+private val FluidRoleAlpha = floatArrayOf(0.85f, 0.70f, 0.60f, 0.45f)
 
 /** Where each glow lives and how it wanders. Speeds are cycles per second: periods of 17 to 29 s. */
 private class FluidGlow(
@@ -266,6 +236,10 @@ private val FluidGlows = listOf(
  * With [overMaterial] and a window material (Mica / Acrylic) active, the base is translucent and
  * the material shows through; the full-screen player passes false, because it is a sheet laid over
  * the page and has to be opaque. A vertical scrim keeps text readable over any cover.
+ *
+ * UPGRADE M2: glows use normal (SrcOver) blending, so overlaps never invent a new hue. A track
+ * change dissolves two layers (old palette out, new palette in) by alpha instead of tweening
+ * colours; the first song fades its glows up from the dark neutral base.
  */
 @Composable
 internal fun DesktopFluidBackdrop(
@@ -282,20 +256,43 @@ internal fun DesktopFluidBackdrop(
     val translucent = overMaterial && material != DesktopBackdrop.OFF
     val running = windowVisible && !reduceAnimation
 
-    val palette = rememberFluidPalette(artworkUrl)
-    val colors = palette.colors.mapIndexed { index, color ->
-        animateColorAsState(color, tween(1400), label = "fluidGlow$index").value
-    }
-    val base by animateColorAsState(palette.base, tween(1400), label = "fluidBase")
-    val intensity by animateFloatAsState(
-        palette.intensity * appearance.paletteStrength,
-        if (reduceAnimation) snap() else tween(1400),
-        label = "fluidIntensity",
+    val target = rememberFluidPalette(artworkUrl)
+    val strength by animateFloatAsState(
+        appearance.paletteStrength,
+        if (reduceAnimation) snap() else tween(400),
+        label = "fluidStrength",
     )
+
+    // UPGRADE M2: two-layer cross-dissolve. `to` is the palette on screen (null = base only),
+    // `from` the one fading out; progress 0..1 runs only while they differ.
+    var to by remember { mutableStateOf(target) }
+    var from by remember { mutableStateOf<FluidPalette?>(null) }
+    val progress = remember { Animatable(1f) }
+    LaunchedEffect(target) {
+        if (target === to) return@LaunchedEffect
+        if (target == null) {
+            // Nothing to show (a cover still loading with no earlier one): the neutral base, at once.
+            to = null
+            from = null
+            progress.snapTo(1f)
+            return@LaunchedEffect
+        }
+        val firstGlow = to == null
+        // Retarget mid-dissolve: the old target becomes `from` outright (a tiny jump, accepted).
+        from = to
+        to = target
+        progress.snapTo(0f)
+        if (reduceAnimation) {
+            progress.snapTo(1f)
+        } else {
+            progress.animateTo(1f, tween(if (firstGlow) FIRST_GLOW_FADE_MS else DISSOLVE_MS))
+        }
+        from = null
+    }
 
     // A swell of glow whenever the cover changes, so a skip is something you see.
     val burst = remember { Animatable(0f) }
-    LaunchedEffect(palette) {
+    LaunchedEffect(target) {
         if (reduceAnimation) return@LaunchedEffect
         burst.snapTo(1f)
         burst.animateTo(0f, tween(2000, easing = FastOutSlowInEasing))
@@ -323,8 +320,21 @@ internal fun DesktopFluidBackdrop(
         val reach = max(w, h)
         val t = time
         val swell = burst.value
+        val p = progress.value
+        val toPalette = to
+        // Skipped once the dissolve is done.
+        val fromPalette = if (p < 1f) from else null
+        val dissolving = p < 1f
 
-        drawRect(base.copy(alpha = if (translucent) 0.46f else 1f))
+        // Base: old out, new in. Over a translucent material both layers share the one base alpha
+        // (old fades as 1 - p) so the sum never stacks darker than a settled base.
+        val baseAlpha = if (translucent) 0.46f else 1f
+        if (dissolving) {
+            val oldBase = fromPalette?.base ?: FluidNeutralBase
+            drawRect(oldBase.copy(alpha = if (translucent) baseAlpha * (1f - p) else baseAlpha))
+        }
+        val newBase = toPalette?.base ?: FluidNeutralBase
+        drawRect(newBase.copy(alpha = baseAlpha * (if (dissolving) p else 1f)))
 
         val glows = if (subtle) 2 else BLOB_COUNT
         for (i in 0 until glows) {
@@ -335,22 +345,15 @@ internal fun DesktopFluidBackdrop(
             )
             val breathing = if (subtle) 1f else 1f + 0.07f * sin(t * 0.5f + glow.phase)
             val radius = reach * glow.radius * breathing * (1f + 0.18f * swell)
-            val alpha = (glow.alpha * intensity * (if (subtle) 0.75f else 1f) * (1f + 0.3f * swell))
-                .coerceAtMost(0.95f)
-            drawCircle(
-                brush = Brush.radialGradient(
-                    colorStops = arrayOf(
-                        0f to colors[i].copy(alpha = alpha),
-                        0.45f to colors[i].copy(alpha = alpha * 0.45f),
-                        1f to Color.Transparent,
-                    ),
-                    center = centre,
-                    radius = radius,
-                ),
-                radius = radius,
-                center = centre,
-                blendMode = BlendMode.Screen,
-            )
+            // Role alpha (dominant, second, third, tint) times this glow's ratio to the first glow.
+            val roleAlpha = FluidRoleAlpha[i] * (glow.alpha / FluidGlows[0].alpha)
+            val ambient = roleAlpha * strength * (if (subtle) 0.75f else 1f) * (1f + 0.3f * swell)
+            if (fromPalette != null) {
+                drawFluidGlow(fromPalette, i, centre, radius, ambient, 1f - p)
+            }
+            if (toPalette != null) {
+                drawFluidGlow(toPalette, i, centre, radius, ambient, if (dissolving) p else 1f)
+            }
         }
 
         val top = if (translucent) 0.10f else 0.16f
@@ -364,6 +367,33 @@ internal fun DesktopFluidBackdrop(
             ),
         )
     }
+}
+
+/** UPGRADE M2: one glow of one palette layer, normal blending, [layerAlpha] being its share of the dissolve. */
+private fun DrawScope.drawFluidGlow(
+    palette: FluidPalette,
+    index: Int,
+    centre: Offset,
+    radius: Float,
+    ambient: Float,
+    layerAlpha: Float,
+) {
+    val color = palette.colors[index]
+    val alpha = (ambient * palette.intensity).coerceAtMost(0.95f) * layerAlpha
+    if (alpha <= 0.002f) return
+    drawCircle(
+        brush = Brush.radialGradient(
+            colorStops = arrayOf(
+                0f to color.copy(alpha = alpha),
+                0.45f to color.copy(alpha = alpha * 0.45f),
+                1f to Color.Transparent,
+            ),
+            center = centre,
+            radius = radius,
+        ),
+        radius = radius,
+        center = centre,
+    )
 }
 
 /** What the shared full-screen player is handed in Fluidity mode; see LocalPlayerBackdropOverride. */
@@ -494,9 +524,11 @@ internal fun Modifier.fluidClickable(onClick: () -> Unit): Modifier = composed {
 
 // ── Colour helpers ───────────────────────────────────────────────────────────────────────────────
 
-private class Hsl(val h: Float, val s: Float, val l: Float)
+// UPGRADE M1: visibility only (was private)
+internal class Hsl(val h: Float, val s: Float, val l: Float)
 
-private fun Color.toHsl(): Hsl {
+// UPGRADE M1: visibility only (was private)
+internal fun Color.toHsl(): Hsl {
     val maxC = max(red, max(green, blue))
     val minC = min(red, min(green, blue))
     val l = (maxC + minC) / 2f
@@ -511,7 +543,8 @@ private fun Color.toHsl(): Hsl {
     return Hsl(if (h < 0f) h + 360f else h, s.coerceIn(0f, 1f), l)
 }
 
-private fun hslColor(h: Float, s: Float, l: Float): Color {
+// UPGRADE M1: visibility only (was private)
+internal fun hslColor(h: Float, s: Float, l: Float): Color {
     val c = (1f - abs(2f * l - 1f)) * s
     val x = c * (1f - abs((h / 60f) % 2f - 1f))
     val m = l - c / 2f
@@ -526,7 +559,8 @@ private fun hslColor(h: Float, s: Float, l: Float): Color {
     return Color((r + m).coerceIn(0f, 1f), (g + m).coerceIn(0f, 1f), (b + m).coerceIn(0f, 1f))
 }
 
-private fun Color.hueShifted(degrees: Float): Color {
+// UPGRADE M1: visibility only (was private)
+internal fun Color.hueShifted(degrees: Float): Color {
     val hsl = toHsl()
     return hslColor(((hsl.h + degrees) % 360f + 360f) % 360f, hsl.s, hsl.l)
 }

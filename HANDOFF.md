@@ -227,3 +227,94 @@ The latest Windows Actions log identified `HomeScreen.kt` importing `composed` f
 - The run shown by the user reported composable callback type mismatches where `forEach` expected ordinary `(String) -> Unit` callbacks, plus two unresolved `overlays` references inside `DesktopSettingsScreen`.
 - Replaced the three composable `forEach` calls in both the running dock and Studio preview with direct `for` loops, and passed `onOpenCustomiseHub` / `onOpenPillStudio` callbacks into `DesktopSettingsScreen` from its owning scope.
 - Checked the sole `DesktopSettingsScreen` call and both new callback signatures. The local Gradle compile was retried but again emitted no output for 40 seconds and was interrupted; the CI errors shown in that screenshot are addressed in source, but a successful Windows workflow run is not yet confirmed.
+
+## Upgrade cycle 3 setup (album colours + memory report)
+- Added `MUSES_UPGRADE_PLAN.md` (the plan and the three parts M1, M2, M3) at the repo root.
+- Added `desktopApp/src/main/kotlin/com/music/bitchord/desktop/DesktopProcessMemory.kt`: a small psapi probe (working set and commit charge), adapted from a reader that already compiled and ran in an earlier build. Used only by part M3. NOT compiled in this setup step.
+- Next: run M1, then M2, then M3 as described in the plan.
+
+## Upgrade cycle 3, part M1: album palette engine
+### Did
+- Moved the cover-pixel work out of `extractFluidPalette(bitmap)` into a pure `internal fun extractAlbumPalette(pixels: IntArray, width: Int, height: Int): FluidPalette?` (new `DesktopAlbumPalette.kt`). `extractFluidPalette(bitmap)` now only reads pixels and calls it.
+- Selection is now three colours: hues ranked by weight, up to 3 with hue gap >= 34 degrees, a second/third under 8 percent of the chromatic weight is skipped. `colors` is still 4 long: [0] dominant, [1] second, [2] third, [3] lighter (+0.10 lightness), less saturated (x0.88) tint of the dominant.
+- Missing second/third are tonal variants of the dominant (hue +8 / -8 degrees, lightness +-0.06 clamped to 0.46..0.60, saturation x0.92 / x0.84). `hueShifted` by 26/52 degrees is gone from the palette path.
+- Grey / black-and-white covers get neutral greys (lightness 0.46..0.60 from average luminance, saturation <= 0.08, average hue only faintly, base lightness 0.06, intensity 0.45). No silver-blue.
+- `FluidPalette` has `val shares: List<Float> = listOf(1f, 0f, 0f)` (weights of colors[0..2] as fractions of the chromatic total; missing colour = 0). The renderer does not use it yet.
+- Unchanged: 24 hue bins, saturation weighting, near-black/white/grey skip, smoothing, glow lightness clamp 0.46..0.60, `base` formula, `intensity` formula (chromatic case).
+
+### Files
+- NEW `desktopApp/src/main/kotlin/com/music/bitchord/desktop/DesktopAlbumPalette.kt`
+- NEW `desktopApp/src/test/kotlin/com/music/bitchord/desktop/DesktopAlbumPaletteTest.kt` (10 tests: solid red, red+blue 70/30, three colours, 3 percent accent, one colour, lightness clamp, grey, black-and-white, tiny image, determinism)
+- EDIT `DesktopFluidity.kt` (`// UPGRADE M1`): `FluidPalette` now `internal` + `shares`; `hueGap`, `Hsl`, `toHsl`, `hslColor`, `hueShifted` now `internal` (visibility only); `extractFluidPalette` reduced to a wrapper; `HUE_BINS` moved to the new file (it was only used by the extraction). `rememberFluidPalette`, the renderer and `DesktopPlayerBackground.kt` are untouched (that is M2).
+
+### Decisions (owner could not be asked)
+- The dominant hue is always taken when any chromatic hue exists; the 8 percent rule applies to second and third only (a flat spread of many hues would otherwise yield no colour).
+- A share is the weight of the chosen bin plus its two neighbours over the chromatic total. Chosen hues are >= 45 degrees apart (bin centres), so these groups never overlap.
+- A cover with under 1.5 percent chromatic pixels counts as grey (noise / compression tint), so a near-B&W cover does not get a coloured glow from a few stray pixels.
+- Grey shares are `[1, 0, 0]`; the dominant hue is still the bin centre, as before.
+
+### Verified
+- NOT compiled and NOT run. No Gradle build or tests were executed here. Review was by reading: imports, nullability, no duplicate top-level names (grepped), visibility of `internal` types in signatures, test assertions traced by hand against the formulas.
+- Linux desktop compilation is unverified.
+
+### Deferred
+- M2 (renderer, two-layer cross-dissolve, no Screen blend, role alphas), M3 (memory report).
+
+### Exact next step
+- Run the Actions build (it also runs `DesktopAlbumPaletteTest`). If it compiles, start M2 in `DesktopFluidity.kt` only: `rememberFluidPalette` returning a nullable "not ready" state, `fluidHasPlayed`, the `Animatable` progress dissolve, and removing `BlendMode.Screen`.
+
+## Upgrade cycle 3, part M2: backdrop renderer
+### Did
+- `rememberFluidPalette(url)` now returns `FluidPalette?` (null = not ready). Idle startup (no song ever selected) gets the default palette. A selected song with an uncached cover keeps the previous album palette on screen; the first song has none, so only the dark neutral base (`0xFF0B0D12`) is drawn and the glows fade in over 800 ms when the palette arrives. Top-level `@Volatile fluidHasPlayed` / `fluidLastAlbumPalette` mean the default never returns after a song, even if `url` later becomes null. The default also cannot show for a frame once a song is selected.
+- Per-slot `animateColorAsState` and the base/intensity tweens are gone. Two-layer dissolve: `to` (on screen) and `from` (fading out) with one `Animatable<Float>` progress over 1400 ms (`snap` when `reduceAnimation`). Base(from) then base(to), glows of `from` at alpha x (1 - p) and of `to` at alpha x p; the `from` layer is skipped at p == 1. A retarget mid-dissolve sets `from = to` and restarts (tiny jump, as planned).
+- Glows use normal blending (`BlendMode.Screen` and its import removed). Role alphas dominant 0.85, second 0.70, third 0.60, tint 0.45, capped at 0.95. Kept: `FluidGlows` motion constants, `swell` burst, 30 fps clock, pause when hidden / `reduceAnimation`, `subtle` (2 glows: dominant and second), scrims, translucent base for Acrylic/Mica, `paletteStrength`.
+- Comments updated in `DesktopFluidity.kt` and `DesktopPlayerBackground.kt` (comment only). `DesktopFluidBackdrop` signature unchanged.
+
+### Files
+- EDIT `DesktopFluidity.kt` (`// UPGRADE M2`): palette state, backdrop body, new private `drawFluidGlow`, constants `DISSOLVE_MS`, `FIRST_GLOW_FADE_MS`, `FluidNeutralBase`, `FluidRoleAlpha`; imports: removed `animateColorAsState`, `BlendMode`, added `drawscope.DrawScope` (same import already used in sharedUi).
+- EDIT `DesktopPlayerBackground.kt`: one comment. `DesktopApp.kt` not touched.
+
+### Decisions (owner could not be asked)
+- Role alpha = role value x (this glow's `alpha` / first glow's `alpha`), so the existing ratios between glow slots survive; then x `intensity` x `paletteStrength` x swell, capped at 0.95 before the layer alpha.
+- `paletteStrength` is now a short 400 ms tween (snap with `reduceAnimation`); each layer uses its own palette `intensity`, because the dissolve replaces the old intensity tween.
+- Over a translucent material the outgoing base fades as (1 - p) instead of staying at full base alpha, so the settled and mid-dissolve base never stack darker than 0.46. With an opaque base it stays full under the incoming one.
+- If the target becomes null (cover loading with no earlier palette) the view snaps to the neutral base at once instead of dissolving the old palette out.
+- Tracks whose cover fails to decode keep the previous palette (or the base only on the first song).
+
+### Verified
+- NOT compiled and NOT run (no Gradle here). Reviewed by reading: braces balanced, imports, nullability of `to`/`from`/`target`, `DrawScope` extension called only inside `Canvas`, `@Volatile` top-level vars (JVM). No tests added (none required).
+
+### Deferred
+- M3 (memory report). A visual check of a real track change is for the owner after the Actions build.
+
+### Exact next step
+- Run the Actions build and look at a song: expect one colour family, a smooth dissolve, no purple flash, first song fading up from dark. Then start M3.
+
+## Upgrade cycle 3, part M3: memory report (diagnostic)
+### Did
+- New `DesktopMemoryReport.snapshot(label): String` and `write(label): String?` (writes on `Dispatchers.IO`, returns the path). The report holds: label, time, uptime, window-visible flag, JVM args, process working set and commit charge via `ProcessMemoryProbes.forSystem()` (non-Windows: says "not supported, reported as 0"), heap and non-heap used/committed/max, every memory pool, buffer pools (direct, mapped), thread count and thread-name groups (digits folded to `#`; does NOT touch `DesktopPoTokenWebView`), loaded classes, GC counts/time, the artwork cache budget, and the `vmNativeMemory summary` output (or the reason it failed). Every section is wrapped, so nothing can throw to the UI.
+- Reports go to `$XDG_DATA_HOME` (default `~/.local/share`) + `bitchord/memory-reports/memory-<yyyyMMdd-HHmmss>-<label>.txt`, the same data-dir rule `DesktopAnalysisRuntime` uses.
+- Settings: switch "Collect memory reports (diagnostic)" (persisted, default off, key `memory_report_collect`) and button "Write memory report now" (label `manual`) with the saved path shown under it. With the switch on: `startup-90s` once 90 s after start, and `tray-60s` once per hide, 60 s after the window is hidden (showing the window again cancels it).
+- `build.gradle.kts`: `-XX:NativeMemoryTracking=summary` in `jvmArgs` and `"jdk.management"` in `modules(...)`, both marked diagnostic.
+
+### Files
+- NEW `DesktopMemoryReport.kt` (report, `MemoryReportFormat` helpers, `DesktopMemoryReportSettings`, `DesktopMemoryReportSettingsRows` composable)
+- NEW `desktopApp/src/test/kotlin/com/music/bitchord/desktop/DesktopMemoryReportTest.kt` (`ProbeMemoryMath.bytesToMb`, MB formatting, thread grouping, label/file name, snapshot never throws)
+- EDIT `DesktopApp.kt` (`// UPGRADE M3`, 3 lines before the Player background row in Settings; the rest of the file was not opened); `Main.kt` (one `LaunchedEffect` starting the schedule); `desktopApp/build.gradle.kts`.
+- `DesktopProcessMemory.kt` NOT rewritten.
+
+### Decisions (owner could not be asked)
+- The settings composable lives in the new file and receives the existing private `SettingsToggle` as a lambda, so the existing row is reused without widening its visibility. The button row is not hidden by the settings search filter.
+- `DesktopArtworkCache` keeps its size private and the fluid palette cache is private to `DesktopFluidity.kt`, so the report shows only the artwork cache budget (plan: "if exposed, else skip"). No visibility changes were made for this.
+- The schedule runs from `Main.kt` (application scope) so it works while the window is hidden; the switch is checked when the timer fires, so turning it on later still catches `tray-60s`.
+- Thread groups fold every digit run to `#` and the report lists the 80 biggest groups.
+
+### Verified
+- NOT compiled and NOT run. Read-reviewed: imports (coroutine/compose ones already used in the repo; `java.lang.management` and `javax.management.ObjectName` are JDK, `java.management` is in the modules list), nullability, `private` `SettingsToggle` only called inside `DesktopApp.kt`, no unnamed catch parameter, no new top-level names clashing (grepped for the helpers).
+- NMT needs the JVM flag at launch, so `vmNativeMemory` only has content in a build that carries the new `jvmArgs`; in a dev run without it the report says tracking is off.
+
+### Deferred
+- Cycle M4: memory fixes, after the `memory-reports` files come back.
+
+### Exact next step
+- Run the Actions build, install, switch the diagnostic on, play music, leave the window open about 2 minutes, close it to the tray for about 2 minutes, reopen, press "Write memory report now", and send back the files in `memory-reports`.

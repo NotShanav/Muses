@@ -490,6 +490,8 @@ compose.desktop {
         mainClass = composeMainClass
         jvmArgs("-Xmx512m")
         jvmArgs("-XX:+UseG1GC", "-XX:G1PeriodicGCInterval=20000", "-XX:G1PeriodicGCSystemLoadThreshold=0")
+        // UPGRADE M3, diagnostic: native memory tracking for the memory report. Remove later.
+        jvmArgs("-XX:NativeMemoryTracking=summary")
         jvmArgs("-Dbitchord.version=$appVersion")
         if (desktopModuleIndexUrl.isNotBlank()) {
             jvmArgs("-Dbitchord.module.index=$desktopModuleIndexUrl")
@@ -535,6 +537,8 @@ compose.desktop {
                 "java.xml",
                 "jdk.crypto.ec",
                 "jdk.dynalink",
+                // UPGRADE M3, diagnostic: lets the memory report run the vmNativeMemory command in-process.
+                "jdk.management",
                 // JavaFX WebEngine returns JavaScript objects through netscape.javascript.JSObject.
                 // Without this module the slim production runtime crashes in twkExecuteScript,
                 // while development runs work because the full JDK already contains it.

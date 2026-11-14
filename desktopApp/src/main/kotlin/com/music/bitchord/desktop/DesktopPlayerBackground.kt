@@ -165,8 +165,9 @@ private const val ALBUM_SCRIM_STRENGTH = 1.5f
  * Album reactive: the cover's palette glow over the window material, one glass tint, and a reading
  * scrim. No blur anywhere.
  *
- * Readability, worst case, a cover that glows near white (the glows are capped at HSL lightness 0.6
- * but Screen-blend where they overlap). Alphas multiply transmission. Lower part of the screen:
+ * Readability, worst case, a cover that glows near white (the glows are capped at HSL lightness 0.6;
+ * UPGRADE M2: they now use normal SrcOver blending, which is darker than the former Screen blend
+ * where glows overlap, so the contrast ratios below can only improve). Alphas multiply transmission. Lower part of the screen:
  * the glow's own scrim (0.38 x 1.5 = 0.57 without a material) leaves 0.43, the tint 0.68, the
  * reading scrim 0.45, so a white pixel ends at 0.43 x 0.68 x 0.45 = 0.13 (sRGB), a relative
  * luminance of about 0.015 and a contrast against white text of about 16:1. Mid screen, where the

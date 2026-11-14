@@ -63,6 +63,8 @@ private fun desktopMain() = application {
     val placement by DesktopWindowMode.placement.collectAsState()
     val state = rememberWindowState(width = 1_220.dp, height = 780.dp)
     LaunchedEffect(placement) { state.placement = placement }
+    // UPGRADE M3: the diagnostic memory report schedule (does nothing unless its switch is on).
+    LaunchedEffect(Unit) { DesktopMemoryReportSettings.runSchedule() }
     // ...and back, for the times the window is moved between placements by something that is not
     // us; see [DesktopWindowMode.adopt].
     LaunchedEffect(state) {
