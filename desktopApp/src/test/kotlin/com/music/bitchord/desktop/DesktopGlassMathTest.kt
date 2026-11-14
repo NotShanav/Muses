@@ -103,8 +103,9 @@ class DesktopGlassMathTest {
         assertEquals(20f, u[3])                       // bevel 10 dp at density 2
         near(0.5f * 20f * DesktopGlassMath.STRENGTH_OF_BEVEL, u[4])
         assertEquals(0.1f, u[5]); assertEquals(0.2f, u[6]); assertEquals(0.3f, u[7])
-        near(0.1f, u[8]); near(0.2f, u[9]); near(0.3f, u[10]); assertEquals(0.25f, u[11])
-        near(0.9f, u[12]); near(0.8f, u[13]); near(0.7f, u[14]); assertEquals(0.6f, u[15])
+        // STUDIO G5 hook: an sRGB Color keeps 8 bits per channel, so colours round-trip to about 0.004.
+        near(0.1f, u[8], 0.01f); near(0.2f, u[9], 0.01f); near(0.3f, u[10], 0.01f); assertEquals(0.25f, u[11])
+        near(0.9f, u[12], 0.01f); near(0.8f, u[13], 0.01f); near(0.7f, u[14], 0.01f); assertEquals(0.6f, u[15])
         assertEquals(0.8f, u[16]); assertEquals(0.4f, u[17])
         near(1f, u[18]); near(0f, u[19])
         assertEquals(3f, u[20])

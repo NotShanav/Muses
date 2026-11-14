@@ -46,7 +46,7 @@ class DesktopLiquidPillTest {
     @Test
     fun mixIsAPlainBlend() {
         val mid = liquidMix(Color.Black, Color.White, 0.5f)
-        assertEquals(0.5f, mid.red, 1e-6f)
+        assertEquals(0.5f, mid.red, 0.01f) // STUDIO G5 hook: 8-bit sRGB channel, so 128/255
         assertEquals(Color.Black, liquidMix(Color.Black, Color.White, -4f))
         assertEquals(Color.White, liquidMix(Color.Black, Color.White, 4f))
     }

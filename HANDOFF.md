@@ -460,3 +460,6 @@ The latest Windows Actions log identified `HomeScreen.kt` importing `composed` f
 
 ### G5 CI fix 1
 - CI error: `Unresolved reference 'drawOutline'` (DesktopLiquidPill.kt, DesktopGlassSurface.kt; the "Cannot infer type R" at DesktopGlassSurface.kt:286 followed from it). Cause: wrong import package `androidx.compose.ui.graphics.drawscope.drawOutline`; the repo's other files use `androidx.compose.ui.graphics.drawOutline`. Both imports fixed. NOT recompiled; more errors may be hidden behind this one.
+
+### G5 CI fix 2
+- After fix 1 the main code and test code compiled. Tests: 400 run, 2 failed, both mine and both test-side: `DesktopGlassMathTest.uniformsForWritesTheBlockInOrder` (colour `near` checks, eps 1e-3) and `DesktopLiquidPillTest.mixIsAPlainBlend` (eps 1e-6). Cause: a Compose sRGB `Color` stores 8 bits per channel, so 0.5 reads back as 128/255 = 0.50196. Tolerances widened to 0.01 in those assertions; no production code changed. NOT re-run.
