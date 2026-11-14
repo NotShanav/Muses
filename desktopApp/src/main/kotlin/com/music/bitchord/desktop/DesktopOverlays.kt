@@ -60,7 +60,12 @@ internal enum class DesktopSettingsPage {
     MAIN,
     HOME_SECTIONS,
     CUSTOMISE_HUB,
+    // STUDIO S2 hook: pages opened from the Studio landing page.
+    STUDIO_COLOURS,
+    STUDIO_PRESETS,
     PILL_STUDIO,
+    // STUDIO G2 hook: Settings > Advanced > Glass lab.
+    GLASS_LAB,
     EQUALIZER,
     AUDIO_OUTPUT,
     LISTEN_TOGETHER,

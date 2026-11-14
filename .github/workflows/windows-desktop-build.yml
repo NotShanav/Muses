@@ -1,19 +1,26 @@
-name: Windows Desktop - Seek Fix Build
+name: Windows Desktop Build
 
 on:
+  # Runs by itself on every push to main (code changes only), and can still be started by hand.
+  push:
+    branches: [main]
+    paths-ignore:
+      - "**.md"
+      - "design/**"
+      - "docs/**"
   workflow_dispatch:
     inputs:
       version:
-        description: "Version label for this test build"
-        required: true
-        default: "1.8.0-seek-fix"
+        description: "Version label for this build (leave empty for the default dev label)"
+        required: false
+        default: "1.8-dev"
 
 permissions:
   contents: read
 
 concurrency:
-  group: windows-seek-fix-build
-  cancel-in-progress: false
+  group: windows-desktop-build-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   windows:
@@ -66,14 +73,14 @@ jobs:
       - name: Run desktop tests
         shell: pwsh
         env:
-          BUILD_VERSION: ${{ inputs.version }}
+          BUILD_VERSION: ${{ inputs.version || '1.8-dev' }}
         run: |
           .\gradlew.bat :shared:jvmTest :desktopApp:test "-Pbitchord.version=$env:BUILD_VERSION"
 
       - name: Build Windows MSI
         shell: pwsh
         env:
-          BUILD_VERSION: ${{ inputs.version }}
+          BUILD_VERSION: ${{ inputs.version || '1.8-dev' }}
         run: |
           .\gradlew.bat :desktopApp:packageMsi :desktopApp:createDistributable "-Pbitchord.version=$env:BUILD_VERSION"
 
@@ -114,7 +121,7 @@ jobs:
       - name: Collect MSI
         shell: pwsh
         env:
-          BUILD_VERSION: ${{ inputs.version }}
+          BUILD_VERSION: ${{ inputs.version || '1.8-dev' }}
         run: |
           New-Item -ItemType Directory -Force dist | Out-Null
 
@@ -143,7 +150,7 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: Windows-Seek-Fix-Test-Reports
+          name: Windows-Test-Reports
           path: |
             desktopApp/build/reports/tests/
             shared/build/reports/tests/

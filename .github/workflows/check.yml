@@ -1,9 +1,8 @@
 name: Check
 
 on:
-  push:
-    branches: [main]
-  pull_request:
+  # Manual only. It no longer runs by itself on pushes or pull requests.
+  workflow_dispatch:
 
 concurrency:
   group: check-${{ github.workflow }}-${{ github.ref }}

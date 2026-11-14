@@ -1,8 +1,7 @@
 name: Android Release APK
 
 on:
-  push:
-    branches: [main]
+  # Manual only. It no longer runs by itself on pushes.
   workflow_dispatch:
 
 jobs:

@@ -3,7 +3,10 @@ package com.music.bitchord.desktop
 import com.music.bitchord.data.model.ROW_ART_PX
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -26,9 +29,12 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.unit.dp
+import com.music.bitchord.data.model.Song
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.decodeFromString
@@ -47,6 +53,9 @@ internal enum class DesktopPillClickAction { OPEN_PLAYER, NOTHING }
 internal enum class DesktopPillSpinPause { STOP, EASE_TO_STOP, RETURN_TO_ZERO }
 @Serializable
 internal enum class DesktopPillShape { PILL, ROUNDED_RECTANGLE, SQUIRCLE, CUSTOM_RADIUS }
+// STUDIO G3 hook: which pill is drawn. LIQUID_GLASS falls back to CLASSIC when the shader is unavailable.
+@Serializable
+internal enum class DesktopPillMaterial { LIQUID_GLASS, CLASSIC }
 
 /** Desktop-only zone layout and advanced pill styling. Defaults mirror the existing dock. */
 @Serializable
@@ -78,6 +87,14 @@ internal data class DesktopPillConfig(
     val expandOnHover: Boolean = false,
     val showTooltips: Boolean = true,
     val userPresets: Map<String, String> = emptyMap(),
+    // STUDIO G3 hook: new fields, defaults keep old saved configs loading.
+    val pillMaterial: DesktopPillMaterial = DesktopPillMaterial.LIQUID_GLASS,
+    val glass: DesktopGlassParams = DesktopGlassParams(),
+    // STUDIO G4 hook: Motion tab. Defaults equal the G3 behaviour.
+    val pressSquish: Float = 0.97f,
+    val lightSweep: Boolean = true,
+    val breathing: Boolean = true,
+    val hoverGlow: Boolean = true,
 ) {
     fun validated(): DesktopPillConfig {
         val allowed = PILL_ELEMENTS.toSet()
@@ -106,6 +123,8 @@ internal data class DesktopPillConfig(
             rim = rim.takeIf(Float::isFinite)?.coerceIn(0f, 0.7f) ?: 0.32f,
             spinRpm = spinRpm.coerceIn(5, 60),
             trackAnimationMs = trackAnimationMs.coerceIn(100, 800),
+            glass = glass.validated(), // STUDIO G3 hook
+            pressSquish = pressSquish.takeIf(Float::isFinite)?.coerceIn(0.9f, 1f) ?: 0.97f, // STUDIO G4 hook
             trackAnimation = if (trackAnimation == DesktopPillAnimation.NONE) DesktopPillAnimation.NONE else DesktopPillAnimation.CROSSFADE,
             userPresets = userPresets.entries.mapNotNull { (name, value) ->
                 val safeName = name.trim().take(32)
@@ -238,6 +257,8 @@ internal fun DesktopPillStudioPage(
     var selected by remember { mutableStateOf("artwork") }
     var presetName by remember { mutableStateOf("") }
     var selectedPreset by remember { mutableStateOf<String?>(null) }
+    var tab by remember { mutableStateOf(PillStudioTab.LAYOUT) } // STUDIO G4 hook
+    var transferStatus by remember { mutableStateOf<String?>(null) } // STUDIO G4 hook
     var changed by remember(draft, seed) { mutableStateOf(draft != seed) }
     fun edit(transform: (DesktopPillConfig) -> DesktopPillConfig) {
         undo.add(draft)
@@ -270,7 +291,7 @@ internal fun DesktopPillStudioPage(
                 IconButton(onClick = onDismiss) { Icon(Icons.Rounded.Close, "Cancel and close") }
             }
             Row(Modifier.fillMaxWidth().weight(1f), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-                Column(Modifier.weight(0.95f).fillMaxHeight().clip(RoundedCornerShape(16.dp)).background(Color.White.copy(alpha = 0.035f)).padding(14.dp)) {
+                Column(Modifier.weight(0.8f).fillMaxHeight().clip(RoundedCornerShape(16.dp)).background(Color.White.copy(alpha = 0.035f)).padding(14.dp)) {
                     Text("ELEMENTS", style = MaterialTheme.typography.labelMedium, color = DesktopSecondary)
                     Spacer(Modifier.height(8.dp))
                     LazyColumn(verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -288,105 +309,173 @@ internal fun DesktopPillStudioPage(
                     }
                     Text("Play / Pause is required. Keep art or track text visible.", color = DesktopSecondary, style = MaterialTheme.typography.bodySmall)
                 }
-                Column(Modifier.weight(1.35f).fillMaxHeight(), horizontalAlignment = Alignment.CenterHorizontally) {
+                Column(Modifier.weight(1.2f).fillMaxHeight(), horizontalAlignment = Alignment.CenterHorizontally) {
                     Text("LIVE PREVIEW", style = MaterialTheme.typography.labelMedium, color = DesktopSecondary)
                     Box(Modifier.fillMaxWidth().weight(1f).clip(RoundedCornerShape(18.dp)).background(Color(0xFF111116)), contentAlignment = Alignment.Center) {
-                        PillStudioPreview(draft, songTitle, artist, artworkUrl, isPlaying)
+                        PillStudioLivePreview(draft, songTitle, artist, artworkUrl, isPlaying) // STUDIO G4 hook: the real pill
                     }
                     Text("Preview uses the current track when available.", color = DesktopSecondary, style = MaterialTheme.typography.bodySmall)
                 }
-                Column(Modifier.weight(1.1f).fillMaxHeight().clip(RoundedCornerShape(16.dp)).background(Color.White.copy(alpha = 0.035f)).padding(14.dp)) {
-                    Text("INSPECTOR · ${selected.pillLabel()}", style = MaterialTheme.typography.labelMedium, color = DesktopSecondary)
+                Column(Modifier.weight(1.5f).fillMaxHeight().clip(RoundedCornerShape(16.dp)).background(Color.White.copy(alpha = 0.035f)).padding(14.dp)) { // STUDIO G4 hook: tabs
+                    Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        PillStudioTab.entries.forEach { option ->
+                            FilterChip(selected = tab == option, onClick = { tab = option }, label = { Text(option.label) })
+                        }
+                    }
+                    Spacer(Modifier.height(8.dp))
                     LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp), contentPadding = PaddingValues(bottom = 12.dp)) {
-                        item { Text("Dock", style = MaterialTheme.typography.titleSmall) }
-                        item { Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) { DesktopMiniPlayerHeight.entries.forEach { option -> FilterChip(selected = draft.height == option, onClick = { edit { it.copy(height = option) } }, label = { Text(option.name.lowercase().replaceFirstChar(Char::uppercase)) }) } } }
-                        item { Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) { DesktopMiniPlayerPosition.entries.forEach { option -> FilterChip(selected = draft.dockPosition == option.name, onClick = { edit { it.copy(dockPosition = option.name) } }, label = { Text(option.name.lowercase().replaceFirstChar(Char::uppercase)) }) } } }
-                        item { PillStudioSlider("Maximum width", draft.maxWidth.toFloat(), 560f..920f, "${draft.maxWidth} dp") { value -> edit { it.copy(maxWidth = value.roundToInt()) } } }
-                        item { PillStudioSlider("Bottom spacing", draft.bottomInset.toFloat(), 0f..120f, "${draft.bottomInset} dp") { value -> edit { it.copy(bottomInset = value.roundToInt()) } } }
-                        item { PillStudioSlider("Corner radius", draft.cornerRadius.toFloat(), 0f..48f, "${draft.cornerRadius} dp") { value -> edit { it.copy(cornerRadius = value.roundToInt()) } } }
-                        item { Text("Pill shape", style = MaterialTheme.typography.titleSmall) }
-                        item { Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) { DesktopPillShape.entries.forEach { option -> FilterChip(selected = draft.shape == option, onClick = { edit { it.copy(shape = option) } }, label = { Text(option.name.lowercase().replace('_', ' ').replaceFirstChar(Char::uppercase)) }) } } }
-                        item { PillStudioSlider("Glass contrast", draft.contrast, 0.48f..0.9f, "${(draft.contrast * 100).toInt()}%") { value -> edit { it.copy(contrast = value) } } }
-                        item { PillStudioSlider("Rim highlight", draft.rim, 0f..0.7f, "${(draft.rim * 100).toInt()}%") { value -> edit { it.copy(rim = value) } } }
-                        item { Text("Artwork", style = MaterialTheme.typography.titleSmall) }
-                        item { Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) { DesktopPillArtPlacement.entries.forEach { option -> FilterChip(selected = draft.artPlacement == option, onClick = { edit { config ->
-                            when (option) {
-                                DesktopPillArtPlacement.LEFT -> config.moveElement("artwork", "left").copy(artPlacement = option, hiddenElements = config.hiddenElements - "artwork")
-                                DesktopPillArtPlacement.RIGHT -> config.moveElement("artwork", "right").copy(artPlacement = option, hiddenElements = config.hiddenElements - "artwork")
-                                DesktopPillArtPlacement.HIDDEN -> config.copy(artPlacement = option, hiddenElements = config.hiddenElements + "artwork")
+                        when (tab) {
+                            PillStudioTab.LAYOUT -> {
+                                item { Text("Selected element: ${selected.pillLabel()}", style = MaterialTheme.typography.titleSmall) }
+                                item { Text("Element zone", style = MaterialTheme.typography.labelMedium, color = DesktopSecondary) }
+                                item { Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) { PILL_ZONES.forEach { zone -> FilterChip(selected = draft.zones.entries.firstOrNull { selected in it.value }?.key == zone, onClick = { edit { config ->
+                                    when {
+                                        selected != "artwork" -> config.moveElement(selected, zone)
+                                        zone == "left" -> config.moveElement(selected, zone).copy(artPlacement = DesktopPillArtPlacement.LEFT, hiddenElements = config.hiddenElements - "artwork")
+                                        zone == "right" -> config.moveElement(selected, zone).copy(artPlacement = DesktopPillArtPlacement.RIGHT, hiddenElements = config.hiddenElements - "artwork")
+                                        else -> config.moveElement(selected, zone)
+                                    }
+                                } }, label = { Text(zone.replaceFirstChar(Char::uppercase)) }) } } }
+                                item { Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    TextButton(onClick = { edit { it.moveElement(selected, draft.zones.entries.firstOrNull { z -> selected in z.value }?.key ?: "right", -1) } }) { Text("Move left") }
+                                    TextButton(onClick = { edit { it.moveElement(selected, draft.zones.entries.firstOrNull { z -> selected in z.value }?.key ?: "right", 1) } }) { Text("Move right") }
+                                } }
+                                item { Text("Dock", style = MaterialTheme.typography.titleSmall) }
+                                item { Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) { DesktopMiniPlayerPosition.entries.forEach { option -> FilterChip(selected = draft.dockPosition == option.name, onClick = { edit { it.copy(dockPosition = option.name) } }, label = { Text(option.name.lowercase().replaceFirstChar(Char::uppercase)) }) } } }
+                                item { PillStudioSlider("Maximum width", draft.maxWidth.toFloat(), 560f..920f, "${draft.maxWidth} dp") { value -> edit { it.copy(maxWidth = value.roundToInt()) } } }
+                                item { PillStudioSlider("Bottom spacing", draft.bottomInset.toFloat(), 0f..120f, "${draft.bottomInset} dp") { value -> edit { it.copy(bottomInset = value.roundToInt()) } } }
+                                item { Text("Body action", style = MaterialTheme.typography.titleSmall) }
+                                item { Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) { DesktopPillClickAction.entries.forEach { option -> FilterChip(selected = draft.clickAction == option, onClick = { edit { it.copy(clickAction = option) } }, label = { Text(if (option == DesktopPillClickAction.OPEN_PLAYER) "Open player" else "Do nothing") }) } } }
                             }
-                        } }, label = { Text(option.name.lowercase().replaceFirstChar(Char::uppercase)) }) } } }
-                        item { Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) { DesktopPillArtSize.entries.forEach { option -> FilterChip(selected = draft.artSize == option, onClick = { edit { it.copy(artSize = option) } }, label = { Text(option.name.lowercase().replaceFirstChar(Char::uppercase)) }) } } }
-                        item { Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) { DesktopArtworkShape.entries.forEach { option -> FilterChip(selected = draft.artShape == option, onClick = { edit { it.copy(artShape = option) } }, label = { Text(option.name.lowercase().replaceFirstChar(Char::uppercase)) }) } } }
-                        item {
-                            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                                Column(Modifier.weight(1f)) {
-                                    Text("Spin art while playing")
-                                    Text("Vinyl-style rotation; disabled when Reduce animations is on", color = DesktopSecondary, style = MaterialTheme.typography.labelSmall)
+                            PillStudioTab.MATERIAL -> {
+                                item { Text("Pill material", style = MaterialTheme.typography.titleSmall) }
+                                item { Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                    FilterChip(selected = draft.pillMaterial == DesktopPillMaterial.LIQUID_GLASS, onClick = { edit { it.copy(pillMaterial = DesktopPillMaterial.LIQUID_GLASS, material = DesktopMiniPlayerMaterial.GLASS) } }, label = { Text("Liquid glass") })
+                                    FilterChip(selected = draft.pillMaterial == DesktopPillMaterial.CLASSIC, onClick = { edit { it.copy(pillMaterial = DesktopPillMaterial.CLASSIC) } }, label = { Text("Classic") })
+                                } }
+                                item {
+                                    Text(
+                                        if (DesktopGlassShader.available) "The glass refracts what is inside the Muses window, not the desktop behind it. It needs the shader; if the shader fails, the Classic pill is used automatically."
+                                        else "The glass shader is not available here, so the Classic pill is used. Settings below still save.",
+                                        color = DesktopSecondary, style = MaterialTheme.typography.bodySmall,
+                                    )
                                 }
-                                Switch(draft.spinWhilePlaying, { value -> edit { it.copy(spinWhilePlaying = value) } }, enabled = !reduceMotion)
+                                if (draft.pillMaterial == DesktopPillMaterial.CLASSIC) {
+                                    item { Text("Classic background", style = MaterialTheme.typography.titleSmall) }
+                                    item { Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) { DesktopMiniPlayerMaterial.entries.forEach { option -> FilterChip(selected = draft.material == option, onClick = { edit { it.copy(material = option) } }, label = { Text(option.name.lowercase().replaceFirstChar(Char::uppercase)) }) } } }
+                                } else {
+                                    item { Text("Liquid glass", style = MaterialTheme.typography.titleSmall) }
+                                    items(PillGlassFields, key = { it.label }) { field ->
+                                        val current = field.get(draft.glass)
+                                        PillStudioSlider(field.label, current, field.range, field.unit.let { unit -> "${(current * 100f).roundToInt() / 100f}$unit" }) { value ->
+                                            edit { it.copy(glass = field.set(it.glass, value)) }
+                                        }
+                                    }
+                                    item { TextButton(onClick = { edit { it.copy(glass = DesktopGlassParams.Default) } }) { Text("Reset glass") } }
+                                }
+                                item { Text("Shape and size", style = MaterialTheme.typography.titleSmall) }
+                                item { Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) { DesktopPillShape.entries.forEach { option -> FilterChip(selected = draft.shape == option, onClick = { edit { it.copy(shape = option) } }, label = { Text(option.name.lowercase().replace('_', ' ').replaceFirstChar(Char::uppercase)) }) } } }
+                                item { PillStudioSlider("Corner radius", draft.cornerRadius.toFloat(), 0f..48f, "${draft.cornerRadius} dp") { value -> edit { it.copy(cornerRadius = value.roundToInt()) } } }
+                                item { Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) { DesktopMiniPlayerHeight.entries.forEach { option -> FilterChip(selected = draft.height == option, onClick = { edit { it.copy(height = option) } }, label = { Text(option.name.lowercase().replaceFirstChar(Char::uppercase)) }) } } }
+                                item { PillStudioSlider("Contrast (lowest tint)", draft.contrast, 0.48f..0.9f, "${(draft.contrast * 100).toInt()}%") { value -> edit { it.copy(contrast = value) } } }
+                                item { PillStudioSlider("Rim highlight", draft.rim, 0f..0.7f, "${(draft.rim * 100).toInt()}%") { value -> edit { it.copy(rim = value) } } }
+                            }
+                            PillStudioTab.MOTION -> {
+                                item { Text("Track change", style = MaterialTheme.typography.titleSmall) }
+                                item { Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) { listOf(DesktopPillAnimation.CROSSFADE, DesktopPillAnimation.NONE).forEach { option -> FilterChip(selected = draft.trackAnimation == option, onClick = { edit { it.copy(trackAnimation = option) } }, label = { Text(option.name.lowercase().replaceFirstChar(Char::uppercase)) }) } } }
+                                item { PillStudioSlider("Transition", draft.trackAnimationMs.toFloat(), 100f..800f, "${draft.trackAnimationMs} ms") { value -> edit { it.copy(trackAnimationMs = value.roundToInt()) } } }
+                                item { Text("Feel", style = MaterialTheme.typography.titleSmall) }
+                                item { PillStudioSlider("Press squish (1 = none)", draft.pressSquish, 0.9f..1f, "${(draft.pressSquish * 100).roundToInt()}%") { value -> edit { it.copy(pressSquish = value) } } }
+                                item { PillStudioSwitchRow("Hover expand", "The pill grows slightly under the pointer", draft.expandOnHover, !reduceMotion) { value -> edit { it.copy(expandOnHover = value) } } }
+                                item { PillStudioSwitchRow("Hover glow", "Rim and top light brighten under the pointer", draft.hoverGlow, !reduceMotion) { value -> edit { it.copy(hoverGlow = value) } } }
+                                item { PillStudioSwitchRow("Light sweep", "A highlight crosses the rim when the track changes", draft.lightSweep, !reduceMotion) { value -> edit { it.copy(lightSweep = value) } } }
+                                item { PillStudioSwitchRow("Breathing rim", "A slow pulse of the rim while playing", draft.breathing, !reduceMotion) { value -> edit { it.copy(breathing = value) } } }
+                                item { Text("Spin", style = MaterialTheme.typography.titleSmall) }
+                                item { PillStudioSwitchRow("Spin art while playing", "Vinyl-style rotation", draft.spinWhilePlaying, !reduceMotion) { value -> edit { it.copy(spinWhilePlaying = value) } } }
+                                if (reduceMotion) item { Text("Reduce animations is on, so motion settings are disabled and the pill snaps instead.", color = DesktopSecondary, style = MaterialTheme.typography.labelSmall) }
+                                if (draft.spinWhilePlaying) item { PillStudioSlider("Spin speed", draft.spinRpm.toFloat(), 5f..60f, "${draft.spinRpm} RPM") { value -> edit { it.copy(spinRpm = value.roundToInt()) } } }
+                                if (draft.spinWhilePlaying) item { Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) { DesktopPillSpinPause.entries.forEach { option -> FilterChip(selected = draft.spinPause == option, onClick = { edit { it.copy(spinPause = option) } }, label = { Text(option.name.lowercase().replace('_', ' ').replaceFirstChar(Char::uppercase)) }) } } }
+                                if (draft.spinWhilePlaying) item { Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) { Text("Clockwise", Modifier.weight(1f)); Switch(draft.spinClockwise, { value -> edit { it.copy(spinClockwise = value) } }) } }
+                            }
+                            PillStudioTab.ARTWORK -> {
+                                item { Text("Placement", style = MaterialTheme.typography.titleSmall) }
+                                item { Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) { DesktopPillArtPlacement.entries.forEach { option -> FilterChip(selected = draft.artPlacement == option, onClick = { edit { config ->
+                                    when (option) {
+                                        DesktopPillArtPlacement.LEFT -> config.moveElement("artwork", "left").copy(artPlacement = option, hiddenElements = config.hiddenElements - "artwork")
+                                        DesktopPillArtPlacement.RIGHT -> config.moveElement("artwork", "right").copy(artPlacement = option, hiddenElements = config.hiddenElements - "artwork")
+                                        DesktopPillArtPlacement.HIDDEN -> config.copy(artPlacement = option, hiddenElements = config.hiddenElements + "artwork")
+                                    }
+                                } }, label = { Text(option.name.lowercase().replaceFirstChar(Char::uppercase)) }) } } }
+                                item { Text("Size", style = MaterialTheme.typography.titleSmall) }
+                                item { Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) { DesktopPillArtSize.entries.forEach { option -> FilterChip(selected = draft.artSize == option, onClick = { edit { it.copy(artSize = option) } }, label = { Text(option.name.lowercase().replaceFirstChar(Char::uppercase)) }) } } }
+                                item { Text("Shape", style = MaterialTheme.typography.titleSmall) }
+                                item { Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) { DesktopArtworkShape.entries.forEach { option -> FilterChip(selected = draft.artShape == option, onClick = { edit { it.copy(artShape = option) } }, label = { Text(option.name.lowercase().replaceFirstChar(Char::uppercase)) }) } } }
+                                item { PillStudioSwitchRow("Spin art while playing", "Speed and direction are on the Motion tab", draft.spinWhilePlaying, !reduceMotion) { value -> edit { it.copy(spinWhilePlaying = value) } } }
+                            }
+                            PillStudioTab.PRESETS -> {
+                                item { Text("Looks", style = MaterialTheme.typography.titleSmall) }
+                                item { Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                                    DesktopPillPresets.BuiltIn.forEach { name -> TextButton(onClick = { DesktopPillPresets.apply(name, draft)?.let { applied -> edit { applied } } }) { Text(name, maxLines = 1) } }
+                                } }
+                                item { Text("Looks change the material, glass, contrast and motion. Your layout, position and artwork stay.", color = DesktopSecondary, style = MaterialTheme.typography.bodySmall) }
+                                item { Text("Layouts", style = MaterialTheme.typography.titleSmall) }
+                                item { Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                                    listOf("Classic", "Compact", "Vinyl", "Big Art", "Controls Only").forEach { name -> TextButton(onClick = { applyPreset(name) }) { Text(name, maxLines = 1) } }
+                                } }
+                                item { Text("Your presets", style = MaterialTheme.typography.titleSmall) }
+                                item {
+                                    OutlinedTextField(presetName, { presetName = it.take(32) }, modifier = Modifier.fillMaxWidth(), singleLine = true, label = { Text("Preset name") })
+                                }
+                                item { Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                    TextButton(enabled = presetName.isNotBlank() && (presetName in draft.userPresets || draft.userPresets.size < 8), onClick = {
+                                        val safeName = presetName.trim().take(32)
+                                        val encoded = PillPresetJson.encodeToString(draft.copy(userPresets = emptyMap()))
+                                        edit { it.copy(userPresets = it.userPresets + (safeName to encoded)) }
+                                        selectedPreset = safeName
+                                    }) { Text("Save / duplicate") }
+                                    TextButton(enabled = selectedPreset != null && presetName.isNotBlank(), onClick = {
+                                        val old = selectedPreset ?: return@TextButton
+                                        val encoded = draft.userPresets[old] ?: return@TextButton
+                                        edit { it.copy(userPresets = it.userPresets - old + (presetName.trim().take(32) to encoded)) }
+                                        selectedPreset = presetName.trim().take(32)
+                                    }) { Text("Rename") }
+                                    TextButton(enabled = selectedPreset != null, onClick = {
+                                        val old = selectedPreset ?: return@TextButton
+                                        edit { it.copy(userPresets = it.userPresets - old) }
+                                        selectedPreset = null
+                                    }) { Text("Delete") }
+                                } }
+                                item { Column { draft.userPresets.forEach { (name, encoded) ->
+                                    TextButton(onClick = {
+                                        selectedPreset = name
+                                        presetName = name
+                                        val restored = runCatching { PillPresetJson.decodeFromString<DesktopPillConfig>(encoded) }.getOrNull()
+                                        if (restored != null) edit { restored.copy(userPresets = draft.userPresets) }
+                                    }) { Text("Apply · $name") }
+                                } } }
+                                item { Text("Import and export", style = MaterialTheme.typography.titleSmall) }
+                                item { Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    OutlinedButton(onClick = {
+                                        val chooser = javax.swing.JFileChooser().apply { dialogTitle = "Export Muses pill"; selectedFile = java.io.File("muses-pill.json") }
+                                        if (chooser.showSaveDialog(null) == javax.swing.JFileChooser.APPROVE_OPTION) {
+                                            runCatching { chooser.selectedFile.writeText(DesktopPillPresets.export(draft)) }
+                                                .onSuccess { transferStatus = "Pill exported." }.onFailure { transferStatus = "Export failed: ${it.message}" }
+                                        }
+                                    }) { Text("Export JSON") }
+                                    OutlinedButton(onClick = {
+                                        val chooser = javax.swing.JFileChooser().apply { dialogTitle = "Import Muses pill" }
+                                        if (chooser.showOpenDialog(null) == javax.swing.JFileChooser.APPROVE_OPTION) {
+                                            runCatching {
+                                                require(chooser.selectedFile.length() <= 65_536L) { "file is larger than 64 KB" }
+                                                DesktopPillPresets.import(chooser.selectedFile.readText(), draft.userPresets) ?: error("not a Muses pill file")
+                                            }.onSuccess { imported -> edit { imported }; transferStatus = "Pill imported into the draft. Press Apply to keep it." }
+                                                .onFailure { transferStatus = "Import rejected: ${it.message}" }
+                                        }
+                                    }) { Text("Import JSON") }
+                                } }
+                                transferStatus?.let { message -> item { Text(message, color = DesktopSecondary, style = MaterialTheme.typography.bodySmall) } }
                             }
                         }
-                        if (reduceMotion) item { Text("Reduce animations is on. Spin remains disabled until that accessibility setting is turned off.", color = DesktopSecondary, style = MaterialTheme.typography.labelSmall) }
-                        if (draft.spinWhilePlaying) item { PillStudioSlider("Spin speed", draft.spinRpm.toFloat(), 5f..60f, "${draft.spinRpm} RPM") { value -> edit { it.copy(spinRpm = value.roundToInt()) } } }
-                        if (draft.spinWhilePlaying) item { Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) { DesktopPillSpinPause.entries.forEach { option -> FilterChip(selected = draft.spinPause == option, onClick = { edit { it.copy(spinPause = option) } }, label = { Text(option.name.lowercase().replace('_', ' ').replaceFirstChar(Char::uppercase)) }) } } }
-                        if (draft.spinWhilePlaying) item { Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) { Text("Clockwise", Modifier.weight(1f)); Switch(draft.spinClockwise, { value -> edit { it.copy(spinClockwise = value) } }) } }
-                        item { Text("Track change", style = MaterialTheme.typography.titleSmall) }
-                        item { Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) { listOf(DesktopPillAnimation.CROSSFADE, DesktopPillAnimation.NONE).forEach { option -> FilterChip(selected = draft.trackAnimation == option, onClick = { edit { it.copy(trackAnimation = option) } }, label = { Text(option.name.lowercase().replaceFirstChar(Char::uppercase)) }) } } }
-                        item { PillStudioSlider("Transition", draft.trackAnimationMs.toFloat(), 100f..800f, "${draft.trackAnimationMs} ms") { value -> edit { it.copy(trackAnimationMs = value.roundToInt()) } } }
-                        item { Text("Background material", style = MaterialTheme.typography.titleSmall) }
-                        item { Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) { DesktopMiniPlayerMaterial.entries.forEach { option -> FilterChip(selected = draft.material == option, onClick = { edit { it.copy(material = option) } }, label = { Text(option.name.lowercase().replaceFirstChar(Char::uppercase)) }) } } }
-                        item { Text("Body action", style = MaterialTheme.typography.titleSmall) }
-                        item { Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) { DesktopPillClickAction.entries.forEach { option -> FilterChip(selected = draft.clickAction == option, onClick = { edit { it.copy(clickAction = option) } }, label = { Text(if (option == DesktopPillClickAction.OPEN_PLAYER) "Open player" else "Do nothing") }) } } }
-                        item { Text("Element zone", style = MaterialTheme.typography.titleSmall) }
-                        item { Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) { PILL_ZONES.forEach { zone -> FilterChip(selected = draft.zones.entries.firstOrNull { selected in it.value }?.key == zone, onClick = { edit { config ->
-                            when {
-                                selected != "artwork" -> config.moveElement(selected, zone)
-                                zone == "left" -> config.moveElement(selected, zone).copy(artPlacement = DesktopPillArtPlacement.LEFT, hiddenElements = config.hiddenElements - "artwork")
-                                zone == "right" -> config.moveElement(selected, zone).copy(artPlacement = DesktopPillArtPlacement.RIGHT, hiddenElements = config.hiddenElements - "artwork")
-                                else -> config.moveElement(selected, zone)
-                            }
-                        } }, label = { Text(zone.replaceFirstChar(Char::uppercase)) }) } } }
-                        item { Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            TextButton(onClick = { edit { it.moveElement(selected, draft.zones.entries.firstOrNull { z -> selected in z.value }?.key ?: "right", -1) } }) { Text("Move left") }
-                            TextButton(onClick = { edit { it.moveElement(selected, draft.zones.entries.firstOrNull { z -> selected in z.value }?.key ?: "right", 1) } }) { Text("Move right") }
-                        } }
-                        item { Text("Presets", style = MaterialTheme.typography.titleSmall) }
-                        item { Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                            listOf(listOf("Classic", "Compact", "Vinyl"), listOf("Big Art", "Minimal", "Controls Only")).forEach { row ->
-                                Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) { row.forEach { name -> TextButton(onClick = { applyPreset(name) }) { Text(name, maxLines = 1) } } }
-                            }
-                        } }
-                        item {
-                            OutlinedTextField(presetName, { presetName = it.take(32) }, modifier = Modifier.fillMaxWidth(), singleLine = true, label = { Text("Preset name") })
-                        }
-                        item { Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                            TextButton(enabled = presetName.isNotBlank() && (presetName in draft.userPresets || draft.userPresets.size < 8), onClick = {
-                                val safeName = presetName.trim().take(32)
-                                val encoded = PillPresetJson.encodeToString(draft.copy(userPresets = emptyMap()))
-                                edit { it.copy(userPresets = it.userPresets + (safeName to encoded)) }
-                                selectedPreset = safeName
-                            }) { Text("Save / duplicate") }
-                            TextButton(enabled = selectedPreset != null && presetName.isNotBlank(), onClick = {
-                                val old = selectedPreset ?: return@TextButton
-                                val encoded = draft.userPresets[old] ?: return@TextButton
-                                edit { it.copy(userPresets = it.userPresets - old + (presetName.trim().take(32) to encoded)) }
-                                selectedPreset = presetName.trim().take(32)
-                            }) { Text("Rename") }
-                            TextButton(enabled = selectedPreset != null, onClick = {
-                                val old = selectedPreset ?: return@TextButton
-                                edit { it.copy(userPresets = it.userPresets - old) }
-                                selectedPreset = null
-                            }) { Text("Delete") }
-                        } }
-                        item { Column { draft.userPresets.forEach { (name, encoded) ->
-                            TextButton(onClick = {
-                                selectedPreset = name
-                                presetName = name
-                                val restored = runCatching { PillPresetJson.decodeFromString<DesktopPillConfig>(encoded) }.getOrNull()
-                                if (restored != null) edit { restored.copy(userPresets = draft.userPresets) }
-                            }) { Text("Apply · $name") }
-                        } } }
                     }
                 }
             }
@@ -493,4 +582,117 @@ private fun DesktopPillConfig.moveElement(id: String, zone: String, delta: Int =
         if (to != from) items.add(to, items.removeAt(from))
     }
     return copy(zones = currentZones.mapValues { it.value.toList() })
+}
+
+// ---------------------------------------------------------------------------------------------
+// STUDIO G4: tabs, glass sliders, switch row and the live preview built on the real liquid pill.
+// ---------------------------------------------------------------------------------------------
+
+private enum class PillStudioTab(val label: String) {
+    LAYOUT("Layout"),
+    MATERIAL("Material"),
+    MOTION("Motion"),
+    ARTWORK("Artwork"),
+    PRESETS("Presets"),
+}
+
+/** One slider per [DesktopGlassParams] field; the ranges are the params' own, so the sliders cannot leave them. */
+private class PillGlassField(
+    val label: String,
+    val range: ClosedFloatingPointRange<Float>,
+    val unit: String,
+    val get: (DesktopGlassParams) -> Float,
+    val set: (DesktopGlassParams, Float) -> DesktopGlassParams,
+)
+
+private val PillGlassFields = listOf(
+    PillGlassField("Refraction", DesktopGlassParams.REFRACTION, "", { it.refraction }, { p, v -> p.copy(refraction = v) }),
+    PillGlassField("Bevel width", DesktopGlassParams.BEVEL_DP, " dp", { it.bevelDp }, { p, v -> p.copy(bevelDp = v) }),
+    PillGlassField("Magnify", DesktopGlassParams.MAGNIFY, "", { it.magnify }, { p, v -> p.copy(magnify = v) }),
+    PillGlassField("Dispersion", DesktopGlassParams.DISPERSION, "", { it.dispersion }, { p, v -> p.copy(dispersion = v) }),
+    PillGlassField("Frost", DesktopGlassParams.FROST, "", { it.frost }, { p, v -> p.copy(frost = v) }),
+    PillGlassField("Blur", DesktopGlassParams.BLUR_DP, " dp", { it.blurDp }, { p, v -> p.copy(blurDp = v) }),
+    PillGlassField("Specular", DesktopGlassParams.SPECULAR, "", { it.specular }, { p, v -> p.copy(specular = v) }),
+    PillGlassField("Glass rim", DesktopGlassParams.RIM, "", { it.rim }, { p, v -> p.copy(rim = v) }),
+    PillGlassField("Tint", DesktopGlassParams.TINT_ALPHA, "", { it.tintAlpha }, { p, v -> p.copy(tintAlpha = v) }),
+    PillGlassField("Light angle", DesktopGlassParams.LIGHT_ANGLE_DEG, "\u00B0", { it.lightAngleDeg }, { p, v -> p.copy(lightAngleDeg = v) }),
+    PillGlassField("Album colour", DesktopGlassParams.ALBUM_INFLUENCE, "", { it.albumInfluence }, { p, v -> p.copy(albumInfluence = v) }),
+)
+
+@Composable
+private fun PillStudioSwitchRow(title: String, subtitle: String, checked: Boolean, enabled: Boolean = true, onChange: (Boolean) -> Unit) {
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) {
+            Text(title)
+            Text(subtitle, color = DesktopSecondary, style = MaterialTheme.typography.labelSmall)
+        }
+        Switch(checked, onChange, enabled = enabled)
+    }
+}
+
+/** The preview: the real liquid pill over a striped test backdrop, or the old preview when Classic is chosen or the shader is out. */
+@Composable
+private fun PillStudioLivePreview(config: DesktopPillConfig, songTitle: String?, artist: String?, artworkUrl: String?, isPlaying: Boolean) {
+    if (!desktopLiquidPillActive(config.pillMaterial, config.material, DesktopGlassShader.available)) {
+        PillStudioPreview(config, songTitle, artist, artworkUrl, isPlaying)
+        return
+    }
+    val state = rememberDesktopGlassState()
+    val song = remember(songTitle, artist, artworkUrl) {
+        Song(
+            videoId = "studio-preview",
+            title = songTitle?.takeIf(String::isNotBlank) ?: "Demo track",
+            artist = artist?.takeIf(String::isNotBlank) ?: "Muses \u00B7 preview",
+            thumbnailUrl = artworkUrl,
+        )
+    }
+    CompositionLocalProvider(LocalDesktopGlass provides state) {
+        Box(Modifier.fillMaxSize()) {
+            PillStudioBackdrop(state, artworkUrl, Modifier.fillMaxSize().glassSource(state, GlassSlot.PAGE))
+            Box(Modifier.align(Alignment.Center).fillMaxWidth().padding(horizontal = 12.dp), contentAlignment = Alignment.Center) {
+                DesktopLiquidPill(
+                    song = song,
+                    isPlaying = isPlaying,
+                    previousEnabled = true,
+                    progress = 0.38f,
+                    positionMs = 84_000L,
+                    durationMs = 221_000L,
+                    shuffle = false,
+                    repeatMode = DesktopRepeatMode.OFF,
+                    onShuffleChange = {},
+                    onRepeatModeChange = {},
+                    onExpandPlayer = {},
+                    onOpenPillStudio = {},
+                    onPlayPause = {},
+                    onPrevious = {},
+                    onNext = {},
+                    onMoreLyrics = {},
+                    onMoreQueue = {},
+                    onMoreOutput = {},
+                    configOverride = config,
+                )
+            }
+        }
+    }
+}
+
+/** Gradient, drifting stripes and (when there is one) the cover: straight lines, so the bending shows. */
+@Composable
+private fun PillStudioBackdrop(state: DesktopGlassState, artworkUrl: String?, modifier: Modifier) {
+    Box(modifier) {
+        Canvas(Modifier.fillMaxSize()) {
+            val t = state.time
+            drawRect(Brush.horizontalGradient(listOf(Color(0xFF1B2A49), Color(0xFF7A2E65), Color(0xFFE0A458))))
+            val stripe = 24.dp.toPx()
+            val shift = (t * 30.dp.toPx()) % (stripe * 2f)
+            var x = -size.height - stripe * 2f + shift
+            while (x < size.width + size.height) {
+                drawLine(Color.White.copy(alpha = 0.8f), Offset(x, size.height), Offset(x + size.height, 0f), strokeWidth = stripe * 0.4f)
+                x += stripe * 2f
+            }
+        }
+        if (artworkUrl != null) {
+            DesktopArtwork(artworkUrl, Modifier.align(Alignment.CenterStart).padding(start = 24.dp).size(96.dp).clip(RoundedCornerShape(12.dp)), px = ROW_ART_PX)
+        }
+    }
 }

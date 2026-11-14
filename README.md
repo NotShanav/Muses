@@ -111,3 +111,11 @@ For a source-grounded product, architecture, feature, and build guide, see [docs
 
 Desktop users can open **Settings → Appearance → Advanced customisation** for desktop-only typography, colour, home spacing and artwork, presets, mini-player contents/material, and JSON appearance import/export. Existing desktop shell, Fluidity, player-background, motion, window, and dock settings are reused there. Android settings are unchanged.
 
+
+### Studio and liquid glass (desktop)
+Desktop **Settings** is now organised into categories (Account and sync, Playback, Sound, Library and sources, Appearance, System, Advanced and diagnostics); search still looks through all of them. Customisation lives in one **Studio**: Pill, Home layout, Colours and typography, and Presets and import/export (with a confirmed "Reset all customisation"). **Pill Studio** has Layout, Material, Motion, Artwork and Presets tabs; the floating player can be drawn as **Liquid glass** (a Skia shader with edge refraction, a specular rim, chromatic dispersion, frost and album-reactive colour) or as the **Classic** pill, which is also the automatic fallback.
+
+Honest limits:
+- The glass refracts what is inside the Muses window (the page), not the desktop behind a translucent Mica/Acrylic window; real desktop refraction is not possible with this stack.
+- It is a Skia shader: the first compile may take a moment, and very low-end GPUs may fall back to Classic. **Settings → Advanced → Glass lab (experimental)** shows whether the shader is available and why not.
+- The shader could not be run before it reached a real build, so expect one or two tuning rounds using Glass lab screenshots.

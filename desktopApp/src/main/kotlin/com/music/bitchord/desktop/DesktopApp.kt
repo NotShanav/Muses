@@ -3030,7 +3030,7 @@ fun BitChordDesktopApp() {
                 },
                 bottomBar = { compact ->
                     if (modernInterface) {
-                        if (selectedSong != null) DesktopFloatingMiniPlayer(
+                        if (selectedSong != null) DesktopPillHost( // STUDIO G3 hook: Liquid or Classic
                             song = selectedSong!!,
                             isPlaying = playback.isPlaying,
                             previousEnabled = liveQueue.hasPrevious || playback.positionMs > BACK_RESTARTS_AFTER_MS,
@@ -3656,12 +3656,28 @@ fun BitChordDesktopApp() {
                                     onOpenHomeSections = { overlays.settingsPage = DesktopSettingsPage.HOME_SECTIONS },
                                     onOpenCustomiseHub = { overlays.settingsPage = DesktopSettingsPage.CUSTOMISE_HUB },
                                     onOpenPillStudio = { overlays.settingsPage = DesktopSettingsPage.PILL_STUDIO },
+                                    onOpenGlassLab = { overlays.settingsPage = DesktopSettingsPage.GLASS_LAB }, // STUDIO G2 hook
+                                )
+                                // STUDIO G2 hook: the glass lab page.
+                                DesktopSettingsPage.GLASS_LAB -> DesktopGlassLabPage(
+                                    artworkUrl = selectedSong?.thumbnailUrl,
+                                    onDismiss = ::goBack,
                                 )
                                 DesktopSettingsPage.HOME_SECTIONS -> DesktopHomeSectionManagerPage(onDismiss = ::goBack)
-                                DesktopSettingsPage.CUSTOMISE_HUB -> DesktopCustomiseHubPage(
-                                    onHomeSections = { overlays.settingsPage = DesktopSettingsPage.HOME_SECTIONS },
+                                // STUDIO S2 hook: the Customise hub is now the Studio landing page (old DesktopCustomiseHubPage is kept, unused).
+                                DesktopSettingsPage.CUSTOMISE_HUB -> DesktopStudioHubPage(
                                     onPillStudio = { overlays.settingsPage = DesktopSettingsPage.PILL_STUDIO },
-                                    onAppearance = { overlays.settingsPage = DesktopSettingsPage.MAIN },
+                                    onHomeLayout = { overlays.settingsPage = DesktopSettingsPage.HOME_SECTIONS },
+                                    onColours = { overlays.settingsPage = DesktopSettingsPage.STUDIO_COLOURS },
+                                    onPresets = { overlays.settingsPage = DesktopSettingsPage.STUDIO_PRESETS },
+                                    onDone = ::goBack,
+                                )
+                                DesktopSettingsPage.STUDIO_COLOURS -> DesktopStudioColoursPage(
+                                    onOpenHomeSections = { overlays.settingsPage = DesktopSettingsPage.HOME_SECTIONS },
+                                    onDone = ::goBack,
+                                )
+                                DesktopSettingsPage.STUDIO_PRESETS -> DesktopStudioPresetsPage(
+                                    onPillStudio = { overlays.settingsPage = DesktopSettingsPage.PILL_STUDIO },
                                     onDone = ::goBack,
                                 )
                                 DesktopSettingsPage.PILL_STUDIO -> DesktopPillStudioPage(
@@ -4304,8 +4320,9 @@ internal fun DesktopToolbarButton(
     }
 }
 
+// STUDIO G3 hook: visibility only (was private)
 @Composable
-private fun DesktopSpringButton(
+internal fun DesktopSpringButton(
     onClick: () -> Unit,
     enabled: Boolean = true,
     size: Dp = 36.dp,
@@ -4891,6 +4908,8 @@ private fun DesktopFrame(
     }
     // Held out here rather than inside the constraints box.
     val haze = remember { HazeState() }
+    // STUDIO G2 hook: what the liquid glass refracts; records nothing until a glass surface exists.
+    val glassState = rememberDesktopGlassState()
     // With a system material active, the window stays clear under its chrome. The app-background
     // preference decides whether the page and side column also stay clear or retain their solid
     // gray ground.
@@ -4902,16 +4921,16 @@ private fun DesktopFrame(
     val glass = material != DesktopBackdrop.OFF
     // Fluidity always lets the material through the page too: the glow is the page's background.
     val materialBehindApp = glass && (appBackground || fluid)
-    CompositionLocalProvider(LocalDesktopHaze provides haze) {
+    CompositionLocalProvider(LocalDesktopHaze provides haze, LocalDesktopGlass provides glassState) { // STUDIO G2 hook
         Box(modifier.fillMaxSize().then(if (glass) Modifier else Modifier.background(containerColor))) {
             // Fluidity: one glow across the whole window, title bar and sidebar included. It is
             // deliberately not a haze source, so the panes above it never re-blur as it moves.
             if (fluid) {
-                Box(Modifier.fillMaxSize()) { backdrop(glass) }
+                Box(Modifier.fillMaxSize().glassSource(glassState, GlassSlot.BACKDROP)) { backdrop(glass) } // STUDIO G2 hook
             } else if (!glass) {
                 // Both sources of the same state: the chrome blurs the backdrop behind it, and the
                 // floating bottom bar blurs the page scrolling under it.
-                Box(Modifier.fillMaxSize().hazeSource(haze)) { backdrop(false) }
+                Box(Modifier.fillMaxSize().hazeSource(haze).glassSource(glassState, GlassSlot.BACKDROP)) { backdrop(false) } // STUDIO G2 hook
             }
             Column(Modifier.fillMaxSize()) {
                 // Above everything, and outside the box the rest of the window is drawn in, because
@@ -4939,7 +4958,7 @@ private fun DesktopFrame(
                                             },
                                         ),
                                 ) {
-                                    Box(Modifier.fillMaxSize().hazeSource(haze)) {
+                                    Box(Modifier.fillMaxSize().hazeSource(haze).glassSource(glassState, GlassSlot.PAGE)) { // STUDIO G2 hook
                                         if (glass && !fluid) backdrop(materialBehindApp)
                                         Box(
                                             Modifier.fillMaxSize().graphicsLayer {
@@ -5573,7 +5592,8 @@ private fun DesktopLibraryGroupingContent(
 }
 
 /** Mobile's section order, with desktop-only groups placed beside their closest mobile counterpart. */
-private enum class DesktopSettingsSection {
+// STUDIO S1 hook: internal (was private) so DesktopSettingsCategories.kt and its test can map it.
+internal enum class DesktopSettingsSection {
     ACCOUNT,
     LISTEN_TOGETHER,
     SOURCES,
@@ -5590,6 +5610,10 @@ private enum class DesktopSettingsSection {
     MISCELLANEOUS,
     LANGUAGE,
     ADVANCED,
+    /** STUDIO S1: the spatial-audio / Atmos / equaliser rows, moved out of PLAYBACK. */
+    SOUND_EFFECTS,
+    /** STUDIO S1: the memory-report rows, moved out of APPEARANCE. */
+    DIAGNOSTICS,
 }
 
 /**
@@ -5678,6 +5702,7 @@ private fun DesktopSettingsScreen(
     onOpenHomeSections: () -> Unit,
     onOpenCustomiseHub: () -> Unit,
     onOpenPillStudio: () -> Unit,
+    onOpenGlassLab: () -> Unit = {}, // STUDIO G2 hook
 ) {
     var editingSource by remember { mutableStateOf<DesktopSourceConfig?>(null) }
     val sourceProbeKey = sourceConfigs
@@ -5688,7 +5713,8 @@ private fun DesktopSettingsScreen(
             .filter { it.kind.needsServer && it.isComplete }
             .forEach(onTestSource)
     }
-    DesktopSettingsPageFrame {
+    // STUDIO S1 hook: the frame is 216 dp wider so the groups keep their old width beside the rail.
+    DesktopSettingsPageFrame(maxWidth = DesktopSettingsPageWidth + 216.dp) {
             Column(Modifier.fillMaxSize()) {
                 val settingsQuery = query
                 Row(
@@ -5709,14 +5735,54 @@ private fun DesktopSettingsScreen(
                         modifier = Modifier.padding(start = 24.dp).width(280.dp),
                     )
                 }
+                // STUDIO S1 hook: category rail (wide) or chips (narrow); only the chosen category's groups show
+                // unless a search is running, when every category's groups are searched.
+                val searching = settingsQuery.isNotBlank()
+                val selectedCategory = DesktopSettingsNav.selected
+                val categoryMatches = remember {
+                    DesktopSettingsCategory.entries.associateWith { androidx.compose.runtime.mutableStateListOf<String>() }
+                }
+                val settingsScope = rememberCoroutineScope()
+                val selectCategory: (DesktopSettingsCategory) -> Unit = { category ->
+                    DesktopSettingsNav.selected = category
+                    if (searching) onQueryChange("")
+                    settingsScope.launch { listState.scrollToItem(0) }
+                }
+                BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
+                val wideSettings = maxWidth >= 760.dp
+                Row(Modifier.fillMaxSize()) {
+                if (wideSettings) {
+                    DesktopSettingsCategoryRail(
+                        selected = selectedCategory,
+                        dimmed = searching,
+                        onSelect = selectCategory,
+                        modifier = Modifier.width(200.dp).fillMaxHeight(),
+                    )
+                    Spacer(Modifier.width(16.dp))
+                }
+                Column(Modifier.weight(1f).fillMaxHeight()) {
+                if (!wideSettings) {
+                    DesktopSettingsCategoryChips(
+                        selected = selectedCategory,
+                        dimmed = searching,
+                        onSelect = selectCategory,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
                 CompositionLocalProvider(LocalSettingsQuery provides settingsQuery.trim()) {
                 LazyColumn(
                     modifier = Modifier.weight(1f),
                     state = listState,
                     contentPadding = PaddingValues(top = 12.dp, bottom = 28.dp),
                 ) {
-            DesktopSettingsSection.entries.forEach { section ->
-            if (section == DesktopSettingsSection.PLAYBACK) item {
+            settingsSectionsToShow(selectedCategory, searching).forEach { section ->
+            // STUDIO S1 hook: the section's category, its match list, and the name over a run of search results.
+            val sectionCategory = categoryOf(section)
+            val sectionMatches = categoryMatches[sectionCategory]
+            if (searching && section == sectionCategory.sections.first()) {
+                settingsCategoryHeaderItem(sectionCategory, categoryMatches.getValue(sectionCategory))
+            }
+            if (section == DesktopSettingsSection.PLAYBACK) settingsSectionItem(section, sectionMatches) {
                     SettingsGroup(DesktopStrings["playback", "Playback"]) {
                     if (!automix) {
                         if (settingsRowVisible(DesktopStrings["crossfade", "Crossfade"])) {
@@ -5773,13 +5839,18 @@ private fun DesktopSettingsScreen(
                             )
                         }
                     }
-                    val eqOn by DesktopEqualizerSettings.enabled.collectAsState()
                     SettingsToggle(
                         DesktopStrings["skip_silence", "Skip silence"],
                         DesktopStrings["d_shorten_long_gaps_rather_than_playing_them_out", "Shorten long gaps rather than playing them out"],
                         skipSilence,
                         onSkipSilenceChange,
                     )
+                }
+            }
+            // STUDIO S1 hook: these rows were the end of the Playback group.
+            if (section == DesktopSettingsSection.SOUND_EFFECTS) settingsSectionItem(section, sectionMatches) {
+                SettingsGroup(DesktopStrings["settings_sound_effects", "Sound effects"]) {
+                    val eqOn by DesktopEqualizerSettings.enabled.collectAsState()
                     SettingsToggle(
                         DesktopStrings["spatial_audio", "Spatial audio"],
                         DesktopStrings["spatial_audio_subtitle", "Widens stereo tracks for a more immersive feel"],
@@ -5807,7 +5878,7 @@ private fun DesktopSettingsScreen(
                     )
                 }
             }
-            if (section == DesktopSettingsSection.DESKTOP_PLAYBACK) item {
+            if (section == DesktopSettingsSection.DESKTOP_PLAYBACK) settingsSectionItem(section, sectionMatches) {
                 SettingsGroup(DesktopStrings["d_desktop_playback", "Desktop playback"]) {
                     SettingsToggle(
                         DesktopStrings["autoplay", "Autoplay"],
@@ -5851,7 +5922,7 @@ private fun DesktopSettingsScreen(
                     ) { onSleepTimerCycle() }
                 }
             }
-            if (section == DesktopSettingsSection.LYRICS) item {
+            if (section == DesktopSettingsSection.LYRICS) settingsSectionItem(section, sectionMatches) {
                 SettingsGroup(DesktopStrings["open_lyrics", "Lyrics"]) {
                     SettingsToggle(
                         DesktopStrings["synced_lyrics", "Synced lyrics"],
@@ -5884,7 +5955,7 @@ private fun DesktopSettingsScreen(
                     }
                 }
             }
-            if (section == DesktopSettingsSection.LANGUAGE) item {
+            if (section == DesktopSettingsSection.LANGUAGE) settingsSectionItem(section, sectionMatches) {
                 SettingsGroup(DesktopStrings["language", "Language"]) {
                     var languageMenuOpen by remember { mutableStateOf(false) }
                     val chosen by DesktopStrings.language.collectAsState()
@@ -5913,7 +5984,7 @@ private fun DesktopSettingsScreen(
                     }
                 }
             }
-            if (section == DesktopSettingsSection.STORAGE) item {
+            if (section == DesktopSettingsSection.STORAGE) settingsSectionItem(section, sectionMatches) {
                 SettingsGroup(DesktopStrings["storage", "Storage"]) {
                     var limitMb by remember { mutableStateOf(DesktopMediaCache.limitMb()) }
                     var cleared by remember { mutableStateOf<String?>(null) }
@@ -5961,7 +6032,7 @@ private fun DesktopSettingsScreen(
                     }
                 }
             }
-            if (section == DesktopSettingsSection.LOCAL_MUSIC) item {
+            if (section == DesktopSettingsSection.LOCAL_MUSIC) settingsSectionItem(section, sectionMatches) {
                 SettingsGroup(DesktopStrings["local_music", "Local Music"]) {
                     var folderLabel by remember { mutableStateOf(DesktopLocalMusic.folderLabel()) }
                     SettingsRow(
@@ -5993,8 +6064,9 @@ private fun DesktopSettingsScreen(
                     )
                 }
             }
-            if (section == DesktopSettingsSection.APPEARANCE) item {
-                SettingsGroup(DesktopStrings["appearance", "Appearance"]) {
+            if (section == DesktopSettingsSection.APPEARANCE) settingsSectionItem(section, sectionMatches) {
+                // STUDIO S2 hook: the old single Appearance group, split into labelled sub-groups (rows unchanged).
+                SettingsGroup(DesktopStrings["settings_appearance_interface", "Interface"]) {
                     val interfaceMode by DesktopInterfaceSettings.mode.collectAsState()
                     val interfaceTitle = DesktopStrings["desktop_interface_mode", "Desktop interface"]
                     val interfaceSubtitle = DesktopStrings[
@@ -6010,14 +6082,31 @@ private fun DesktopSettingsScreen(
                             if (modern) DesktopInterfaceMode.MODERN else DesktopInterfaceMode.LEGACY,
                         )
                     }
-                    HorizontalDivider(color = desktopChromeDivider())
-                    val reduceDynamicBlur by DesktopAppearanceSettings.reduceDynamicBlur.collectAsState()
                     SettingsToggle(
-                        DesktopStrings["reduce_dynamic_blur", "Reduce dynamic blur"],
-                        DesktopStrings["reduce_dynamic_blur_subtitle", "Swaps frosted glass for solid fills across the app"],
-                        reduceDynamicBlur,
-                        DesktopAppearanceSettings::setReduceDynamicBlur,
+                        DesktopStrings["full_screen_cover_art", "Full-screen cover art"],
+                        DesktopStrings["full_screen_cover_art_subtitle", "Runs the cover to the edges of the player instead of a square sleeve"],
+                        fullBleedArtwork,
+                        onFullBleedArtworkChange,
                     )
+                    SettingsToggle(
+                        DesktopStrings["d_animated_canvas", "Animated canvas"],
+                        DesktopStrings["d_show_motion_artwork_when_it_is_available", "Show motion artwork when it is available"],
+                        animatedCanvas,
+                        onAnimatedCanvasChange,
+                    )
+                    if (animatedCanvas) {
+                        SettingsNavigationRow(
+                            title = DesktopStrings["spotify_canvas_setup", "Spotify Canvas setup"],
+                            subtitle = if (spotifyCanvasReady) {
+                                "Connected"
+                            } else {
+                                "To use Spotify Canvas, provide your Spotify sp_dc cookie."
+                            },
+                            onClick = onOpenSpotifyCanvasSetup,
+                        )
+                    }
+                }
+                SettingsGroup(DesktopStrings["settings_appearance_colours", "Colours and background"]) {
                     val fluidity by DesktopFluiditySettings.enabled.collectAsState()
                     SettingsToggle(
                         DesktopStrings["fluidity_mode", "Fluidity mode"],
@@ -6040,10 +6129,6 @@ private fun DesktopSettingsScreen(
                             fluiditySubtle,
                             DesktopFluiditySettings::setSubtle,
                         )
-                    }
-                    // UPGRADE M3: diagnostic memory report switch and button (DesktopMemoryReport.kt).
-                    DesktopMemoryReportSettingsRows { title, subtitle, checked, onChange ->
-                        SettingsToggle(title, subtitle, checked, onChange)
                     }
                     val playerBackgroundTitle = DesktopStrings["player_background", "Player background"]
                     val playerBackgroundSubtitle = DesktopStrings[
@@ -6094,28 +6179,45 @@ private fun DesktopSettingsScreen(
                             )
                         }
                     }
-                    SettingsGroup("Advanced customisation") {
-                        if (settingsRowVisible("Advanced customisation", "Theme colour typography density glass blur motion navigation mini-player player background home library presets import export")) {
-                            CompositionLocalProvider(LocalSettingsQuery provides "") {
-                                DesktopAdvancedCustomizationSettings(onOpenHomeSections)
-                                SettingsNavigationRow(
-                                    title = "Customise hub",
-                                    subtitle = "Open the desktop appearance editors",
-                                    onClick = onOpenCustomiseHub,
-                                )
-                                SettingsNavigationRow(
-                                    title = "Pill Studio",
-                                    subtitle = "Arrange, preview, and tune the floating player",
-                                    onClick = onOpenPillStudio,
-                                )
-                                SettingsNavigationRow(
-                                    title = "Home sections",
-                                    subtitle = "Choose which shelves appear on Home and set their order",
-                                    onClick = onOpenHomeSections,
-                                )
-                            }
+                    SettingsToggle(
+                        DesktopStrings["legacy_mesh_gradient", "Legacy mesh gradient"],
+                        DesktopStrings["d_use_the_older_blob_backdrop_behind_the_player", "Use the older blob backdrop behind the player"],
+                        legacyMeshGradient,
+                        onLegacyMeshGradientChange,
+                    )
+                }
+                SettingsGroup("Home") {
+                    SettingsNavigationRow(
+                        title = "Home sections",
+                        subtitle = "Choose which shelves appear on Home and set their order",
+                        onClick = onOpenHomeSections,
+                    )
+                }
+                SettingsGroup("Studio and customisation") {
+                    if (settingsRowVisible("Advanced customisation", "Theme colour typography density glass blur motion navigation mini-player player background home library presets import export")) {
+                        CompositionLocalProvider(LocalSettingsQuery provides "") {
+                            DesktopAdvancedCustomizationSettings(onOpenHomeSections)
+                            SettingsNavigationRow(
+                                title = "Studio",
+                                subtitle = "Pill, Home layout, colours and typography, presets and import/export",
+                                onClick = onOpenCustomiseHub,
+                            )
+                            SettingsNavigationRow(
+                                title = "Pill Studio",
+                                subtitle = "Arrange, preview, and tune the floating player",
+                                onClick = onOpenPillStudio,
+                            )
                         }
                     }
+                }
+                SettingsGroup(DesktopStrings["settings_appearance_window", "Window and performance"]) {
+                    val reduceDynamicBlur by DesktopAppearanceSettings.reduceDynamicBlur.collectAsState()
+                    SettingsToggle(
+                        DesktopStrings["reduce_dynamic_blur", "Reduce dynamic blur"],
+                        DesktopStrings["reduce_dynamic_blur_subtitle", "Swaps frosted glass for solid fills across the app"],
+                        reduceDynamicBlur,
+                        DesktopAppearanceSettings::setReduceDynamicBlur,
+                    )
                     // Window furniture belongs beside the visual settings it changes, rather than
                     // interrupting playback controls. These rows remain Windows-only.
                     if (DesktopPlatform.drawsOwnWindowFrame) {
@@ -6181,38 +6283,9 @@ private fun DesktopSettingsScreen(
                             DesktopWindowBackdrop::setAppBackground,
                         )
                     }
-                    SettingsToggle(
-                        DesktopStrings["full_screen_cover_art", "Full-screen cover art"],
-                        DesktopStrings["full_screen_cover_art_subtitle", "Runs the cover to the edges of the player instead of a square sleeve"],
-                        fullBleedArtwork,
-                        onFullBleedArtworkChange,
-                    )
-                    SettingsToggle(
-                        DesktopStrings["legacy_mesh_gradient", "Legacy mesh gradient"],
-                        DesktopStrings["d_use_the_older_blob_backdrop_behind_the_player", "Use the older blob backdrop behind the player"],
-                        legacyMeshGradient,
-                        onLegacyMeshGradientChange,
-                    )
-                    SettingsToggle(
-                        DesktopStrings["d_animated_canvas", "Animated canvas"],
-                        DesktopStrings["d_show_motion_artwork_when_it_is_available", "Show motion artwork when it is available"],
-                        animatedCanvas,
-                        onAnimatedCanvasChange,
-                    )
-                    if (animatedCanvas) {
-                        SettingsNavigationRow(
-                            title = DesktopStrings["spotify_canvas_setup", "Spotify Canvas setup"],
-                            subtitle = if (spotifyCanvasReady) {
-                                "Connected"
-                            } else {
-                                "To use Spotify Canvas, provide your Spotify sp_dc cookie."
-                            },
-                            onClick = onOpenSpotifyCanvasSetup,
-                        )
-                    }
                 }
             }
-            if (section == DesktopSettingsSection.MISCELLANEOUS) item {
+            if (section == DesktopSettingsSection.MISCELLANEOUS) settingsSectionItem(section, sectionMatches) {
                 SettingsGroup(DesktopStrings["miscellaneous", "Miscellaneous"]) {
                     SettingsToggle(
                         DesktopStrings["d_dont_repeat_songs_in_current_session", "Don\u2019t repeat songs in current session"],
@@ -6249,7 +6322,7 @@ private fun DesktopSettingsScreen(
                     )
                 }
             }
-            if (section == DesktopSettingsSection.AUDIO_QUALITY) item {
+            if (section == DesktopSettingsSection.AUDIO_QUALITY) settingsSectionItem(section, sectionMatches) {
                 SettingsGroup(DesktopStrings["audio_quality", "Audio quality"]) {
                     if (settingsRowVisible(DesktopStrings["audio_quality", "Audio quality"])) {
                     Column(Modifier.fillMaxWidth().padding(vertical = 12.dp)) {
@@ -6275,7 +6348,7 @@ private fun DesktopSettingsScreen(
                     }
                 }
             }
-            if (section == DesktopSettingsSection.LISTEN_TOGETHER) item {
+            if (section == DesktopSettingsSection.LISTEN_TOGETHER) settingsSectionItem(section, sectionMatches) {
                 SettingsGroup(DesktopStrings["listen_together", "Listen together"]) {
                     SettingsNavigationRow(
                         DesktopStrings["listen_together", "Listen together"],
@@ -6283,7 +6356,7 @@ private fun DesktopSettingsScreen(
                     ) { onOpenListenTogether() }
                 }
             }
-            if (section == DesktopSettingsSection.AUDIO_OUTPUT) item {
+            if (section == DesktopSettingsSection.AUDIO_OUTPUT) settingsSectionItem(section, sectionMatches) {
                 SettingsGroup(DesktopStrings["audio_output", "Audio output"]) {
                     SettingsNavigationRow(
                         DesktopStrings["pipeline_output_device", "Output device"],
@@ -6291,7 +6364,7 @@ private fun DesktopSettingsScreen(
                     ) { onOpenAudioOutput() }
                 }
             }
-            if (section == DesktopSettingsSection.OUTPUT_PRECISION) item {
+            if (section == DesktopSettingsSection.OUTPUT_PRECISION) settingsSectionItem(section, sectionMatches) {
                 SettingsGroup(DesktopStrings["d_output_precision", "Output precision"]) {
                     if (settingsRowVisible(DesktopStrings["d_output_precision", "Output precision"])) {
                     Column(Modifier.fillMaxWidth().padding(vertical = 12.dp)) {
@@ -6318,7 +6391,7 @@ private fun DesktopSettingsScreen(
                     }
                 }
             }
-            if (section == DesktopSettingsSection.DOWNLOADS) item {
+            if (section == DesktopSettingsSection.DOWNLOADS) settingsSectionItem(section, sectionMatches) {
                 SettingsGroup(DesktopStrings["download_channel_name", "Downloads"]) {
                     if (settingsRowVisible(DesktopStrings["download_channel_name", "Downloads"])) {
                     Row(
@@ -6337,7 +6410,7 @@ private fun DesktopSettingsScreen(
                     }
                 }
             }
-            if (section == DesktopSettingsSection.SOURCES) item {
+            if (section == DesktopSettingsSection.SOURCES) settingsSectionItem(section, sectionMatches) {
                 SettingsGroup(DesktopStrings["sources_order_header", "Sources · tried in this order"]) {
                     val sourcesHeading = DesktopStrings["sources_order_header", "Sources · tried in this order"]
                     val userAddedIds = sourceConfigs.inSourceOrder()
@@ -6381,7 +6454,7 @@ private fun DesktopSettingsScreen(
                     }
                 }
             }
-            if (section == DesktopSettingsSection.ACCOUNT) item {
+            if (section == DesktopSettingsSection.ACCOUNT) settingsSectionItem(section, sectionMatches) {
                 // One row rather than the four groups this used to be. Every
                 // integration option Android has lives behind it; inline, the
                 // list was longer than the rest of Settings put together.
@@ -6394,7 +6467,16 @@ private fun DesktopSettingsScreen(
                     )
                 }
             }
-            if (section == DesktopSettingsSection.ADVANCED) item {
+            // STUDIO S1 hook: moved here from the Appearance group.
+            if (section == DesktopSettingsSection.DIAGNOSTICS) settingsSectionItem(section, sectionMatches) {
+                SettingsGroup(DesktopStrings["settings_diagnostics", "Diagnostics"]) {
+                    // UPGRADE M3: diagnostic memory report switch and button (DesktopMemoryReport.kt).
+                    DesktopMemoryReportSettingsRows { title, subtitle, checked, onChange ->
+                        SettingsToggle(title, subtitle, checked, onChange)
+                    }
+                }
+            }
+            if (section == DesktopSettingsSection.ADVANCED) settingsSectionItem(section, sectionMatches) {
                 SettingsGroup(DesktopStrings["advanced_interface_customization", "Advanced interface customization"]) {
                     DesktopMiniPlayerCustomizationSettings()
                 }
@@ -6405,14 +6487,24 @@ private fun DesktopSettingsScreen(
                         showNerdStats,
                         onShowNerdStatsChange,
                     )
+                    // STUDIO G2 hook: the liquid-glass shader's test page.
+                    SettingsNavigationRow(
+                        title = "Glass lab (experimental)",
+                        subtitle = "Tune the liquid-glass material and see whether the shader works on this PC",
+                        onClick = onOpenGlassLab,
+                    )
                 }
             }
             }
-            item {
+            // STUDIO S1 hook: licences sit with Advanced (and are found by a search).
+            if (searching || selectedCategory == DesktopSettingsCategory.ADVANCED) item {
                 DesktopSettingsFooter(onLicenses = onOpenLicenses)
             }
         }
         }
+                }
+                }
+                }
             }
     }
 
@@ -6436,8 +6528,9 @@ private fun DesktopSettingsScreen(
     }
 }
 
+// STUDIO S2 hook: internal (was private) and [presetsOnly] so the Studio pages can show the editors, or just the presets and import/export part.
 @Composable
-private fun DesktopAdvancedCustomizationSettings(onOpenHomeSections: () -> Unit) {
+internal fun DesktopAdvancedCustomizationSettings(onOpenHomeSections: () -> Unit, presetsOnly: Boolean = false) {
     val config by DesktopAdvancedAppearance.config.collectAsState()
     val interfaceMode by DesktopInterfaceSettings.mode.collectAsState()
     val fluidity by DesktopFluiditySettings.enabled.collectAsState()
@@ -6575,6 +6668,7 @@ private fun DesktopAdvancedCustomizationSettings(onOpenHomeSections: () -> Unit)
     }
 
     Column(Modifier.fillMaxWidth().padding(vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        if (!presetsOnly) {
         Text(
             "Changes preview as you adjust them and save automatically. Existing desktop settings are reused; Android settings are not shown here.",
             color = DesktopSecondary,
@@ -6589,6 +6683,7 @@ private fun DesktopAdvancedCustomizationSettings(onOpenHomeSections: () -> Unit)
             placeholder = { Text("Try glass, spacing, dock, or font") },
         )
         SettingsToggle("Show only modified", "Filter the editor to values away from their defaults", onlyModified) { onlyModified = it }
+        }
         if (isPreviewing) {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("Previewing changes", color = DesktopSecondary, style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f).padding(top = 10.dp))
@@ -6652,6 +6747,7 @@ private fun DesktopAdvancedCustomizationSettings(onOpenHomeSections: () -> Unit)
                 TextButton(onClick = { DesktopAdvancedAppearance.deletePreset(preset.name); presetRevision++ }) { Text("Delete") }
             }
         }
+        if (!presetsOnly) {
         Surface(
             modifier = Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(16.dp),
@@ -6853,6 +6949,8 @@ private fun DesktopAdvancedCustomizationSettings(onOpenHomeSections: () -> Unit)
             }
             Text("Mica/Acrylic require Windows 11 version 22H2 or later.", color = DesktopSecondary, style = MaterialTheme.typography.bodySmall)
             TextButton(onClick = { DesktopWindowBackdrop.set(DesktopBackdrop.MICA) }) { Text("Reset window material") }
+        }
+
         }
 
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -8167,6 +8265,12 @@ private fun SettingsGroup(title: String, content: @Composable () -> Unit) {
     val wholeGroup = query.isBlank() || title.contains(query, ignoreCase = true)
     val matched = remember(query) { androidx.compose.runtime.mutableStateListOf<String>() }
     val visible = wholeGroup || matched.isNotEmpty()
+    // STUDIO S1 hook: tell the category (when searching) that this group has something to show.
+    val categoryMatches = LocalSettingsCategoryMatches.current
+    DisposableEffect(visible, title, categoryMatches) {
+        if (visible) categoryMatches?.add(title)
+        onDispose { if (visible) categoryMatches?.remove(title) }
+    }
     // The gap belongs to the group, not to the list: as list spacing, every filtered-out group
     // still left its 18dp behind and the surviving ones sat under a band of empty space.
     Column(if (visible) Modifier.padding(bottom = 20.dp) else Modifier) {

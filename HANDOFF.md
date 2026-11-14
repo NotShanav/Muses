@@ -328,3 +328,132 @@ The latest Windows Actions log identified `HomeScreen.kt` importing `composed` f
 - NOT compiled and tests NOT run here. Hand-traced the two failing tests and the red/blue, three-colour, one-colour and grey tests against the new code; they hold.
 ### Exact next step
 - Re-run the Windows workflow; the MSI step was skipped because the test step failed. Then look at the background with real songs and send the memory reports (see M3).
+
+## Cycle 4 setup (settings, Studio, liquid-glass pill)
+- Added `MUSES_STUDIO_PLAN.md` (parts S1, S2, G1 to G5) and `design/README.md` (drop `design/pill-reference.png` here).
+- Removed the finished `MUSES_UPGRADE_PLAN.md` (parts M1 to M3 are done; their sections above in this file stay as the record).
+- `.github/workflows/windows-desktop-build.yml`: renamed from "Windows Desktop - Seek Fix Build" to "Windows Desktop Build"; it now also runs automatically on every push to `main` (markdown, `docs/` and `design/` only changes are ignored) and can still be started by hand; the version label defaults to `1.8-dev` when none is given; old builds on the same branch are cancelled when a newer push arrives; the test-report artifact lost its "Seek-Fix" name. The "Verify packaged SMTC DLL and seek callback" check is kept. NOT run in this setup step.
+- `.github/workflows/check.yml` (Check) and `.github/workflows/android.yml` (Android Release APK) no longer run automatically on push or pull request: both are now manual (`workflow_dispatch` only). They are not deleted, so they can still be started from the Actions tab. `release.yml` is unchanged (tags or manual). The Windows Desktop Build is now the only workflow that runs by itself.
+
+## Cycle 4, part S1: settings shell
+### Did
+- Settings is now a left category rail (200 dp; a scrolling row of chips under 760 dp wide) plus the existing groups of the chosen category. While the search field is not blank every category is searched and the category name heads its matching groups (hidden when none match). Picking a category clears the search. The choice is kept while the app runs (`DesktopSettingsNav`), not saved to disk.
+- Categories (rail order): Account and sync (ACCOUNT, LISTEN_TOGETHER); Playback (PLAYBACK, DESKTOP_PLAYBACK, LYRICS); Sound (SOUND_EFFECTS, AUDIO_QUALITY, AUDIO_OUTPUT, OUTPUT_PRECISION); Library and sources (SOURCES, LOCAL_MUSIC, DOWNLOADS, STORAGE); Appearance (APPEARANCE); System (LANGUAGE, MISCELLANEOUS); Advanced and diagnostics (ADVANCED, DIAGNOSTICS).
+### Files
+- New `DesktopSettingsCategories.kt` (enum, `categoryOf`, `settingsSectionsToShow`, rail, chips, lazy-item helpers); new test `DesktopSettingsCategoriesTest.kt`.
+- `DesktopApp.kt` (hooks marked `// STUDIO S1 hook`): `DesktopSettingsSection` private -> internal plus two new entries; `DesktopSettingsScreen` body wrapper and loop; every `if (section == X) item {` became `settingsSectionItem(section, sectionMatches) {`; `SettingsGroup` reports to its category. The parameter list is unchanged.
+### Decisions
+- Lyrics stays in the Playback category (it was already its own group). The Appearance category is one section until S2 splits its sub-groups.
+- Two groups were split by moving rows, no logic touched: spatial audio, Dolby Atmos and Equaliser left the Playback group for a new "Sound effects" group (SOUND_EFFECTS, in Sound); skip silence stayed in Playback. The memory-report rows left Appearance for a new "Diagnostics" group (DIAGNOSTICS, in Advanced). Strings use new keys with English fallbacks.
+- Tray/startup toggles stay in MISCELLANEOUS (System), nerd stats in ADVANCED, integrations in the ACCOUNT group; the Licenses footer shows on the Advanced page and during a search.
+- Icons: the shared set has no settings icons, so existing ones are reused (Pin, Play, MusicNote, Library, GridView, Performance, FrameRate).
+- Page frame widened by 216 dp so group width stays 840 dp beside the rail.
+### Verified
+- NOT compiled and tests NOT run. Brace/paren balance checked by script; names grepped for clashes; imports copied from existing files.
+### Deferred
+- Hand-check in the UI: rail highlight, chips at narrow widths, search headers.
+### Exact next step
+- Run the Windows workflow and look at Settings, then S2.
+
+## Cycle 4, part S2: Appearance sub-groups and Studio landing
+### Did
+- The Appearance section is now five labelled groups instead of one: Interface (desktop interface mode, full-screen cover art, animated canvas + Spotify Canvas setup), Colours and background (Fluidity, player background, legacy mesh gradient), Home (Home sections row), Studio and customisation (the existing inline Advanced customisation editors plus rows for Studio, Pill Studio), Window and performance (reduce dynamic blur, title bar, window material, app background). Rows were moved, not rewritten; one divider line was dropped.
+- The old Customise hub page is replaced by a Studio landing page (route `CUSTOMISE_HUB` kept) with four cards: Pill (opens Pill Studio), Home layout (opens Home sections), Colours and typography (new page `STUDIO_COLOURS` showing the existing Advanced customisation editors), Presets and import/export (new page `STUDIO_PRESETS`). "Reset all customisation" with a confirmation dialog is on the landing page.
+### Files
+- New `DesktopStudioHub.kt` (`DesktopStudioHubPage`, `DesktopStudioColoursPage`, `DesktopStudioPresetsPage`, `resetAllCustomisation`).
+- `DesktopApp.kt` (hooks `// STUDIO S2 hook`): Appearance item reassembled; `DesktopAdvancedCustomizationSettings` is now `internal` with `presetsOnly: Boolean = false` (true hides the search, live preview and all editor groups and keeps the presets, saved presets, Export JSON, Import JSON and Reset all); hub call site and two new `when` branches.
+- `DesktopOverlays.kt`: `DesktopSettingsPage` gained `STUDIO_COLOURS`, `STUDIO_PRESETS`.
+### Decisions
+- The preset/import/export code is local state inside `DesktopAdvancedCustomizationSettings`, not separate functions, so it is reused through `presetsOnly` instead of being copied. Pill presets live in Pill Studio's draft state (applied by Apply), so the presets page links to Pill Studio rather than duplicating them (G4 reorganises that).
+- "Reset all customisation" calls only existing setters: `resetAllNewValues`, interface mode DEFAULT, Fluidity off, blur/motion reductions off, player background DEFAULT, dock position/width/inset/corner/contrast/rim to the defaults in `DesktopMiniPlayerAppearance`. Saved user presets, window material and title bar are kept (stated in the dialog).
+- `DesktopCustomiseHubPage` in `DesktopPillStudio.kt` is kept, now unused (nothing deleted).
+- The Colours card opens a page, not the Appearance settings, so it does not depend on scrolling.
+### Verified
+- NOT compiled and tests NOT run. Brace/paren balance checked by script; all moved rows were re-counted by length against the original group. No new test (the new code is UI and setter calls).
+### Deferred
+- Pill Studio and the pages do not remember where they were opened from beyond the existing back history.
+- Studio search keywords for the new Appearance group titles are not added to the settings search.
+### Exact next step
+- Run the Windows workflow; open Settings > Appearance and Studio (Appearance > Studio and customisation > Studio) and check each card, the reset dialog, and Export/Import on the presets page. Then G1.
+
+## Cycle 4, parts G1 + G2: glass engine, backdrop capture, Glass Lab
+### Did
+- **G1 (engine):** `DesktopGlassParams` (11 float fields, defaults, ranges, `validated()` that clamps and replaces NaN/infinity with the default); `DesktopGlassMath` (Kotlin mirror of the shader: `sdRoundRect`, `edgeProfile`, `roundRectNormal`, light direction, and `uniformsFor` which fixes the uniform order/length: 13 uniforms, 21 floats); `DesktopGlassShader` (the SkSL as a `const val`, compiled once in `runCatching`, `available`, `error`, `reportFailure`, `effect(...)` returning a Compose `RenderEffect?` via `RuntimeShaderBuilder` + `ImageFilter.makeRuntimeShader(builder, arrayOf("content","blurred"), arrayOf(null, blur))`).
+- **G2 (capture + lab):** `DesktopGlassState` (two shared `GraphicsLayer`s, BACKDROP and PAGE, plus consumer count, clock, revision), `rememberDesktopGlassState()` (30 fps clock that stops when no surface exists, the window is hidden or `reduceAnimation` is on), `Modifier.glassSource(state, slot)`, `Modifier.glassSurface(shape, params, tint, accent, fallbackRim)`, and the Glass Lab page (Settings > Advanced > "Glass lab (experimental)").
+- Both requests (G1 and G2) arrived in one message; G2 needs G1, so both were done in this pass, G1 first.
+### Files
+- New: `DesktopGlassParams.kt`, `DesktopGlassShader.kt`, `DesktopGlassSurface.kt`, `DesktopGlassLab.kt`; tests `DesktopGlassParamsTest.kt`, `DesktopGlassMathTest.kt`.
+- Edited (all marked `// STUDIO G2 hook`): `DesktopApp.kt` (`DesktopFrame`: state, provider, three `glassSource` modifiers; `DesktopSettingsScreen`: trailing `onOpenGlassLab: () -> Unit = {}` plus one `SettingsNavigationRow` in the Advanced options group; the `when` got a `GLASS_LAB` branch and the call site passes the callback), `DesktopOverlays.kt` (`GLASS_LAB` page entry).
+### Decisions
+- Imports and API calls were checked against Skiko's source on GitHub (`RuntimeEffect.makeForShader`, `RuntimeShaderBuilder.uniform(name, ...)`, `ImageFilter.makeRuntimeShader(builder, Array<String>, Array<ImageFilter?>)`, `ImageFilter.makeBlur`) and against `NowPlayingScreen.kt` / `LongPressOrigin.kt` for `rememberGraphicsLayer()`, `layer.record { this@drawWithContent.drawContent() }`, `drawLayer`. `asComposeRenderEffect` and `GraphicsLayer.renderEffect` / `.clip` were NOT checkable offline; they are standard Compose Desktop 1.10 API.
+- One shared `RuntimeShaderBuilder` instead of one per size: size is a uniform and every uniform is rewritten on each call, so the builder holds no size. The blur `ImageFilter` is cached per sigma. A new `RenderEffect` is still made when a uniform changes (the API snapshots the uniforms); `glassSurface` reuses the last one when nothing changed.
+- `effect(...)` takes an extra trailing `density: Float = 1f`: `bevelDp` and `blurDp` are dp and the shader works in px.
+- Shader tweaks to the plan's reference (not its look): `float` maths with a final `half` conversion (avoids half/float overload doubts), sample coordinates clamped into the glass, output alpha = max(backdrop alpha, tint alpha) x coverage so a transparent window still shows tinted glass, and `time` drives a slow rim shimmer (also keeps every uniform used, so none is optimised away). Blur sigma = `blurDp * density / 2`.
+- Two source slots (BACKDROP and PAGE), not one: with Fluidity on, the glow is a sibling of the page box and would otherwise be invisible to the glass. A surface draws BACKDROP then PAGE, each translated by (its root position - surface root position). The glass does not see the pill itself (the pill is not inside either source box).
+- Sources record only while `consumers > 0 && !suspended` (suspended = window hidden to the tray or reduce dynamic blur on); otherwise `glassSource` is a plain `drawContent()`, so the app draws as before when no glass is in use.
+- Fallback is the classic `desktopBarGlass(shape, fallbackRim)` when there is no state, reduce dynamic blur is on, or the shader is unavailable; `available` is snapshot state, so a runtime failure recomposes every surface into the classic pane. Before the first recording a surface draws a plain smoked fill (never empty).
+- Redraw of a surface is triggered by a `revision` counter that the source bumps in its draw (written without being read there, so no self-loop). Consequence: glass lags the page by one frame.
+- The lab has its own `DesktopGlassState` and test pattern, so it does not depend on the window capture. Album art in the lab is the current track's cover; the album colour is picked from five swatches because the Fluidity palette function is private.
+- No G2 unit test: `GraphicsLayer` cannot be built in a plain JVM test. The pure parts are tested in G1.
+### Verified
+- NOT compiled and tests NOT run. No Skiko jar or Gradle was available offline. Done: Skiko API signatures read from source; bracket balance checked by script; names grepped for clashes; every uniform name is asserted to be declared in the SkSL by a test; imports copied from files that already compile.
+### Deferred
+- Unknown until the owner's build: whether the SkSL compiles (the Lab shows the error text), whether the shader's `fc` is relative to the glass's top-left in this Compose version (if the refraction looks shifted, this is the first thing to check), and whether `GraphicsLayer.clip` + `renderEffect` crop as expected.
+- `positionInRoot` is read on layout only; a pure `graphicsLayer` slide of an ancestor (the pill's entry animation in G3) may leave the crop one step behind until the next layout.
+- Source layers keep their last picture in memory after the last surface goes away (the picture is dropped from use, not discarded).
+- The pill still uses the classic glass; `glassSurface` is used only by the Lab until G3.
+### Exact next step
+- Run the Windows workflow, open Settings > Advanced > Glass lab, send screenshots and the text under "shader available". Then G3.
+
+## Cycle 4, parts G3 + G4: liquid-glass pill and Studio v2 for the pill
+### Did
+- **G3 (pill):** `DesktopLiquidPill` built from scratch with the same parameters and callbacks as `DesktopFloatingMiniPlayer` (plus an optional `configOverride`, used only by the Studio preview). It lays out by `DesktopPillConfig.zones` and draws on `glassSurface` (G2) with the album colour from `rememberFluidPalette` as accent and a dark tint whose alpha never drops below `contrast x 0.55`. Motion: press squish, hover glow, one light sweep along the rim per track change, breathing rim while playing, play/pause cross-fade, artwork cross-fade per `trackAnimation`, spin, slide-up/fade entry. `reduceAnimation` snaps everything (no infinite transition is created). Progress is a thin bar with a glass-lit knob on hover. All controls are the classic ones (previous, play, next, shuffle, repeat, more menu, expand, Pill Studio entry).
+- **Chooser:** `DesktopPillHost` is now the single call site (it wraps the old call). Liquid is drawn only when `pillMaterial == LIQUID_GLASS`, the background material is Glass, and `DesktopGlassShader.available`; otherwise `DesktopFloatingMiniPlayer` (Classic) as before. If the shader fails at runtime, `available` flips and the pill recomposes into Classic.
+- **G4 (Studio):** Pill Studio inspector is now five tabs: Layout (element zone/order, position, width, inset, body action), Material (Liquid glass / Classic, classic background, all 11 glass sliders with the params' own ranges, shape, corner radius, height, contrast, rim, honest-limits text), Motion (track change, transition, press squish, hover expand, hover glow, light sweep, breathing rim, spin), Artwork (placement, size, shape, spin switch), Presets (built-in Crystal, Frosted, Aurora, Minimal, Solid; the old layout presets; user presets save/rename/delete/apply; Export/Import JSON by file chooser). The live preview is the real `DesktopLiquidPill` over a striped test backdrop with its own `DesktopGlassState`; it falls back to the old preview when Classic is chosen or the shader is unavailable.
+### Files
+- New: `DesktopLiquidPill.kt` (`DesktopPillHost`, `DesktopLiquidPill`, pure helpers), `DesktopPillPresets.kt` (built-ins, `export`, `import`); tests `DesktopLiquidPillTest.kt`, `DesktopPillPresetsTest.kt`.
+- Edited (marked `// STUDIO G3 hook` / `G4 hook`): `DesktopApp.kt` (call site renamed to `DesktopPillHost`; `DesktopSpringButton` private -> internal), `DesktopFluidity.kt` (`rememberFluidPalette` private -> internal), `DesktopGlassParams.kt` (`@Serializable`), `DesktopPillStudio.kt` (new `DesktopPillMaterial` enum; `DesktopPillConfig` new fields `pillMaterial`, `glass`, `pressSquish`, `lightSweep`, `breathing`, `hoverGlow`, all with defaults and validated; tabs, preview, new private helpers).
+### Decisions
+- `design/pill-reference.png` does not exist (only `design/README.md`), so the element layout is the classic pill's. Please add the screenshot before G5 tuning.
+- Both G3 and G4 arrived in one message; G4 needs G3's pill for its preview, so G3 was done first.
+- Persistence: `pillMaterial` and `glass` live inside `DesktopPillConfig` (already persisted and imported/exported with the appearance JSON), not as separate settings keys; old saved configs load with LIQUID_GLASS and default glass (tested). Default is LIQUID_GLASS as the plan says, so every existing user sees the new pill once the shader works.
+- Solid and Accent background materials stay on the Classic pill (they are explicit choices); only Glass becomes liquid. The Material tab "Liquid glass" chip sets the background to Glass.
+- The progress knob only marks the position: the classic pill has no seek callback, so none was added.
+- Glass `tintAlpha` is raised to at least `contrast x 0.55` for readability, so the Studio tint slider cannot go below that floor in practice.
+- The preview ignores the legacy appearance values (`DesktopMiniPlayerAppearance`, `miniPlayer*` flags) and uses the draft, because the draft already folds them in.
+- `trackAnimation` still only offers Crossfade and None (as `validated()` already forced); SLIDE/POP values are treated as crossfade.
+- Presets "Looks" keep layout, position, artwork and the user's presets; Minimal also hides shuffle and repeat and sets the compact height (same as the old Minimal layout preset, which still exists and gives the same layout).
+### Verified
+- **NOT compiled and tests NOT run.** No Gradle or Kotlin toolchain was available. Done by hand: imports copied from files that compile or checked as standard Compose; brace/paren balance of every edited file checked by script; names grepped for clashes; tests written for the pure parts (tint floor, material choice, sweep curve, old-JSON loading, validated clamps, every built-in preset, export/import round trip, rejection of bad or huge input).
+- Not checked at all (needs a build and eyes): the look, the shader itself, the rim sweep and breathing, and the Studio tab layout.
+### Deferred
+- Likely first CI errors to look for: `drawOutline(outline, brush, alpha = ...)` overload resolution, `animateColorAsState` wrapper, `Song(...)` named-argument call in the preview, `items(PillGlassFields, key = ...)` inside the `when`.
+- `glassSurface` reads `positionInRoot` on layout only; the pill's entry slide (14 dp) and press scale are graphicsLayer transforms, so the refracted crop can be a few px off while they run (G2 note). If visible, move the glass inside the transformed layer or re-read the position per frame.
+- "Reset all customisation" (Studio hub) does not reset the new fields (`pillMaterial`, glass, motion flags); they reset through "Reset pill" in Pill Studio.
+- The Studio preview does not play the sweep on demand (it plays once when the preview opens); a "replay" button is not added.
+- README paragraph "Studio and liquid glass" and the honest limits are G5.
+### Exact next step
+- Run the Windows workflow (fix compile errors first, from the list above). Then play a track: check the pill (refraction at the rim, text readable over a bright cover, Classic fallback when Settings > Advanced > Glass lab says shader unavailable). Open Pill Studio and go through the five tabs; try each built-in preset; Export then Import a pill JSON. Send screenshots, then G5.
+
+## Cycle 4, part G5: integration review and docs
+### Did
+- Read-through compile review of every Studio file together: `DesktopGlassParams.kt` (with `DesktopGlassMath`), `DesktopGlassShader.kt`, `DesktopGlassSurface.kt`, `DesktopGlassLab.kt` (first 120 lines), `DesktopLiquidPill.kt`, `DesktopPillPresets.kt`, `DesktopPillStudio.kt`, `DesktopStudioHub.kt` (reset part), plus the hooks in `DesktopApp.kt` by grep only (the file was never opened whole).
+- One code change: "Reset all customisation" now keeps the pill's own saved presets (they live inside `DesktopPillConfig.userPresets`, so the full reset wiped them although the hub text says saved presets are kept). Marked `// STUDIO G5 hook` in `DesktopStudioHub.kt`.
+- README: added "Studio and liquid glass (desktop)" with the three honest limits. The Studio Material tab already carries the same limit text from G4.
+### Files
+- Edited: `desktopApp/.../DesktopStudioHub.kt` (`resetAllCustomisation`), `README.md`, `HANDOFF.md`.
+### Decisions
+- No CI log was provided, so there was nothing to fix from a build; the review was by reading only.
+- Correction to the G3+G4 Deferred list: "Reset all customisation does not reset the new pill fields" was wrong. `resetAllNewValues()` is `update { DesktopAppearanceConfig() }`, which replaces the whole config including `pillConfig` (material, glass, motion flags go back to their defaults). Only the pill's saved presets were lost; that is what G5 fixed.
+- Classic and Liquid with Pill Studio, as read in the code: `DesktopPillHost` picks Liquid only for `LIQUID_GLASS` + Glass background + `DesktopGlassShader.available`; the Studio preview uses the same `desktopLiquidPillActive` test and shows the old preview otherwise, so the preview matches what the dock will draw. Solid and Accent backgrounds stay on Classic by design.
+- Identifiers the liquid pill and Studio depend on were grepped and exist with matching signatures: `MusesMotion.press/settle/crossfade`, `rememberFluidPalette`, `DesktopAccent`, `DesktopArtwork(px=)`, `DesktopSpringButton`, `DesktopRepeatMode.next()/label()`, `BitChordIcons.Shuffle/Repeat`, `Song(videoId, title, artist, thumbnailUrl)`, `desktopBarGlass`. No duplicate top-level names across the desktop package and balanced brackets in every Studio file (script check).
+- Left alone on purpose: the pre-existing `DesktopTempoBufferTest.kt` is not valid UTF-8 (a cp1252 dash in a comment, byte 0x97). It is outside Studio; if CI complains about encoding, re-save it as UTF-8.
+- `design/pill-reference.png` still does not exist; the pill layout is the classic pill's.
+### Verified
+- **NOT compiled and tests NOT run.** No Kotlin or Gradle toolchain, and no Skiko or Compose jars, were available. Everything above is reading, grep and a bracket/duplicate-name script. The look, the shader and all animations are unseen.
+### Deferred
+- `asComposeRenderEffect`, `GraphicsLayer.renderEffect` and `.clip` are standard Compose Desktop 1.10 API but were not checkable offline; they are the first things to look at if CI fails in `DesktopGlassShader.kt` / `DesktopGlassSurface.kt`.
+- From G3+G4 and still open: possible overload errors in `drawOutline(outline, brush, alpha = ...)`, the `Song(...)` call in the preview, `items(PillGlassFields, key = ...)` inside the `when`; the refracted crop can lag a few px during the pill's entry slide and press scale (`positionInRoot` is read on layout only); no "replay sweep" button in the preview; the glass lags the page by one frame.
+- Whether the SkSL compiles and whether `fc` is relative to the glass's top-left in this Compose version (shifted refraction would point there). Glass lab shows the error text.
+### Exact next step
+- Run the Windows workflow and paste the first compile errors, if any. If it builds: Settings > Advanced > Glass lab (screenshot + "shader available" line), play a track and look at the pill, go through the five Pill Studio tabs and the built-in looks, then Reset all customisation and check a saved pill preset survives. Add `design/pill-reference.png`, then tune the shader from the screenshots.

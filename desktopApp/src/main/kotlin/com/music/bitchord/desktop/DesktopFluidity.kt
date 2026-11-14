@@ -133,8 +133,9 @@ private var fluidLastAlbumPalette: FluidPalette? = null
  *  - [url] null after a song has played: the last album palette is kept, never the default.
  * A cover seen recently is answered from [FluidPaletteCache]; extraction stays on Dispatchers.IO.
  */
+// STUDIO G3 hook: visibility only (was private)
 @Composable
-private fun rememberFluidPalette(url: String?): FluidPalette? {
+internal fun rememberFluidPalette(url: String?): FluidPalette? {
     var palette by remember {
         mutableStateOf(
             when {
