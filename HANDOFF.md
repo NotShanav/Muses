@@ -457,3 +457,6 @@ The latest Windows Actions log identified `HomeScreen.kt` importing `composed` f
 - Whether the SkSL compiles and whether `fc` is relative to the glass's top-left in this Compose version (shifted refraction would point there). Glass lab shows the error text.
 ### Exact next step
 - Run the Windows workflow and paste the first compile errors, if any. If it builds: Settings > Advanced > Glass lab (screenshot + "shader available" line), play a track and look at the pill, go through the five Pill Studio tabs and the built-in looks, then Reset all customisation and check a saved pill preset survives. Add `design/pill-reference.png`, then tune the shader from the screenshots.
+
+### G5 CI fix 1
+- CI error: `Unresolved reference 'drawOutline'` (DesktopLiquidPill.kt, DesktopGlassSurface.kt; the "Cannot infer type R" at DesktopGlassSurface.kt:286 followed from it). Cause: wrong import package `androidx.compose.ui.graphics.drawscope.drawOutline`; the repo's other files use `androidx.compose.ui.graphics.drawOutline`. Both imports fixed. NOT recompiled; more errors may be hidden behind this one.
