@@ -318,3 +318,13 @@ The latest Windows Actions log identified `HomeScreen.kt` importing `composed` f
 
 ### Exact next step
 - Run the Actions build, install, switch the diagnostic on, play music, leave the window open about 2 minutes, close it to the tray for about 2 minutes, reopen, press "Write memory report now", and send back the files in `memory-reports`.
+
+## Upgrade cycle 3, CI fix: palette hue accuracy
+### Did
+- CI compiled everything; 2 of 364 tests failed in `DesktopAlbumPaletteTest` (`solidRedIsRedInEverySlot`, `smallAccentIsIgnored`, both at the helper `assertNearHue`).
+- Cause: `extractAlbumPalette` used the CENTRE of the 15 degree hue bin as the colour's hue, so pure red came out at 7.5 degrees and its tonal variants (+8 degrees) at 15.5 degrees, more than the 12 degree tolerance. It was also a real quality issue (pure red looked slightly orange).
+- Fix (`DesktopAlbumPalette.kt` only, tests unchanged): each bin now also accumulates the weighted sin/cos of its pixels' real hue; the chosen colour's hue is the circular mean over the same bin +-1 group that `share()` uses (`hueOf`). Pure red is now exactly 0 degrees, variants are +-8 degrees.
+### Verified
+- NOT compiled and tests NOT run here. Hand-traced the two failing tests and the red/blue, three-colour, one-colour and grey tests against the new code; they hold.
+### Exact next step
+- Re-run the Windows workflow; the MSI step was skipped because the test step failed. Then look at the background with real songs and send the memory reports (see M3).

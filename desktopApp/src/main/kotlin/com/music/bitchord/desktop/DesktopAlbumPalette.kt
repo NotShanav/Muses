@@ -53,6 +53,9 @@ internal fun extractAlbumPalette(pixels: IntArray, width: Int, height: Int): Flu
     val weight = FloatArray(HUE_BINS)
     val satSum = FloatArray(HUE_BINS)
     val valSum = FloatArray(HUE_BINS)
+    // Per bin, the weighted sum of the unit hue vector: gives the true hue of a bin, not its centre.
+    val sinSum = FloatArray(HUE_BINS)
+    val cosSum = FloatArray(HUE_BINS)
     var counted = 0
     var chromatic = 0
     var luminanceSum = 0f
@@ -89,6 +92,8 @@ internal fun extractAlbumPalette(pixels: IntArray, width: Int, height: Int): Flu
         weight[bin] += w
         satSum[bin] += s * w
         valSum[bin] += v * w
+        sinSum[bin] += sin(h * DEG_TO_RAD) * w
+        cosSum[bin] += cos(h * DEG_TO_RAD) * w
         hueSin += sin(h * DEG_TO_RAD) * w
         hueCos += cos(h * DEG_TO_RAD) * w
     }
@@ -109,6 +114,16 @@ internal fun extractAlbumPalette(pixels: IntArray, width: Int, height: Int): Flu
     fun share(bin: Int): Float =
         (weight[bin] + weight[(bin + 1) % HUE_BINS] + weight[(bin + HUE_BINS - 1) % HUE_BINS]) / chromaTotal
 
+    // The real hue of a chosen bin: circular mean over the same bin +-1 group that share() counts. A bin
+    // centre would be up to 7.5 degrees off (pure red would come out orange-ish).
+    fun hueOf(bin: Int): Float {
+        val before = (bin + HUE_BINS - 1) % HUE_BINS
+        val after = (bin + 1) % HUE_BINS
+        val sn = sinSum[before] + sinSum[bin] + sinSum[after]
+        val cs = cosSum[before] + cosSum[bin] + cosSum[after]
+        return if (sn == 0f && cs == 0f) binHue(bin) else wrapHue(atan2(sn, cs) * RAD_TO_DEG)
+    }
+
     val chosen = mutableListOf<Int>()
     for (bin in ranked) {
         if (chosen.size == MAX_CHOSEN) break
@@ -122,7 +137,7 @@ internal fun extractAlbumPalette(pixels: IntArray, width: Int, height: Int): Flu
         val w = weight[bin].coerceAtLeast(1e-4f)
         val s = (satSum[bin] / w * 1.15f).coerceIn(0.5f, 1f)
         val v = valSum[bin] / w
-        Hsl(binHue(bin), s, (0.42f + v * 0.2f).coerceIn(GLOW_L_MIN, GLOW_L_MAX))
+        Hsl(hueOf(bin), s, (0.42f + v * 0.2f).coerceIn(GLOW_L_MIN, GLOW_L_MAX))
     }.toMutableList()
     val dominant = picks.first()
 
