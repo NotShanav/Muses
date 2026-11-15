@@ -56,6 +56,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -95,10 +98,13 @@ private val LiquidTint = Color(0xFF080A12)
 internal fun desktopLiquidPillActive(
     pillMaterial: DesktopPillMaterial,
     miniMaterial: DesktopMiniPlayerMaterial,
-    shaderAvailable: Boolean,
-): Boolean = pillMaterial == DesktopPillMaterial.LIQUID_GLASS &&
-    miniMaterial == DesktopMiniPlayerMaterial.GLASS &&
-    shaderAvailable
+    @Suppress("UNUSED_PARAMETER") shaderAvailable: Boolean = true,
+): Boolean = (pillMaterial == DesktopPillMaterial.LIQUID_GLASS || pillMaterial == DesktopPillMaterial.GLASS) &&
+    miniMaterial == DesktopMiniPlayerMaterial.GLASS
+
+/** True when the refracting overlay is drawn on top of the frosted pane: Liquid material and a working shader. */
+internal fun desktopLiquidEdgeActive(pillMaterial: DesktopPillMaterial, shaderAvailable: Boolean): Boolean =
+    pillMaterial == DesktopPillMaterial.LIQUID_GLASS && shaderAvailable
 
 /** Share of the classic contrast that becomes the lowest tint the glass may have (text stays readable). */
 internal const val LIQUID_TINT_FLOOR_SHARE = 0.55f
@@ -167,6 +173,8 @@ internal fun DesktopPillHost(
     onMoreLyrics: () -> Unit,
     onMoreQueue: () -> Unit,
     onMoreOutput: () -> Unit,
+    /** ODEON-FIX: jump to a position (ms); the progress bar is clickable and draggable. */
+    onSeek: (Long) -> Unit = {},
 ) {
     val custom by DesktopAdvancedAppearance.config.collectAsState()
     val liquid = desktopLiquidPillActive(custom.pillConfig.pillMaterial, custom.miniPlayerMaterial, DesktopGlassShader.available)
@@ -191,6 +199,7 @@ internal fun DesktopPillHost(
             onMoreLyrics = onMoreLyrics,
             onMoreQueue = onMoreQueue,
             onMoreOutput = onMoreOutput,
+            onSeek = onSeek,
         )
     } else {
         DesktopFloatingMiniPlayer(
@@ -240,6 +249,8 @@ internal fun DesktopLiquidPill(
     onMoreLyrics: () -> Unit,
     onMoreQueue: () -> Unit,
     onMoreOutput: () -> Unit,
+    /** ODEON-FIX: jump to a position (ms); the progress bar is clickable and draggable. */
+    onSeek: (Long) -> Unit = {},
     /** STUDIO G4: the Pill Studio preview draws the draft instead of the saved config (and ignores the legacy appearance values). */
     configOverride: DesktopPillConfig? = null,
 ) {
@@ -325,11 +336,13 @@ internal fun DesktopLiquidPill(
         DesktopArtworkShape.ROUNDED -> RoundedCornerShape(10.dp)
         DesktopArtworkShape.CIRCLE -> CircleShape
     }
-    val artSize = when (pill.artSize) {
+    val artSizeRaw = when (pill.artSize) {
         DesktopPillArtSize.SMALL -> 36.dp
         DesktopPillArtSize.MEDIUM -> (dockHeight - 24.dp).coerceIn(40.dp, 52.dp)
         DesktopPillArtSize.LARGE -> (dockHeight - 12.dp).coerceIn(48.dp, 64.dp)
     }
+    // ODEON-FIX: the artwork must fit inside the pill, with room from the rounded ends.
+    val artSize = minOf(artSizeRaw, dockHeight - 14.dp)
     val showArt = (preview || custom.miniPlayerArtwork) && "artwork" in pill.zones.values.flatten() && "artwork" !in pill.hiddenElements &&
         pill.artPlacement != DesktopPillArtPlacement.HIDDEN
     val showMetadata = (preview || custom.miniPlayerMetadata) && "metadata" in pill.zones.values.flatten() && "metadata" !in pill.hiddenElements
@@ -362,6 +375,7 @@ internal fun DesktopLiquidPill(
         pill.glass.copy(tintAlpha = liquidTintAlpha(pill.glass.tintAlpha, contrastNow))
     }
     val outlineHolder = remember { LiquidOutlineHolder() }
+    val edgeOn = desktopLiquidEdgeActive(pill.pillMaterial, DesktopGlassShader.available)
     val rimColor = liquidMix(Color.White, accent, 0.45f * glassParams.albumInfluence)
     val fillColor = liquidMix(accent, Color.White, 0.35f)
     val fraction = liquidProgressFraction(progress)
@@ -379,7 +393,8 @@ internal fun DesktopLiquidPill(
                 translationY = (1f - entrance.value) * 14.dp.toPx()
             }
             .clip(shape)
-            .glassSurface(shape, glassParams, LiquidTint, accent, rimNow)
+            .glassPane(shape, glassParams, LiquidTint, accent)
+            .then(if (edgeOn) Modifier.glassSurface(shape, glassParams, LiquidTint, accent, rimNow) else Modifier)
             .hoverable(interaction)
             .clickable(interactionSource = interaction, indication = null) {
                 if (pill.clickAction == DesktopPillClickAction.OPEN_PLAYER && custom.miniPlayerTapExpands && !preview) onExpandPlayer()
@@ -434,7 +449,10 @@ internal fun DesktopLiquidPill(
                     instantTrackChange = reduceMotion || pill.trackAnimation == DesktopPillAnimation.NONE,
                     durationMs = pill.trackAnimationMs,
                 )
-                "metadata" -> if (showMetadata || custom.miniPlayerProgress != DesktopMiniProgress.HIDDEN) Column(Modifier.fillMaxWidth()) {
+                "metadata" -> if (showMetadata || custom.miniPlayerProgress != DesktopMiniProgress.HIDDEN) Column(
+                    Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.Center,
+                ) {
                     if (showMetadata) {
                         Text(
                             song.title,
@@ -447,44 +465,76 @@ internal fun DesktopLiquidPill(
                         Text(song.artist, color = Color.White.copy(alpha = 0.72f), style = MaterialTheme.typography.labelSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
                     if (custom.miniPlayerProgress != DesktopMiniProgress.HIDDEN) {
-                        Spacer(Modifier.height(2.dp))
-                        val barHeight = if (custom.miniPlayerProgress == DesktopMiniProgress.FULL) 4.dp else 2.5.dp
-                        Box(
-                            Modifier.fillMaxWidth().height(10.dp).drawBehind {
-                                val bar = barHeight.toPx()
-                                val centreY = size.height / 2f
-                                val radius = bar / 2f
-                                drawRoundRect(
-                                    color = Color.White.copy(alpha = 0.20f),
-                                    topLeft = Offset(0f, centreY - radius),
-                                    size = Size(size.width, bar),
-                                    cornerRadius = CornerRadius(radius, radius),
-                                )
-                                val filled = size.width * fraction
-                                if (filled > 0f) {
-                                    drawRoundRect(
-                                        color = fillColor,
-                                        topLeft = Offset(0f, centreY - radius),
-                                        size = Size(filled, bar),
-                                        cornerRadius = CornerRadius(radius, radius),
-                                    )
-                                }
-                                // Glass-lit knob while the pill is hovered. It only marks the position: the pill has no seek.
-                                val knob = glow.value
-                                if (knob > 0.01f) {
-                                    val x = filled.coerceIn(5.dp.toPx(), (size.width - 5.dp.toPx()).coerceAtLeast(5.dp.toPx()))
-                                    drawCircle(color = accent.copy(alpha = 0.35f * knob), radius = 8.dp.toPx() * knob, center = Offset(x, centreY))
-                                    drawCircle(color = Color.White.copy(alpha = 0.95f * knob), radius = 4.dp.toPx() * knob, center = Offset(x, centreY))
-                                    drawCircle(color = Color.White.copy(alpha = 0.7f * knob), radius = 1.2.dp.toPx() * knob, center = Offset(x - 1.2.dp.toPx(), centreY - 1.2.dp.toPx()))
-                                }
-                            },
-                        )
-                        Text(
-                            "${liquidTime(positionMs)} / ${liquidTime(durationMs)}",
-                            color = Color.White.copy(alpha = 0.62f),
-                            style = MaterialTheme.typography.labelSmall,
-                            maxLines = 1,
-                        )
+                        // ODEON-FIX: the bar and the time share one 16 dp row (the time used to fall off the
+                        // bottom of the pill), and the bar can be clicked or dragged to seek.
+                        var scrub by remember { mutableStateOf<Float?>(null) }
+                        val shownFraction = scrub ?: fraction
+                        Row(
+                            Modifier.fillMaxWidth().height(16.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            val barHeight = if (custom.miniPlayerProgress == DesktopMiniProgress.FULL) 4.dp else 2.5.dp
+                            Box(
+                                Modifier
+                                    .weight(1f)
+                                    .fillMaxHeight()
+                                    .pointerInput(durationMs) {
+                                        detectTapGestures { offset ->
+                                            if (durationMs > 0L && size.width > 0) {
+                                                onSeek((offset.x / size.width * durationMs).toLong().coerceIn(0L, durationMs))
+                                            }
+                                        }
+                                    }
+                                    .pointerInput(durationMs) {
+                                        detectHorizontalDragGestures(
+                                            onDragStart = { offset -> if (size.width > 0) scrub = (offset.x / size.width).coerceIn(0f, 1f) },
+                                            onDragEnd = {
+                                                val target = scrub
+                                                if (target != null && durationMs > 0L) onSeek((target * durationMs).toLong())
+                                                scrub = null
+                                            },
+                                            onDragCancel = { scrub = null },
+                                            onHorizontalDrag = { change, _ ->
+                                                if (size.width > 0) scrub = (change.position.x / size.width).coerceIn(0f, 1f)
+                                            },
+                                        )
+                                    }
+                                    .drawBehind {
+                                        val bar = barHeight.toPx()
+                                        val centreY = size.height / 2f
+                                        val radius = bar / 2f
+                                        drawRoundRect(
+                                            color = Color.White.copy(alpha = 0.20f),
+                                            topLeft = Offset(0f, centreY - radius),
+                                            size = Size(size.width, bar),
+                                            cornerRadius = CornerRadius(radius, radius),
+                                        )
+                                        val filled = size.width * shownFraction
+                                        if (filled > 0f) {
+                                            drawRoundRect(
+                                                color = fillColor,
+                                                topLeft = Offset(0f, centreY - radius),
+                                                size = Size(filled, bar),
+                                                cornerRadius = CornerRadius(radius, radius),
+                                            )
+                                        }
+                                        // Knob while hovered or scrubbing.
+                                        val knob = maxOf(glow.value, if (scrub != null) 1f else 0f)
+                                        if (knob > 0.01f) {
+                                            val x = filled.coerceIn(5.dp.toPx(), (size.width - 5.dp.toPx()).coerceAtLeast(5.dp.toPx()))
+                                            drawCircle(color = accent.copy(alpha = 0.35f * knob), radius = 8.dp.toPx() * knob, center = Offset(x, centreY))
+                                            drawCircle(color = Color.White.copy(alpha = 0.95f * knob), radius = 4.dp.toPx() * knob, center = Offset(x, centreY))
+                                        }
+                                    },
+                            )
+                            Text(
+                                "${liquidTime(positionMs)} / ${liquidTime(durationMs)}",
+                                color = Color.White.copy(alpha = 0.62f),
+                                style = MaterialTheme.typography.labelSmall,
+                                maxLines = 1,
+                            )
+                        }
                     }
                 }
                 "previous" -> DesktopSpringButton(onClick = onPrevious, enabled = previousEnabled, size = 34.dp) {
@@ -550,7 +600,7 @@ internal fun DesktopLiquidPill(
             }
         }
         Row(
-            Modifier.fillMaxSize().padding(horizontal = 12.dp, vertical = 6.dp),
+            Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(4.dp),
         ) {

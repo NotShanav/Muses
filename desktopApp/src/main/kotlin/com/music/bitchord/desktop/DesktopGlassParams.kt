@@ -86,11 +86,11 @@ internal object DesktopGlassMath {
     /** Uniform names in the order [uniformsFor] writes them. Must match the SkSL declarations. */
     val UNIFORM_NAMES: Array<String> = arrayOf(
         "size", "radius", "bevel", "strength", "magnify", "dispersion", "frost",
-        "tint", "accent", "specular", "rim", "lightDir", "time",
+        "tint", "accent", "specular", "rim", "lightDir", "time", "origin",
     )
 
     /** Floats per uniform, parallel to [UNIFORM_NAMES]. */
-    val UNIFORM_WIDTHS: IntArray = intArrayOf(2, 1, 1, 1, 1, 1, 1, 4, 4, 1, 1, 2, 1)
+    val UNIFORM_WIDTHS: IntArray = intArrayOf(2, 1, 1, 1, 1, 1, 1, 4, 4, 1, 1, 2, 1, 2)
 
     /** Total floats in the block. */
     val UNIFORM_LENGTH: Int = UNIFORM_WIDTHS.sum()
@@ -142,6 +142,10 @@ internal object DesktopGlassMath {
         accent: Color,
         timeSec: Float,
         out: FloatArray = FloatArray(UNIFORM_LENGTH),
+        // The glass's position in the window, px. The shader uses it only if this Skia build hands it
+        // window coordinates instead of coordinates that start at the glass's own corner.
+        originX: Float = 0f,
+        originY: Float = 0f,
     ): FloatArray {
         require(out.size >= UNIFORM_LENGTH) { "uniform buffer too small: ${out.size} < $UNIFORM_LENGTH" }
         val p = params.validated()
@@ -170,6 +174,8 @@ internal object DesktopGlassMath {
         out[18] = lightDirX(p.lightAngleDeg)
         out[19] = lightDirY(p.lightAngleDeg)
         out[20] = if (timeSec.isNaN() || timeSec.isInfinite()) 0f else timeSec
+        out[21] = if (originX.isNaN() || originX.isInfinite()) 0f else originX
+        out[22] = if (originY.isNaN() || originY.isInfinite()) 0f else originY
         return out
     }
 }

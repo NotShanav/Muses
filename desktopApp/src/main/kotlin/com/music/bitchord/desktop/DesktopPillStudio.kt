@@ -53,9 +53,10 @@ internal enum class DesktopPillClickAction { OPEN_PLAYER, NOTHING }
 internal enum class DesktopPillSpinPause { STOP, EASE_TO_STOP, RETURN_TO_ZERO }
 @Serializable
 internal enum class DesktopPillShape { PILL, ROUNDED_RECTANGLE, SQUIRCLE, CUSTOM_RADIUS }
-// STUDIO G3 hook: which pill is drawn. LIQUID_GLASS falls back to CLASSIC when the shader is unavailable.
+// STUDIO G3 hook: which pill is drawn. LIQUID_GLASS = frosted pane plus the bending overlay (falls back to GLASS when the
+// shader is unavailable); GLASS = the frosted pane only; CLASSIC = the dark pill.
 @Serializable
-internal enum class DesktopPillMaterial { LIQUID_GLASS, CLASSIC }
+internal enum class DesktopPillMaterial { LIQUID_GLASS, GLASS, CLASSIC }
 
 /** Desktop-only zone layout and advanced pill styling. Defaults mirror the existing dock. */
 @Serializable
@@ -351,12 +352,13 @@ internal fun DesktopPillStudioPage(
                                 item { Text("Pill material", style = MaterialTheme.typography.titleSmall) }
                                 item { Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                                     FilterChip(selected = draft.pillMaterial == DesktopPillMaterial.LIQUID_GLASS, onClick = { edit { it.copy(pillMaterial = DesktopPillMaterial.LIQUID_GLASS, material = DesktopMiniPlayerMaterial.GLASS) } }, label = { Text("Liquid glass") })
+                                    FilterChip(selected = draft.pillMaterial == DesktopPillMaterial.GLASS, onClick = { edit { it.copy(pillMaterial = DesktopPillMaterial.GLASS, material = DesktopMiniPlayerMaterial.GLASS) } }, label = { Text("Glass") })
                                     FilterChip(selected = draft.pillMaterial == DesktopPillMaterial.CLASSIC, onClick = { edit { it.copy(pillMaterial = DesktopPillMaterial.CLASSIC) } }, label = { Text("Classic") })
                                 } }
                                 item {
                                     Text(
-                                        if (DesktopGlassShader.available) "The glass refracts what is inside the Muses window, not the desktop behind it. It needs the shader; if the shader fails, the Classic pill is used automatically."
-                                        else "The glass shader is not available here, so the Classic pill is used. Settings below still save.",
+                                        if (DesktopGlassShader.available) "Liquid glass bends the window behind the rim of the pill. Glass is the same frosted pane without the bending. Both keep the text readable; Classic is the dark pill. Refraction, bevel, magnify and dispersion only affect Liquid."
+                                        else "The bending shader is not available here, so Liquid shows as Glass (frosted). The sliders below still save.",
                                         color = DesktopSecondary, style = MaterialTheme.typography.bodySmall,
                                     )
                                 }

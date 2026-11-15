@@ -12,12 +12,21 @@ class DesktopLiquidPillTest {
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
 
     @Test
-    fun liquidIsUsedOnlyForGlassWithAWorkingShader() {
+    fun frostedPillIsUsedForGlassAndLiquidEvenWithoutTheShader() {
         assertTrue(desktopLiquidPillActive(DesktopPillMaterial.LIQUID_GLASS, DesktopMiniPlayerMaterial.GLASS, true))
-        assertFalse(desktopLiquidPillActive(DesktopPillMaterial.LIQUID_GLASS, DesktopMiniPlayerMaterial.GLASS, false))
+        assertTrue(desktopLiquidPillActive(DesktopPillMaterial.LIQUID_GLASS, DesktopMiniPlayerMaterial.GLASS, false))
+        assertTrue(desktopLiquidPillActive(DesktopPillMaterial.GLASS, DesktopMiniPlayerMaterial.GLASS, false))
         assertFalse(desktopLiquidPillActive(DesktopPillMaterial.CLASSIC, DesktopMiniPlayerMaterial.GLASS, true))
         assertFalse(desktopLiquidPillActive(DesktopPillMaterial.LIQUID_GLASS, DesktopMiniPlayerMaterial.SOLID, true))
         assertFalse(desktopLiquidPillActive(DesktopPillMaterial.LIQUID_GLASS, DesktopMiniPlayerMaterial.ACCENT, true))
+    }
+
+    @Test
+    fun theBendingOverlayNeedsLiquidAndAWorkingShader() {
+        assertTrue(desktopLiquidEdgeActive(DesktopPillMaterial.LIQUID_GLASS, true))
+        assertFalse(desktopLiquidEdgeActive(DesktopPillMaterial.LIQUID_GLASS, false))
+        assertFalse(desktopLiquidEdgeActive(DesktopPillMaterial.GLASS, true))
+        assertFalse(desktopLiquidEdgeActive(DesktopPillMaterial.CLASSIC, true))
     }
 
     @Test

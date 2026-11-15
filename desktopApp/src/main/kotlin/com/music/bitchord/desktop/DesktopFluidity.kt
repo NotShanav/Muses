@@ -102,6 +102,8 @@ internal class FluidPalette(
     val intensity: Float,
     /** UPGRADE M1: how much of the cover's colour each of colors[0..2] stands for (0..1, a missing colour is 0). */
     val shares: List<Float> = listOf(1f, 0f, 0f),
+    /** ODEON-FIX: 0..1 average lightness of the three colours; a light cover makes the backdrop darken itself behind the text. */
+    val brightness: Float = 0.4f,
 )
 
 private val FluidDefaultPalette = FluidPalette(
@@ -357,13 +359,18 @@ internal fun DesktopFluidBackdrop(
             }
         }
 
+        // ODEON-FIX: a light cover (white, cream, pastel) darkens the page behind the text, in step with the dissolve.
+        val brightFrom = fromPalette?.brightness ?: 0.3f
+        val brightTo = toPalette?.brightness ?: 0.3f
+        val brightness = if (dissolving) brightFrom * (1f - p) + brightTo * p else brightTo
+        val lightScrim = ((brightness - 0.55f) / 0.25f).coerceIn(0f, 1f) * 0.45f
         val top = if (translucent) 0.10f else 0.16f
         val bottom = if (translucent) 0.26f else 0.38f
         drawRect(
             brush = Brush.verticalGradient(
                 listOf(
-                    Color.Black.copy(alpha = (top * scrimStrength).coerceAtMost(0.9f)),
-                    Color.Black.copy(alpha = (bottom * scrimStrength).coerceAtMost(0.9f)),
+                    Color.Black.copy(alpha = (top * scrimStrength + lightScrim).coerceAtMost(0.9f)),
+                    Color.Black.copy(alpha = (bottom * scrimStrength + lightScrim).coerceAtMost(0.9f)),
                 ),
             ),
         )
@@ -384,10 +391,14 @@ private fun DrawScope.drawFluidGlow(
     if (alpha <= 0.002f) return
     drawCircle(
         brush = Brush.radialGradient(
+            // ODEON-FIX: every stop keeps the glow's own colour and only its alpha falls. Ending on
+            // Color.Transparent (black, alpha 0) pulled the edge towards black and drew visible rings.
             colorStops = arrayOf(
                 0f to color.copy(alpha = alpha),
-                0.45f to color.copy(alpha = alpha * 0.45f),
-                1f to Color.Transparent,
+                0.30f to color.copy(alpha = alpha * 0.78f),
+                0.55f to color.copy(alpha = alpha * 0.42f),
+                0.78f to color.copy(alpha = alpha * 0.14f),
+                1f to color.copy(alpha = 0f),
             ),
             center = centre,
             radius = radius,

@@ -3049,6 +3049,7 @@ fun BitChordDesktopApp() {
                             onMoreLyrics = { overlays.toggleSidePanel(DesktopSidePanel.LYRICS) },
                             onMoreQueue = { overlays.toggleSidePanel(DesktopSidePanel.QUEUE) },
                             onMoreOutput = { overlays.audioOutput = true },
+                            onSeek = ::seekPlayer, // ODEON-FIX: clickable progress bar
                         )
                     } else DesktopLegacyBottomChrome(
                         compact = compact,
@@ -4585,11 +4586,13 @@ internal fun DesktopFloatingMiniPlayer(
         DesktopArtworkShape.ROUNDED -> RoundedCornerShape(10.dp)
         DesktopArtworkShape.CIRCLE -> CircleShape
     }
-    val artSize = when (pill.artSize) {
+    val artSizeRaw = when (pill.artSize) {
         DesktopPillArtSize.SMALL -> 36.dp
         DesktopPillArtSize.MEDIUM -> (dockHeight - 24.dp).coerceIn(40.dp, 52.dp)
         DesktopPillArtSize.LARGE -> (dockHeight - 12.dp).coerceIn(48.dp, 64.dp)
     }
+    // ODEON-FIX: the artwork must fit inside the pill, with room from the rounded ends.
+    val artSize = minOf(artSizeRaw, dockHeight - 14.dp)
     val showArt = custom.miniPlayerArtwork && "artwork" in pill.zones.values.flatten() && "artwork" !in pill.hiddenElements && pill.artPlacement != DesktopPillArtPlacement.HIDDEN
     val showMetadata = custom.miniPlayerMetadata && "metadata" in pill.zones.values.flatten() && "metadata" !in pill.hiddenElements
     val spinAnim = remember { Animatable(0f) }
@@ -4633,7 +4636,7 @@ internal fun DesktopFloatingMiniPlayer(
                 alpha = entrance.value
                 translationY = (1f - entrance.value) * 14.dp.toPx()
             }
-            .padding(horizontal = 12.dp, vertical = 6.dp),
+            .padding(horizontal = 16.dp, vertical = 6.dp),
     ) {
         // Keep a controlled dark veil over the moving album palette so the title, time and
         // transport icons remain legible over bright artwork. The underlying glass still shows.

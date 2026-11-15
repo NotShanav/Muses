@@ -463,3 +463,26 @@ The latest Windows Actions log identified `HomeScreen.kt` importing `composed` f
 
 ### G5 CI fix 2
 - After fix 1 the main code and test code compiled. Tests: 400 run, 2 failed, both mine and both test-side: `DesktopGlassMathTest.uniformsForWritesTheBlockInOrder` (colour `near` checks, eps 1e-3) and `DesktopLiquidPillTest.mixIsAPlainBlend` (eps 1e-6). Cause: a Compose sRGB `Color` stores 8 bits per channel, so 0.5 reads back as 128/255 = 0.50196. Tolerances widened to 0.01 in those assertions; no production code changed. NOT re-run.
+
+## ODEON-FIX round (owner's test of S1 to G5): glass pill, Studio, seek bar, album colours
+### What the owner saw
+Liquid pill looked fully transparent with jumbled text; Studio sliders and preview did nothing visible; the progress line could not be clicked and the time was cut off; Classic pill artwork stuck out of the pill; backgrounds had rings (grey cover) and ignored whites, blacks and skin tones.
+### Did
+- **Pill is never empty any more.** New `DesktopGlassPane.kt` (`Modifier.glassPane`): Haze blur plus a dark/album tint, the same machinery the Classic pill uses. `DesktopLiquidPill` now draws this pane first; the refracting shader (`glassSurface`) became an overlay on top (`desktopLiquidEdgeActive` = Liquid material and a working shader). If the shader draws nothing or fails, the pill is still readable frosted glass.
+- **Three materials:** `DesktopPillMaterial { LIQUID_GLASS, GLASS, CLASSIC }`. Studio Material tab has three chips (Liquid glass / Glass / Classic) and updated help text. `desktopLiquidPillActive` is true for Liquid or Glass on the Glass background (no longer needs the shader). Tests updated.
+- **Shader:** probable cause of the invisible glass = it assumed its coordinates start at the glass's own corner (flagged as unverified in G2). Added an `origin` uniform (glass position in the window, px) and a rescue in the SkSL: if the incoming coordinate lies outside the glass box, the origin is subtracted (and added back when sampling). The shader now outputs only a rim ring (the bent scene), the specular light and the rim line; the interior is left to the frosted pane. Uniform block grew from 21 to 23 floats (`DesktopGlassMath`, test updated).
+- **Progress bar:** the pill has `onSeek: (Long) -> Unit` (wired to `::seekPlayer` in `DesktopApp.kt`); the bar can be clicked or dragged, shows a knob while scrubbing, and the time sits in the same 16 dp row (it was cut off at the bottom). Metadata block height is now title + artist + 16 dp.
+- **Artwork:** capped to `dockHeight - 14.dp` and horizontal padding 16 dp, in both Classic (`DesktopApp.kt`) and Liquid pills.
+- **Glass Lab:** draws `glassPane` + `glassSurface`, like the pill.
+- **Colours (palette v2, `DesktopAlbumPalette.kt` rewritten):** every sampled pixel counts. 4-bit RGB buckets are grouped into clusters in OKLab (distance 0.10); the three biggest clusters at least 0.16 apart (a slight chroma bias) become dominant/second/third; white is shown as soft light grey (OKLab L capped at 0.80), black as dark grey (floor 0.20), skin tones keep their warmth. Missing colours are tonal variants (hue +-8). `FluidPalette.brightness` (new) is the share-weighted lightness; the backdrop adds a black scrim of up to 45% for light covers.
+- **Rings:** radial gradient stops used to end in `Color.Transparent` (black, alpha 0), which pulls the edge towards black and draws rings. All stops now keep the glow colour and only the alpha falls (5 stops, smoother).
+- Palette tests rewritten for v2 (white+red, white+black+red, skin tone, grey, black and white, brightness, range, determinism).
+### Files
+New: `DesktopGlassPane.kt`. Changed: `DesktopGlassShader.kt`, `DesktopGlassSurface.kt`, `DesktopGlassParams.kt`, `DesktopGlassLab.kt`, `DesktopLiquidPill.kt`, `DesktopPillStudio.kt`, `DesktopFluidity.kt`, `DesktopAlbumPalette.kt`, `DesktopApp.kt` (two small edits marked `ODEON-FIX`). Tests: `DesktopGlassMathTest`, `DesktopLiquidPillTest`, `DesktopAlbumPaletteTest`.
+### Verified
+NOT compiled and tests NOT run here. Brackets balanced by script; tests hand-traced against the code (OKLab values worked through for white/red/black/peach/grey).
+### Unverified / next
+- Whether the coordinate rescue really fixes the Liquid overlay: check the Glass lab (Settings > Advanced) and the pill; with the rescue off the pill is still frosted glass.
+- No dither noise yet (rings should be gone from the gradient fix; if faint banding remains on dark grey covers, add a noise overlay).
+- Light covers: scrim formula `((brightness - 0.55) / 0.25) * 0.45`; tune by eye. `ALBUM_LIGHT_CAP` (0.80) is the whitest a glow may be.
+- Studio saved configs keep their old values (a saved Frost 1.0 / Blur 40 stays until Reset pill or a preset is applied).

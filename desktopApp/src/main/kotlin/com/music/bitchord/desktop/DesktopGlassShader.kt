@@ -24,7 +24,7 @@ internal object DesktopGlassShader {
 
     /**
      * Two children: `content` is the layer's own picture, `blurred` the same picture blurred.
-     * Coordinates are px inside the glass (0,0 is its top-left corner). Every uniform is used, so
+     * Coordinates are px inside the glass (0,0 is its top-left corner); `origin` rescues window coordinates. Every uniform is used, so
      * none is optimised away and every name set from Kotlin exists.
      */
     const val SKSL: String = """
@@ -43,6 +43,7 @@ uniform float specular;
 uniform float rim;
 uniform float2 lightDir;
 uniform float time;
+uniform float2 origin;
 
 float sdRoundRect(float2 p, float2 b, float r) {
   float2 q = abs(p) - b + r;
@@ -53,7 +54,14 @@ float2 keepInside(float2 uv) {
   return clamp(uv, float2(0.5), size - float2(0.5));
 }
 
-half4 main(float2 fc) {
+half4 main(float2 fcIn) {
+  // Normally fcIn runs 0..size inside the glass. If this Skia build hands over window coordinates
+  // instead, the point lies far outside that box; then take the glass's window position off.
+  float2 shift = float2(0.0);
+  if (fcIn.x < -2.0 || fcIn.y < -2.0 || fcIn.x > size.x + 2.0 || fcIn.y > size.y + 2.0) {
+    shift = origin;
+  }
+  float2 fc = fcIn - shift;
   float2 c = size * 0.5;
   float2 p = fc - c;
   float d = sdRoundRect(p, c, radius);
@@ -71,29 +79,30 @@ half4 main(float2 fc) {
   float2 n = g / max(length(g), 0.0001);
   float2 base = c + (fc - c) * (1.0 - magnify);
   float2 off = -n * strength * prof;
-  float2 uvR = keepInside(base + off * (1.0 + dispersion));
-  float2 uvG = keepInside(base + off);
-  float2 uvB = keepInside(base + off * (1.0 - dispersion));
+  float2 uvR = keepInside(base + off * (1.0 + dispersion)) + shift;
+  float2 uvG = keepInside(base + off) + shift;
+  float2 uvB = keepInside(base + off * (1.0 - dispersion)) + shift;
   float4 sr = float4(content.eval(uvR));
   float4 sg = float4(content.eval(uvG));
   float4 sb = float4(content.eval(uvB));
   float4 bl = float4(blurred.eval(uvG));
   float3 sharp = float3(sr.r, sg.g, sb.b);
-  float3 col = mix(sharp, bl.rgb, frost);
-  float backdropA = mix(sg.a, bl.a, frost);
-  col = mix(col, tint.rgb, tint.a);
-  col = mix(col, accent.rgb, accent.a * 0.35 * (0.4 + 0.6 * prof));
+  float3 col = mix(sharp, bl.rgb, frost * 0.6);
+  col = mix(col, tint.rgb, tint.a * 0.15);
+  col = mix(col, accent.rgb, accent.a * 0.30 * (0.4 + 0.6 * prof));
   float facing = max(dot(n, lightDir), 0.0);
   float back = max(dot(n, -lightDir), 0.0);
   float spec = (pow(facing, 3.0) * 0.9 + pow(back, 3.0) * 0.35) * pow(t, 2.0) * specular;
   float shimmer = 0.85 + 0.15 * sin(time * 0.9 + (fc.x / max(size.x, 1.0)) * 6.2831853);
   float edge = pow(t, 4.0) * rim * shimmer;
-  col += float3(spec) + float3(edge * 0.25);
   float top = clamp(1.0 - (fc.y / max(size.y, 1.0)) * 2.2, 0.0, 1.0);
-  col += float3(top * 0.06 * specular);
-  col = clamp(col, 0.0, 1.0);
-  float a = clamp(max(backdropA, tint.a), 0.0, 1.0) * cover;
-  return half4(half3(col * a), half(a));
+  float shine = clamp(spec + edge * 0.25 + top * 0.05 * specular, 0.0, 1.0);
+  // This layer is an overlay on a frosted pane that already carries the blur and the tint (the text
+  // stays readable whatever this does). It adds the bent scene only in the rim band, plus the light.
+  float ring = clamp(prof * 0.9, 0.0, 1.0) * clamp(sg.a, 0.0, 1.0);
+  float a = clamp(ring + shine * (1.0 - ring), 0.0, 1.0) * cover;
+  float3 c = clamp((col * ring + float3(shine * (1.0 - ring))) * cover, 0.0, 1.0);
+  return half4(half3(c), half(a));
 }
 """
 
@@ -140,6 +149,8 @@ half4 main(float2 fc) {
         accent: Color,
         timeSec: Float,
         density: Float = 1f,
+        originX: Float = 0f,
+        originY: Float = 0f,
     ): RenderEffect? {
         if (!available) return null
         if (widthPx < 1f || heightPx < 1f) return null
@@ -148,7 +159,7 @@ half4 main(float2 fc) {
                 val shader = compiled.getOrNull() ?: return null
                 val b = builder ?: RuntimeShaderBuilder(shader).also { builder = it }
                 val u = DesktopGlassMath.uniformsFor(
-                    params, widthPx, heightPx, radiusPx, density, tint, accent, timeSec, scratch,
+                    params, widthPx, heightPx, radiusPx, density, tint, accent, timeSec, scratch, originX, originY,
                 )
                 var at = 0
                 for (k in DesktopGlassMath.UNIFORM_NAMES.indices) {

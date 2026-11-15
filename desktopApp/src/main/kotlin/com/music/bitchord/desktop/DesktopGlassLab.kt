@@ -147,6 +147,7 @@ internal fun DesktopGlassLabPage(artworkUrl: String?, onDismiss: () -> Unit) {
                                 Modifier
                                     .align(Alignment.Center)
                                     .size(LabBarWidth, LabBarHeight)
+                                    .glassPane(RoundedCornerShape(LabBarHeight / 2), params, LabTint, accent)
                                     .glassSurface(RoundedCornerShape(LabBarHeight / 2), params, LabTint, accent),
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.Center,

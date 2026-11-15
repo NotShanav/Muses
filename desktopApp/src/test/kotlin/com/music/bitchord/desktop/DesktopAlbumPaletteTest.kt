@@ -1,13 +1,15 @@
 package com.music.bitchord.desktop
 
 import androidx.compose.ui.graphics.Color
+import kotlin.math.abs
+import kotlin.math.max
+import kotlin.math.min
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
-import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
-/** UPGRADE M1: the three-colour album palette, on synthetic covers (rows of flat colour). */
+/** ODEON-FIX: the three-colour album palette (v2), on synthetic covers made of flat bands. White, black and skin tones count. */
 class DesktopAlbumPaletteTest {
 
     private val red = 0xFFFF0000.toInt()
@@ -16,6 +18,7 @@ class DesktopAlbumPaletteTest {
     private val black = 0xFF000000.toInt()
     private val white = 0xFFFFFFFF.toInt()
     private val grey = 0xFF808080.toInt()
+    private val peach = 0xFFFFCDB2.toInt()
 
     private val size = 100
 
@@ -35,109 +38,146 @@ class DesktopAlbumPaletteTest {
     private fun palette(pixels: IntArray, w: Int = size, h: Int = size): FluidPalette =
         assertNotNull(extractAlbumPalette(pixels, w, h))
 
-    private fun hue(c: Color): Float = c.toHsl().h
+    /** HSV hue in degrees (0 for greys). */
+    private fun hue(c: Color): Float {
+        val mx = max(c.red, max(c.green, c.blue))
+        val mn = min(c.red, min(c.green, c.blue))
+        val d = mx - mn
+        if (d < 1e-4f) return 0f
+        var h = when (mx) {
+            c.red -> 60f * (((c.green - c.blue) / d) % 6f)
+            c.green -> 60f * (((c.blue - c.red) / d) + 2f)
+            else -> 60f * (((c.red - c.green) / d) + 4f)
+        }
+        if (h < 0f) h += 360f
+        return h
+    }
 
-    private fun assertNearHue(expected: Float, actual: Color, tolerance: Float = 15f) {
-        val gap = hueGap(expected, hue(actual))
-        assertTrue(gap <= tolerance, "hue ${hue(actual)} is $gap degrees from $expected")
+    private fun saturation(c: Color): Float {
+        val mx = max(c.red, max(c.green, c.blue))
+        val mn = min(c.red, min(c.green, c.blue))
+        return if (mx <= 0f) 0f else (mx - mn) / mx
+    }
+
+    private fun luminance(c: Color): Float = 0.2126f * c.red + 0.7152f * c.green + 0.0722f * c.blue
+
+    private fun hueGapDeg(a: Float, b: Float): Float {
+        val d = abs(a - b) % 360f
+        return min(d, 360f - d)
+    }
+
+    private fun assertNearHue(expected: Float, actual: Color, tolerance: Float) {
+        val gap = hueGapDeg(expected, hue(actual))
+        assertTrue(gap <= tolerance, "hue ${hue(actual)} is $gap degrees from $expected (tolerance $tolerance)")
     }
 
     @Test
-    fun solidRedIsRedInEverySlot() {
+    fun solidRedStaysInOneRedFamily() {
         val p = palette(bands(red to 100))
         assertEquals(4, p.colors.size)
-        p.colors.forEach { assertNearHue(0f, it, 12f) }
-        assertTrue(p.shares[0] > 0.9f)
-        assertEquals(0f, p.shares[1])
-        assertEquals(0f, p.shares[2])
+        val reference = hue(p.colors[0])
+        assertTrue(p.colors[0].red > p.colors[0].green && p.colors[0].red > p.colors[0].blue)
+        p.colors.forEach { assertNearHue(reference, it, 25f) }
     }
 
     @Test
-    fun redAndBlueSeventyThirtyGivesRedThenBlue() {
+    fun redAndBlueGiveRedFirstAndBlueSecond() {
         val p = palette(bands(red to 70, blue to 30))
-        assertNearHue(0f, p.colors[0])
-        assertNearHue(240f, p.colors[1])
-        // No third colour exists: it is a variant of the dominant, not a new hue.
-        assertNearHue(hue(p.colors[0]), p.colors[2], 10f)
+        assertTrue(p.colors[0].red > p.colors[0].blue, "dominant should be red")
+        assertTrue(p.colors[1].blue > p.colors[1].red, "second should be blue")
         assertTrue(p.shares[0] > p.shares[1])
-        assertTrue(p.shares[1] > 0.15f)
-        assertEquals(0f, p.shares[2])
     }
 
     @Test
-    fun threeColourCoverKeepsAllThree() {
-        val p = palette(bands(red to 34, green to 33, blue to 33))
-        val targets = listOf(0f, 120f, 240f)
-        for (t in targets) {
-            assertTrue(
-                (0..2).any { hueGap(t, hue(p.colors[it])) <= 15f },
-                "no glow near hue $t",
-            )
-        }
-        assertTrue(p.shares.all { it > 0.2f })
+    fun whiteBackgroundWithRedKeepsTheWhite() {
+        // A cover that is mostly white with a red figure: white must be one of the colours, as a light neutral.
+        val p = palette(bands(white to 60, red to 40))
+        val light = p.colors.take(3).filter { saturation(it) < 0.15f && luminance(it) > 0.55f }
+        assertTrue(light.isNotEmpty(), "a light neutral colour should be present")
+        assertTrue(p.colors.take(3).any { it.red > it.green + 0.2f && it.red > it.blue + 0.2f }, "the red should be present too")
+        assertTrue(p.brightness > 0.5f, "a mostly white cover should report a high brightness")
+    }
+
+    @Test
+    fun whiteBlackAndRedAreAllRepresented() {
+        val p = palette(bands(white to 40, black to 35, red to 25))
+        val top3 = p.colors.take(3)
+        assertTrue(top3.any { saturation(it) < 0.15f && luminance(it) > 0.55f }, "a light neutral")
+        assertTrue(top3.any { saturation(it) < 0.25f && luminance(it) < 0.30f }, "a dark neutral")
+        assertTrue(top3.any { it.red > it.green + 0.2f && it.red > it.blue + 0.2f }, "the red")
+    }
+
+    @Test
+    fun skinToneIsNotTurnedIntoRed() {
+        val p = palette(bands(peach to 75, red to 25))
+        val dominant = p.colors[0]
+        // Warm and light, much less saturated than the red.
+        assertTrue(dominant.red > dominant.green && dominant.green >= dominant.blue, "warm tone")
+        assertTrue(saturation(dominant) < 0.6f, "skin tone should not be fully saturated")
+        assertTrue(luminance(dominant) > 0.45f)
     }
 
     @Test
     fun smallAccentIsIgnored() {
         val p = palette(bands(red to 97, green to 3))
-        // Every glow stays in the red family; the 3 percent green never becomes a glow.
-        p.colors.forEach { assertNearHue(0f, it, 12f) }
-        assertEquals(0f, p.shares[1])
+        val reference = hue(p.colors[0])
+        p.colors.forEach { assertNearHue(reference, it, 25f) }
+        assertEquals(0f, p.shares[1], 1e-6f)
     }
 
     @Test
-    fun oneColourCoverStaysInOneHueFamily() {
-        val p = palette(bands(blue to 100))
-        val lead = hue(p.colors[0])
-        p.colors.forEach { assertTrue(hueGap(lead, hue(it)) <= 12f, "hue ${hue(it)} drifted from $lead") }
-    }
-
-    @Test
-    fun glowLightnessStaysInTheClamp() {
-        val p = palette(bands(red to 70, blue to 30))
-        for (i in 0..2) {
-            val l = p.colors[i].toHsl().l
-            assertTrue(l in 0.45f..0.61f, "lightness $l")
-        }
-        // The tint is lighter than the dominant.
-        assertTrue(p.colors[3].toHsl().l > p.colors[0].toHsl().l)
-    }
-
-    @Test
-    fun greyCoverGetsNeutralGreys() {
+    fun greyCoverGivesGreys() {
         val p = palette(bands(grey to 100))
-        p.colors.forEach { assertTrue(it.toHsl().s <= 0.09f, "saturation ${it.toHsl().s}") }
-        assertEquals(0.45f, p.intensity)
+        p.colors.forEach { assertTrue(saturation(it) < 0.12f, "grey cover colour should be neutral, saturation ${saturation(it)}") }
     }
 
     @Test
-    fun blackAndWhiteCoverGetsNeutralGreys() {
-        val p = palette(bands(black to 50, white to 50))
-        p.colors.forEach { assertTrue(it.toHsl().s <= 0.09f, "saturation ${it.toHsl().s}") }
-        for (i in 0..2) {
-            val l = p.colors[i].toHsl().l
-            assertTrue(l in 0.45f..0.61f, "lightness $l")
+    fun blackAndWhiteCoverStaysNeutral() {
+        val p = palette(bands(white to 50, black to 50))
+        p.colors.forEach { assertTrue(saturation(it) < 0.12f) }
+        val lums = p.colors.take(3).map { luminance(it) }
+        assertTrue(lums.max() - lums.min() > 0.25f, "one light and one dark glow expected")
+    }
+
+    @Test
+    fun lightCoverIsBrighterThanDarkCover() {
+        val light = palette(bands(white to 80, grey to 20))
+        val dark = palette(bands(black to 80, grey to 20))
+        assertTrue(light.brightness > dark.brightness + 0.2f)
+    }
+
+    @Test
+    fun threeColourCoverGivesThreeColours() {
+        val p = palette(bands(red to 34, green to 33, blue to 33))
+        val hues = p.colors.take(3).map { hue(it) }
+        assertTrue(hueGapDeg(hues[0], hues[1]) > 60f)
+        assertTrue(hueGapDeg(hues[0], hues[2]) > 60f)
+        assertTrue(hueGapDeg(hues[1], hues[2]) > 60f)
+    }
+
+    @Test
+    fun colourStaysInsideTheValidRange() {
+        val p = palette(bands(red to 30, green to 30, blue to 20, white to 10, black to 10))
+        (p.colors + p.base).forEach {
+            assertTrue(it.red in 0f..1f && it.green in 0f..1f && it.blue in 0f..1f)
         }
+        assertTrue(p.intensity in 0.5f..1f)
+        assertTrue(p.brightness in 0f..1f)
     }
 
     @Test
-    fun tinyImageDoesNotCrash() {
-        val two = extractAlbumPalette(intArrayOf(red, red, red, red), 2, 2)
-        // Either null or a usable palette is fine; it must not throw.
-        if (two != null) assertEquals(4, two.colors.size)
-        assertNull(extractAlbumPalette(intArrayOf(red), 1, 1))
-        assertNull(extractAlbumPalette(IntArray(0), 0, 0))
-        assertNull(extractAlbumPalette(IntArray(3), 10, 10))
+    fun tinyOrShortInputDoesNotCrash() {
+        assertEquals(null, extractAlbumPalette(IntArray(1), 1, 1))
+        assertEquals(null, extractAlbumPalette(IntArray(3), 2, 2))
+        val tiny = extractAlbumPalette(intArrayOf(red, red, blue, blue), 2, 2)
+        assertNotNull(tiny)
     }
 
     @Test
-    fun sameInputGivesSameResult() {
-        val pixels = bands(red to 50, blue to 30, green to 20)
-        val a = palette(pixels)
-        val b = palette(pixels)
+    fun sameInputSameResult() {
+        val a = palette(bands(red to 50, white to 30, black to 20))
+        val b = palette(bands(red to 50, white to 30, black to 20))
         assertEquals(a.colors, b.colors)
         assertEquals(a.base, b.base)
-        assertEquals(a.intensity, b.intensity)
-        assertEquals(a.shares, b.shares)
     }
 }

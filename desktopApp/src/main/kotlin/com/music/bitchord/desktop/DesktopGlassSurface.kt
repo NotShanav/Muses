@@ -191,6 +191,8 @@ private class GlassSurfaceHolder {
     var keyHeight = 0f
     var keyRadius = 0f
     var keyDensity = 0f
+    var keyRootX = Float.NaN
+    var keyRootY = Float.NaN
 }
 
 /**
@@ -216,7 +218,9 @@ internal fun Modifier.glassSurface(
     val state = LocalDesktopGlass.current
     val reduceBlur by DesktopAppearanceSettings.reduceDynamicBlur.collectAsState()
     if (state == null || reduceBlur || !DesktopGlassShader.available) {
-        return this.desktopBarGlass(shape, fallbackRim)
+        // ODEON-FIX: this is only the refracting overlay. Without it the pane under it (glassPane) is all
+        // there is, which is still readable frosted glass; it is never an empty hole.
+        return this
     }
     DisposableEffect(state) {
         state.acquire()
@@ -255,16 +259,16 @@ internal fun Modifier.glassSurface(
                 }
                 holder.effect = null
             }
-            val smoke = tint.copy(alpha = max(params.tintAlpha, 0.55f))
             val ready = state.hasAnySource
             val effect = if (ready) {
                 val same = holder.effect != null && holder.keyParams == params && holder.keyTint == tint &&
                     holder.keyAccent == accent && holder.keyTime == time && holder.keyWidth == width &&
-                    holder.keyHeight == height && holder.keyRadius == holder.radius && holder.keyDensity == density
+                    holder.keyHeight == height && holder.keyRadius == holder.radius && holder.keyDensity == density &&
+                    holder.keyRootX == holder.rootX && holder.keyRootY == holder.rootY
                 if (same) {
                     holder.effect
                 } else {
-                    DesktopGlassShader.effect(params, width, height, holder.radius, tint, accent, time, density)
+                    DesktopGlassShader.effect(params, width, height, holder.radius, tint, accent, time, density, holder.rootX, holder.rootY)
                         .also {
                             holder.effect = it
                             holder.keyParams = params
@@ -275,15 +279,16 @@ internal fun Modifier.glassSurface(
                             holder.keyHeight = height
                             holder.keyRadius = holder.radius
                             holder.keyDensity = density
+                            holder.keyRootX = holder.rootX
+                            holder.keyRootY = holder.rootY
                         }
                 }
             } else {
                 null
             }
             if (effect == null) {
-                // Not recorded yet, or the shader failed this frame (which also flips `available`,
-                // so the next composition is the classic pane): a plain smoked fill, never a hole.
-                holder.outline?.let { drawOutline(it, smoke) }
+                // Not recorded yet, or the shader failed this frame (which also flips `available`).
+                // Only the overlay is missing; the frosted pane under it is still there.
                 drawContent()
                 return@drawWithContent
             }

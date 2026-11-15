@@ -71,7 +71,7 @@ class DesktopGlassMathTest {
     @Test
     fun uniformLayoutIsConsistent() {
         assertEquals(DesktopGlassMath.UNIFORM_NAMES.size, DesktopGlassMath.UNIFORM_WIDTHS.size)
-        assertEquals(21, DesktopGlassMath.UNIFORM_LENGTH)
+        assertEquals(23, DesktopGlassMath.UNIFORM_LENGTH)
         assertTrue(DesktopGlassMath.UNIFORM_WIDTHS.all { it == 1 || it == 2 || it == 4 })
         assertEquals(DesktopGlassMath.UNIFORM_NAMES.size, DesktopGlassMath.UNIFORM_NAMES.toSet().size)
     }
