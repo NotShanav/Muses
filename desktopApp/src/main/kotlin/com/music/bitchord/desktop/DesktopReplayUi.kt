@@ -125,7 +125,7 @@ internal fun DesktopReplayPage(
                             holder = holder,
                             memberSince = summary.memberSince(),
                             onClick = {},
-                            modifier = Modifier.width(300.dp),
+                            modifier = Modifier.width(300.dp.fitWindow()), // 360 T2 hook
                         )
                     }
                 }

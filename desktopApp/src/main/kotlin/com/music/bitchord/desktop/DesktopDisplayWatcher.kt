@@ -96,6 +96,38 @@ internal class DesktopDisplayWatcher(
         }.onFailure { DesktopTrackLog.log("display: minimum size failed: ${it.message}") }
     }
 
+    private fun touchPresent(): Boolean = DesktopDisplayWatch.digitizerPresent(DesktopWindowsFrame.postureFlags())
+
+    /** Pushes the window's size in dp, its shape and the touch flag to [DesktopDisplayWatch.info]. */
+    fun publishInfo() {
+        runCatching {
+            val scale = screen()?.scale ?: 1.0
+            val insets = window.insets
+            val w = window.width - insets.left - insets.right
+            val h = window.height - insets.top - insets.bottom
+            DesktopDisplayWatch.publish(
+                DesktopDisplayWatch.toDp(w, scale),
+                DesktopDisplayWatch.toDp(h, scale),
+                touchPresent(),
+            )
+        }.onFailure { DesktopTrackLog.log("display: publish failed: ${it.message}") }
+    }
+
+    /** One line in desktop.log with everything a rotation or scale bug needs. */
+    fun logState(reason: String) {
+        runCatching {
+            val screen = screen()
+            val info = DesktopDisplayWatch.info.value
+            DesktopTrackLog.log(
+                "display[$reason]: window=${window.bounds} placement=${state.placement} " +
+                    "screen=${screen?.let { window.graphicsConfiguration.bounds }} work=${screen?.work} " +
+                    "scale=${screen?.scale} native=${DesktopWindowsFrame.workArea()?.toList()} " +
+                    "dp=${info.widthDp}x${info.heightDp} portrait=${info.isPortrait} touch=${info.isTouchLikely} " +
+                    "min=${window.minimumSize}",
+            )
+        }
+    }
+
     /** Re-reads scale and work area, fixes the minimum, brings the window fully on screen and repaints. */
     private fun adapt() {
         val screen = screen() ?: return
@@ -127,6 +159,8 @@ internal class DesktopDisplayWatcher(
             }
         }
         refresh()
+        publishInfo()
+        logState("adapt")
     }
 
     /** Brings the window inside its screen now; for the opening size, which may not fit a portrait screen. */
@@ -154,8 +188,28 @@ internal class DesktopDisplayWatcher(
 
     /** Runs until cancelled; start it from the window's coroutine scope. */
     suspend fun watch() {
-        var seen = signature()
-        var posture: Int? = null
+        val seen = signature()
+        val posture: Int? = null
+        val lastNativeSize = -1L
+        val resizeListener = object : java.awt.event.ComponentAdapter() {
+            override fun componentResized(e: java.awt.event.ComponentEvent?) {
+                publishInfo()
+            }
+        }
+        window.addComponentListener(resizeListener)
+        publishInfo()
+        logState("start")
+        try {
+            watchLoop(seen, posture, lastNativeSize)
+        } finally {
+            runCatching { window.removeComponentListener(resizeListener) }
+        }
+    }
+
+    private suspend fun watchLoop(initial: Signature, initialPosture: Int?, initialNativeSize: Long) {
+        var seen = initial
+        var posture = initialPosture
+        var lastNativeSize = initialNativeSize
         while (true) {
             delay(POLL_MS)
             runCatching {
@@ -163,6 +217,17 @@ internal class DesktopDisplayWatcher(
                 if (flags != posture) {
                     posture = flags
                     DesktopTouchSettings.setPosture(DesktopTouchPolicy.postureFromFlags(flags))
+                    publishInfo()
+                    DesktopTrackLog.log("display: posture flags=$flags")
+                }
+                // WM_SIZE seen by the native frame: [counter, type, left, top, right, bottom].
+                val size = DesktopWindowsFrame.lastSize()
+                if (size != null && size.size >= 6 && size[0].toLong() != lastNativeSize) {
+                    lastNativeSize = size[0].toLong()
+                    DesktopTrackLog.log(
+                        "native WM_SIZE type=${DesktopWindowsFrame.sizeTypeName(size[1])} " +
+                            "rect=[${size[2]},${size[3]},${size[4]},${size[5]}]",
+                    )
                 }
             }
             var current = signature()

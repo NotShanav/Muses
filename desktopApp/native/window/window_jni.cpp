@@ -15,6 +15,7 @@
 #include <atomic>
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
 #include <cwchar>
 #include <cwctype>
 #include <cstring>
@@ -77,6 +78,14 @@ int resize_border(HWND window, bool horizontal) {
 // Java on the window thread in the middle of a message, and the poll costs one atomic read.
 std::atomic<long long> g_display_generation{0};
 std::atomic<long long> g_posture_generation{0};
+// 360 T1: the last WM_SIZE (counter, type, window rect) for desktop.log; polled from Kotlin.
+std::atomic<int> g_size_counter{0};
+std::atomic<int> g_size_type{0};
+std::atomic<int> g_size_rect[4] = {};
+// How many times the maximize fix ran for the current maximize; capped so it can never loop.
+std::atomic<int> g_fix_attempts{0};
+// Posted to ourselves after a maximize that did not end up on the work area; see frame_proc.
+constexpr UINT WM_BITCHORD_FIXMAX = WM_APP + 0x43;
 // The backdrop last asked for, so a refresh can put the same frame margins back.
 std::atomic<int> g_backdrop_kind{0};
 
@@ -199,6 +208,46 @@ LRESULT CALLBACK frame_proc(HWND window, UINT message, WPARAM wparam, LPARAM lpa
             if (info->ptMaxTrackSize.y < height) info->ptMaxTrackSize.y = height;
         }
         return handled;
+    }
+
+    if (message == WM_SIZE) {
+        const LRESULT handled = call_original(window, message, wparam, lparam);
+        RECT rect{};
+        if (GetWindowRect(window, &rect) != FALSE) {
+            g_size_type.store(static_cast<int>(wparam));
+            g_size_rect[0].store(rect.left);
+            g_size_rect[1].store(rect.top);
+            g_size_rect[2].store(rect.right);
+            g_size_rect[3].store(rect.bottom);
+            g_size_counter.fetch_add(1);
+            // Snap-to-top and maximize must fill the work area of this monitor. If they stopped
+            // short (a stale rect, a rotated monitor), say so once and let the posted message fix it.
+            if (wparam == SIZE_MAXIMIZED) {
+                PostMessageW(window, WM_BITCHORD_FIXMAX, 0, 0);
+            } else {
+                g_fix_attempts.store(0);
+            }
+        }
+        return handled;
+    }
+
+    if (message == WM_BITCHORD_FIXMAX) {
+        if (IsZoomed(window)) {
+            RECT work{}, rect{};
+            if (work_area_of(window, &work, nullptr) && GetWindowRect(window, &rect) != FALSE) {
+                constexpr LONG tolerance = 2;
+                const bool off = std::labs(rect.left - work.left) > tolerance ||
+                    std::labs(rect.top - work.top) > tolerance ||
+                    std::labs(rect.right - work.right) > tolerance ||
+                    std::labs(rect.bottom - work.bottom) > tolerance;
+                if (off && g_fix_attempts.fetch_add(1) < 2) {
+                    SetWindowPos(
+                        window, nullptr, work.left, work.top, work.right - work.left,
+                        work.bottom - work.top, SWP_NOZORDER | SWP_NOACTIVATE);
+                }
+            }
+        }
+        return 0;
     }
 
     if (message == WM_DISPLAYCHANGE || message == WM_DPICHANGED || message == WM_SETTINGCHANGE) {
@@ -844,6 +893,16 @@ Java_com_music_bitchord_desktop_DesktopWindowsFrame_nativeToggleMaximize(JNIEnv*
     if (window == nullptr || !IsWindow(window)) return JNI_FALSE;
     return send_system_command(IsZoomed(window) ? SC_RESTORE : SC_MAXIMIZE)
         ? JNI_TRUE : JNI_FALSE;
+}
+
+JNIEXPORT jintArray JNICALL
+Java_com_music_bitchord_desktop_DesktopWindowsFrame_nativeLastSize(JNIEnv* env, jclass) {
+    jint values[6] = {
+        g_size_counter.load(), g_size_type.load(), g_size_rect[0].load(),
+        g_size_rect[1].load(), g_size_rect[2].load(), g_size_rect[3].load()};
+    jintArray result = env->NewIntArray(6);
+    if (result != nullptr) env->SetIntArrayRegion(result, 0, 6, values);
+    return result;
 }
 
 JNIEXPORT jlong JNICALL

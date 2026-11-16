@@ -1471,10 +1471,28 @@ fun NowPlayingScreen(
     val onVolumeChange: (Float) -> Unit = volume::drag
     val onVolumeChangeFinished: () -> Unit = volume::release
 
+    // 360 T5 hook: a desktop window that is portrait but wider than a phone
+    // widens the column, the sleeve and the lyric type. Off (and exactly the
+    // old numbers) for every host that keeps PlayerHost's defaults, Android included.
+    val wide = remember(
+        PlayerPlatform.host.widePortraitLayout,
+        PlayerPlatform.host.maxContentWidth,
+        windowWidth,
+        windowHeight,
+    ) {
+        PlayerWideLayout.of(
+            hostWide = PlayerPlatform.host.widePortraitLayout,
+            hostMaxWidth = PlayerPlatform.host.maxContentWidth,
+            windowWidth = windowWidth,
+            windowHeight = windowHeight,
+        )
+    }
+
     // Lyrics, output and queue, with the output name under them — the row both
     // layouts end on, and the only thing in the landscape player's left column
     // besides the sleeve.
     val playerActions: @Composable () -> Unit = {
+        val actionRow: @Composable () -> Unit = {
         PlayerActionRow(
             lyricsOpen = lyricsOpen,
             queueOpen = queueOpen,
@@ -1490,6 +1508,14 @@ fun NowPlayingScreen(
             onListenTogether = onListenTogether,
             onOpenListenTogetherMembers = openListenTogetherMembers,
         )
+        }
+        // 360 T5 hook: in the wide layout the row is held to a comfortable width
+        // so the glyphs, the capsule and the caption read as one group.
+        if (wide.active) {
+            Box(Modifier.widthIn(max = wide.actionRowMax)) { actionRow() }
+        } else {
+            actionRow()
+        }
         // Keep the current output caption visible in every state.
         Spacer(Modifier.height(18.dp))
         Box(
@@ -1997,6 +2023,8 @@ fun NowPlayingScreen(
                                 picked = lyricPicker.picks,
                                 onPickLine = lyricPicker.pick,
                                 onTogglePick = lyricPicker.toggle,
+                                typeScale = wide.lyricScale, // 360 T5 hook
+                                wideLayout = wide.active, // 360 T5 hook
                                 modifier = Modifier.fillMaxSize(),
                             )
                         }
@@ -2493,7 +2521,7 @@ fun NowPlayingScreen(
             BoxWithConstraints(
                 modifier = Modifier
                     .weight(1f)
-                    .widthIn(max = PLAYER_MAX_WIDTH)
+                    .widthIn(max = wide.columnMax) // 360 T5 hook
                     .fillMaxWidth()
                     .padding(top = ART_BOX_TOP_PAD, bottom = 18.dp),
             ) {
@@ -2525,7 +2553,11 @@ fun NowPlayingScreen(
                 // over once the credits row and the gap above it have had
                 // theirs. Sizing it off the width alone is what pushed the
                 // credits down across the scrubber on anything but a phone.
-                val wantArt = minOf(maxWidth, roomy - ART_TITLE_GAP - HEADER_HEIGHT)
+                // 360 T5 hook: wide layout also keeps the sleeve under a share of the window height.
+                val wantArt = minOf(
+                    minOf(maxWidth, roomy - ART_TITLE_GAP - HEADER_HEIGHT),
+                    wide.artworkCap,
+                )
                 // Held to what the box has actually got, for the single frame it
                 // takes the gaps below to catch up with a change in their own
                 // height: a sleeve a few dp under for one frame is a better
@@ -2578,7 +2610,8 @@ fun NowPlayingScreen(
                 if (!lyricsOpen && !queueOpen && !queueDragging && collapseAtRest && controlDeckIsMeasured) {
                     val target = with(density) {
                         val half = slack
-                            .coerceAtMost(CONTROL_GAP_SPREAD_MAX * 2)
+                            // 360 T5 hook: a tall wide window may spread the controls further.
+                            .coerceAtMost(if (wide.active) wide.spreadMax else CONTROL_GAP_SPREAD_MAX * 2)
                             .toPx()
                             .div(2f)
                             .roundToInt()
@@ -3318,6 +3351,8 @@ fun NowPlayingScreen(
                                 picked = lyricPicker.picks,
                                 onPickLine = lyricPicker.pick,
                                 onTogglePick = lyricPicker.toggle,
+                                typeScale = wide.lyricScale, // 360 T5 hook
+                                wideLayout = wide.active, // 360 T5 hook
                                 modifier = Modifier.fillMaxSize(),
                             )
                         }
@@ -3475,7 +3510,7 @@ fun NowPlayingScreen(
             ) {
             Column(
                 modifier = Modifier
-                    .widthIn(max = PLAYER_MAX_WIDTH)
+                    .widthIn(max = wide.columnMax) // 360 T5 hook
                     .fillMaxWidth(),
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {

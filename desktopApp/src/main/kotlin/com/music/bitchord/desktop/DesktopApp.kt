@@ -4026,7 +4026,7 @@ fun BitChordDesktopApp() {
                                                 holder = replayHolder,
                                                 memberSince = replaySummary.memberSince(),
                                                 onClick = { overlays.replay = true },
-                                                modifier = Modifier.width(300.dp),
+                                                modifier = Modifier.width(300.dp.fitWindow()), // 360 T2 hook
                                             )
                                         }
                                     }
@@ -4141,7 +4141,7 @@ private fun DesktopTopBar(
     // menu, and the search field takes the strip while it is open.
     val windowWidth = rememberWindowWidthDp()
     val narrow = DesktopDisplayGeometry.isNarrow(windowWidth.value)
-    val buttonSize = 34.dp.forTouch()
+    val buttonSize = DesktopAdaptiveMath.topBarTarget(LocalDesktopWindowClass.current, 34f).dp.forTouch() // 360 T2 hook
     val captionReserve = if (inlineCaption) 76.dp else 0.dp
     val searchWidth by animateDpAsState(
         targetValue = if (searchOpen) {
@@ -4174,7 +4174,7 @@ private fun DesktopTopBar(
                 horizontalArrangement = Arrangement.spacedBy(if (narrow) 4.dp else 8.dp),
             ) {
                 if (inlineCaption) DesktopWindowButtons()
-                if (!narrow && destination == DesktopDestination.LISTEN_NOW) DesktopSpringButton(onClick = onOpenHomeSections, size = 34.dp) {
+                if (!narrow && destination == DesktopDestination.LISTEN_NOW) DesktopSpringButton(onClick = onOpenHomeSections, size = buttonSize) {
                     Icon(Icons.Rounded.Tune, "Customise Home", tint = DesktopSecondary, modifier = Modifier.size(19.dp))
                 }
                 Box(Modifier.height(40.dp.forTouch())) {
@@ -4199,16 +4199,16 @@ private fun DesktopTopBar(
                     }
                 }
                 Spacer(Modifier.weight(1f))
-                if (!narrow) DesktopSpringButton(onClick = common.onBack, enabled = common.canGoBack, size = 34.dp) {
+                if (!narrow) DesktopSpringButton(onClick = common.onBack, enabled = common.canGoBack, size = buttonSize) {
                     Icon(Icons.Rounded.ArrowBack, "Back", tint = if (common.canGoBack) Color.White else DesktopSecondary.copy(alpha = 0.4f))
                 }
                 DesktopSpringButton(
                     onClick = { searchOpen = !searchOpen; if (searchOpen) onDestinationSelected(DesktopDestination.SEARCH) },
-                    size = 34.dp,
+                    size = buttonSize,
                 ) {
                     Icon(if (searchOpen) Icons.Rounded.Close else BitChordIcons.Search, if (searchOpen) "Close search" else "Search", tint = if (searchOpen) Color.White else DesktopSecondary, modifier = Modifier.size(19.dp))
                 }
-                if (!narrow) DesktopSpringButton(onClick = common.onForward, enabled = common.canGoForward, size = 34.dp) {
+                if (!narrow) DesktopSpringButton(onClick = common.onForward, enabled = common.canGoForward, size = buttonSize) {
                     Icon(Icons.Rounded.ArrowForward, "Forward", tint = if (common.canGoForward) Color.White else DesktopSecondary.copy(alpha = 0.4f))
                 }
                 Box {
@@ -4283,7 +4283,7 @@ private fun DesktopLegacyTopBar(common: DesktopShellCallbacks, compact: Boolean)
                     }
                     Spacer(Modifier.weight(1f))
                     Box(
-                        Modifier.widthIn(min = 220.dp, max = 420.dp).weight(1f).height(46.dp)
+                        Modifier.widthIn(min = 96.dp, max = 420.dp).weight(1f).height(46.dp) // 360 T2 hook: min was 220 dp
                             .clip(RoundedCornerShape(6.dp)).desktopBarGlass(RoundedCornerShape(6.dp))
                             .clickable(onClick = common.onOpenNowPlaying),
                         contentAlignment = Alignment.Center,
@@ -4467,8 +4467,10 @@ private fun DesktopSidebar(
             Spacer(Modifier.height(6.dp))
             HorizontalDivider(color = desktopChromeDivider())
             Spacer(Modifier.height(12.dp))
+            val touchScroll4470 = rememberLazyListState() // 360 T3 hook
             LazyColumn(
-                modifier = Modifier.fillMaxWidth().weight(1f),
+                modifier = Modifier.fillMaxWidth().weight(1f).desktopTouchScroll(touchScroll4470), // 360 T3 hook
+                state = touchScroll4470,
                 contentPadding = PaddingValues(bottom = 8.dp),
             ) {
                 items(accountPlaylists, key = { "account:${it.browseId}" }) { playlist ->
@@ -4595,11 +4597,13 @@ internal fun DesktopFloatingMiniPlayer(
         DesktopPillShape.SQUIRCLE -> RoundedCornerShape(percent = 36)
         DesktopPillShape.CUSTOM_RADIUS -> RoundedCornerShape(pill.cornerRadius.coerceIn(0, 48).dp)
     }
-    val dockHeight = when (custom.miniPlayerHeight) {
+    val adaptive = LocalDesktopAdaptive.current // 360 T2 hook
+    val dockHeightWanted = when (custom.miniPlayerHeight) {
         DesktopMiniPlayerHeight.COMPACT -> 60.dp
         DesktopMiniPlayerHeight.DEFAULT -> 72.dp
         DesktopMiniPlayerHeight.LARGE -> 84.dp
     }
+    val dockHeight = DesktopAdaptiveMath.pillHeight(dockHeightWanted.value, adaptive.windowClass).dp // 360 T2 hook
     val artShape = when (custom.miniPlayerArtShape) {
         DesktopArtworkShape.SQUARE -> RoundedCornerShape(0.dp)
         DesktopArtworkShape.ROUNDED -> RoundedCornerShape(10.dp)
@@ -4659,7 +4663,8 @@ internal fun DesktopFloatingMiniPlayer(
     ) {
         // Keep a controlled dark veil over the moving album palette so the title, time and
         // transport icons remain legible over bright artwork. The underlying glass still shows.
-        val veil = if (custom.miniPlayerMaterial == DesktopMiniPlayerMaterial.GLASS) surfaceContrast else surfaceContrast * 0.45f
+        val veilBase = if (custom.miniPlayerMaterial == DesktopMiniPlayerMaterial.GLASS) surfaceContrast else surfaceContrast * 0.45f
+        val veil = DesktopAdaptiveMath.pillVeil(veilBase, adaptive.windowClass, adaptive.isPortrait) // 360 T2 hook: page text never shows through
         Box(Modifier.fillMaxSize().background(Color(0xFF080A12).copy(alpha = veil), shape))
         val drawPillElement: @Composable (String) -> Unit = { id ->
             if (id !in pill.hiddenElements) when (id) {
@@ -4858,13 +4863,14 @@ internal fun DesktopSearchField(
             .padding(horizontal = 9.dp),
         contentAlignment = Alignment.CenterStart,
     ) {
+        val touchActive = LocalDesktopTouchMode.current // 360 T3 hook
         BasicTextField(
             value = query,
             onValueChange = onQueryChange,
             modifier = Modifier
                 .fillMaxWidth()
                 .focusRequester(focusRequester)
-                .onFocusChanged { onFocusChanged(it.isFocused) }
+                .onFocusChanged { onFocusChanged(it.isFocused); if (it.isFocused) DesktopTouchKeyboard.show(touchActive) } // 360 T3 hook
                 .onPreviewKeyEvent { event ->
                     if (event.type == KeyEventType.KeyDown && event.key == Key.Enter) {
                         onSearch()
@@ -4960,9 +4966,15 @@ private fun DesktopFrame(
                 // Above everything, and outside the box the rest of the window is drawn in, because
                 // that is what a title bar is.
                 DesktopTitleBar()
-                Box(Modifier.fillMaxWidth().weight(1f)) {
+                BoxWithConstraints(Modifier.fillMaxWidth().weight(1f)) { // 360 T2 hook: window class for the whole shell and its overlays
+                    val adaptive = remember(maxWidth, maxHeight) { DesktopAdaptiveMath.adaptiveFor(maxWidth.value, maxHeight.value) }
+                    val windowClass = adaptive.windowClass
+                    CompositionLocalProvider(LocalDesktopAdaptive provides adaptive, LocalDesktopWindowClass provides windowClass) {
                     BoxWithConstraints(Modifier.fillMaxSize()) {
-                        val compact = DesktopDisplayGeometry.isCompact(maxWidth.value)
+                        val compact = adaptive.isBelowExpanded // 360 T2 hook (was maxWidth < 980.dp)
+                        val panelOverlay = DesktopAdaptiveMath.sidePanelAsOverlay(adaptive.widthDp) // 360 T2 hook
+                        val pillBottomInset = DesktopAdaptiveMath.pillBottomInset(dockBottomInset.toFloat(), windowClass) // 360 T2 hook
+                        val pillSideInset = DesktopAdaptiveMath.pillSideInset(windowClass) // 360 T2 hook
                         // Legacy keeps its full-height sidebar; Modern moves primary navigation
                         // to the top strip and floats its player over the page.
                         Row(Modifier.fillMaxSize()) {
@@ -4994,7 +5006,14 @@ private fun DesktopFrame(
                                                 PaddingValues(
                                                     start = 0.dp,
                                                     end = 0.dp,
-                                                    bottom = if (modernMode) 88.dp + dockBottomInset.dp else if (compact) 128.dp else 16.dp,
+                                                    // 360 T2 hook: the last row always clears the pill (72 dp cap in COMPACT).
+                                                    bottom = if (modernMode) {
+                                                        DesktopAdaptiveMath.pageBottomPadding(
+                                                            if (windowClass == DesktopWindowClass.COMPACT) 72f else 84f,
+                                                            pillBottomInset,
+                                                            4f,
+                                                        ).dp
+                                                    } else if (compact) 128.dp else 16.dp,
                                                 ),
                                             )
                                         }
@@ -5011,11 +5030,13 @@ private fun DesktopFrame(
                                         }
                                         Box(
                                             Modifier.align(dockAlignment)
-                                                .padding(horizontal = if (modernMode) 20.dp else 0.dp, vertical = 0.dp)
-                                                .padding(bottom = if (modernMode) dockBottomInset.dp else 16.dp)
+                                                .padding(horizontal = if (modernMode) pillSideInset.dp else 0.dp, vertical = 0.dp) // 360 T2 hook
+                                                .padding(bottom = if (modernMode) pillBottomInset.dp else 16.dp) // 360 T2 hook
                                                 .zIndex(1f),
                                         ) { bottomBar(compact) }
                                     }
+                                    // 360 T2 hook: in narrow windows the queue / lyrics panel covers the page instead of squeezing it.
+                                    if (panelOverlay) Box(Modifier.fillMaxSize().zIndex(2f)) { trailing() }
                                 }
                                 Box(
                                     Modifier
@@ -5027,12 +5048,13 @@ private fun DesktopFrame(
                                                 Modifier
                                             },
                                         ),
-                                ) { trailing() }
+                                ) { if (!panelOverlay) trailing() } // 360 T2 hook
                             }
                             }
                         }
                     }
                     overlay()
+                    } // 360 T2 hook: end of CompositionLocalProvider
                 }
             }
         }
@@ -5122,7 +5144,10 @@ private fun DesktopArtistPage(
                 // not buried under a hundred rows.
                 val top = artist.songs.take(MAX_ARTIST_SONGS)
                 Box(Modifier.fillMaxSize()) {
+                    val touchScroll5144 = rememberLazyListState() // 360 T3 hook
                     LazyColumn(
+                        modifier = Modifier.desktopTouchScroll(touchScroll5144), // 360 T3 hook
+                        state = touchScroll5144,
                         contentPadding = pagePadding(bottom = 32.dp),
                         verticalArrangement = Arrangement.spacedBy(4.dp),
                     ) {
@@ -5367,7 +5392,10 @@ private fun DesktopHistoryPage(
     menu: (@Composable (Song) -> Unit)? = null,
 ) {
     DesktopPageScaffold(contentPadding) {
+        val touchScroll5389 = rememberLazyListState() // 360 T3 hook
         LazyColumn(
+            modifier = Modifier.desktopTouchScroll(touchScroll5389), // 360 T3 hook
+            state = touchScroll5389,
             contentPadding = pagePadding(start = DesktopPageGutter, end = DesktopPageGutter, bottom = 32.dp),
             verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
@@ -5547,8 +5575,10 @@ private fun DesktopLibrarySongContent(
             }
         }
     } else {
+        val touchScroll5569 = rememberLazyListState() // 360 T3 hook
         LazyColumn(
-            modifier = Modifier.fillMaxSize(),
+            modifier = Modifier.fillMaxSize().desktopTouchScroll(touchScroll5569), // 360 T3 hook
+            state = touchScroll5569,
             contentPadding = pagePadding(bottom = 32.dp),
             verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
@@ -5592,8 +5622,10 @@ private fun DesktopLibraryGroupingContent(
             }
         }
     } else {
+        val touchScroll5614 = rememberLazyListState() // 360 T3 hook
         LazyColumn(
-            modifier = Modifier.fillMaxSize(),
+            modifier = Modifier.fillMaxSize().desktopTouchScroll(touchScroll5614), // 360 T3 hook
+            state = touchScroll5614,
             contentPadding = pagePadding(bottom = 32.dp),
             verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
@@ -5795,7 +5827,7 @@ private fun DesktopSettingsScreen(
                 }
                 CompositionLocalProvider(LocalSettingsQuery provides settingsQuery.trim()) {
                 LazyColumn(
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier.weight(1f).desktopTouchScroll(listState), // 360 T3 hook
                     state = listState,
                     contentPadding = PaddingValues(top = 12.dp, bottom = 28.dp),
                 ) {
@@ -7196,8 +7228,10 @@ private fun DesktopLicensesPage(onDismiss: () -> Unit) {
             color = DesktopSecondary,
             style = MaterialTheme.typography.bodySmall,
         )
+        val touchScroll7218 = rememberLazyListState() // 360 T3 hook
         LazyColumn(
-            modifier = Modifier.weight(1f),
+            modifier = Modifier.weight(1f).desktopTouchScroll(touchScroll7218), // 360 T3 hook
+            state = touchScroll7218,
             contentPadding = PaddingValues(vertical = 16.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
@@ -7510,7 +7544,10 @@ private fun DesktopCollectionPage(
         if (seconds > 0) add(formatCollectionDuration(seconds))
     }.joinToString(" • ").uppercase()
     DesktopPageScaffold(contentPadding) {
+        val touchScroll7532 = rememberLazyListState() // 360 T3 hook
         LazyColumn(
+            modifier = Modifier.desktopTouchScroll(touchScroll7532), // 360 T3 hook
+            state = touchScroll7532,
             contentPadding = pagePadding(
                 start = DesktopPageGutter,
                 top = DesktopPageGutter,
@@ -7539,7 +7576,7 @@ private fun DesktopCollectionPage(
                             }
                         }
                     }
-                    Box(Modifier.size(286.dp).clip(RoundedCornerShape(8.dp))) {
+                    Box(Modifier.size(286.dp.fitWindow(24.dp)).clip(RoundedCornerShape(8.dp))) { // 360 T2 hook
                         DesktopArtwork(
                             collection.thumbnailUrl ?: songs.firstOrNull()?.thumbnailUrl,
                             Modifier.fillMaxSize(),

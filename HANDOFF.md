@@ -486,3 +486,101 @@ NOT compiled and tests NOT run here. Brackets balanced by script; tests hand-tra
 - No dither noise yet (rings should be gone from the gradient fix; if faint banding remains on dark grey covers, add a noise overlay).
 - Light covers: scrim formula `((brightness - 0.55) / 0.25) * 0.45`; tune by eye. `ALBUM_LIGHT_CAP` (0.80) is the whitest a glow may be.
 - Studio saved configs keep their old values (a saved Frost 1.0 / Blur 40 stays until Reset pill or a preset is applied).
+
+## 360 T1: window stability, orientation, edge clicks
+### Did
+- The zip already held an earlier attempt (`DesktopDisplayGeometry`, `DesktopDisplayWatcher`, native `WM_GETMINMAXINFO`, `WM_NCHITTEST` that gives no resize strip on edges lying on the work area, display/posture counters, 1/255 alpha root fill, restart-on-stale-frame-clock). Read it, kept it, filled the gaps.
+- **Contract:** new `DesktopDisplayWatch.kt`: `data class DesktopDisplayInfo(widthDp, heightDp, isPortrait, isTouchLikely)` and `DesktopDisplayWatch.info: StateFlow<DesktopDisplayInfo>`, API exactly as in the plan. Published on start, on every window resize (AWT `ComponentListener`), on every display change and on posture change.
+- **Crash guard:** new `DesktopWindowGuard.kt` (`install()` logs every uncaught exception, never exits; `RestartLimiter`). `Main.kt`: `desktopMain()` now loops around `application{}` (`desktopApplication()`): if the window's event loop dies by exception, it is logged and the window is rebuilt (max 5 per minute), playback/tray untouched. A normal exit still goes through `application{}`'s own process exit.
+- **Logging:** `display[start|adapt]` lines (window bounds, placement, screen, work area, scale, native work area, dp, portrait, touch, minimum), `native WM_SIZE type=... rect=[...]` (new native `nativeLastSize`), placement transitions in `Main.kt`, posture flags.
+- **Minimum size:** narrow height floor 560 -> 480 dp (plan). Rule unchanged: never larger than the work area.
+- **Snap to top:** `WM_SIZE` with `SIZE_MAXIMIZED` posts `WM_BITCHORD_FIXMAX`; if the window rect is not within 2 px of the monitor work area it is set to it (max 2 tries per maximize, so it cannot loop). `Main.kt`'s `LaunchedEffect(placement)` now only assigns a placement Compose does not already have and never touches size.
+### Files
+New: `DesktopDisplayWatch.kt`, `DesktopWindowGuard.kt`, `DesktopDisplayWatchTest.kt`. Edited: `Main.kt`, `DesktopDisplayWatcher.kt`, `DesktopDisplayGeometry.kt` (480), `DesktopDisplayGeometryTest.kt`, `DesktopWindowsFrame.kt`, `desktopApp/native/window/window_jni.cpp`.
+### Decisions
+- `isTouchLikely` = touch digitizer reported by `nativePosture` flags bit 1 (`SM_TABLETPC`/`SM_DIGITIZER`, already in the DLL) instead of JNA; false off Windows or without the bridge. "Last input was touch/pen" is NOT implemented: AWT mouse events carry no pointer type and the frame's window proc does not see the Skiko child window's messages.
+- `widthDp/heightDp` are the window's content size, `isPortrait` is the window's shape (taller than wide), not the monitor's.
+- The crash guard loops in `main` rather than keying `Window`, because a composition failure ends `application{}` itself; a key could not revive that. `exitProcessOnExit` was not used (unconfirmed offline).
+- Edge-click causes (a) to (d) were already handled by the earlier attempt; read and left as is.
+### Verified
+**NOT compiled, tests NOT run, C++ NOT built.** Bracket balance by script, tests hand-traced.
+### Deferred
+- Whether drag-to-top now fills the work area: read `desktop.log` for `native WM_SIZE type=MAXIMIZED rect=...` against `work=`.
+- Touch/pen "last input" signal; `WM_DPICHANGED` suggested rect is left to AWT.
+### Exact next step
+Run the Windows workflow; on the laptop rotate, snap to top, click the far right/bottom pixel, then send `desktop.log`.
+
+## 360 T2: responsive layout for portrait, narrow and tent modes
+### Did
+- New `DesktopAdaptive.kt`: `DesktopWindowClass {COMPACT <600, MEDIUM 600-979, EXPANDED >=980}`, `DesktopOrientation`, `DesktopAdaptive`, pure `DesktopAdaptiveMath` (classes, fitWidth, columnsFor, cellWidth, side-panel overlay rule, pill height cap 72 dp in COMPACT, pill veil floor 0.55 in COMPACT/portrait, page bottom padding, pill insets, 44 dp top-bar target), `LocalDesktopWindowClass`, `LocalDesktopAdaptive`, `Dp.fitWindow()`.
+- `DesktopFrame` (`DesktopApp.kt`): class and orientation come from its `BoxWithConstraints` (works alone), provided to the whole shell and its overlays; `compact` = below EXPANDED; queue/lyrics panel is a full-page overlay below 800 dp (`DesktopSidePanel.kt`); pill side inset 12 dp and bottom inset at least 12 dp in COMPACT; page bottom padding computed from the pill height so the last row clears it; classic pill capped at 72 dp and veil floor raised; top-bar buttons at least 44 dp outside EXPANDED.
+- Fixed widths: replay card 300 and playlist art 286 shrink to the window (`fitWindow`), legacy now-playing slot min 220 -> 96, equalizer preset list 168 -> 112 in COMPACT.
+### Files
+New: `DesktopAdaptive.kt`, `DesktopAdaptiveTest.kt`. Edited (all `// 360 T2 hook`): `DesktopApp.kt`, `DesktopSidePanel.kt`, `DesktopReplayUi.kt`, `DesktopEqualizerUi.kt`.
+### Decisions
+- Not wired to `DesktopDisplayWatch.info`: the frame's own constraints are what layout actually has (title bar excluded). Merge is one line in `DesktopFrame` if wanted.
+- Search was already an icon that opens the search page, the settings rail already becomes chips below 760 dp, and the top bar already sheds controls below 520 dp (earlier attempt): kept.
+### Verified
+**NOT compiled, tests NOT run.** Brackets compared to the original file by script; tests hand-traced.
+### Deferred
+- **Home Recents (2 columns, peek) and shelf card sizes are in `sharedUi/.../HomeScreen.kt`**, which this part may not edit; needs a defaulted parameter by whoever owns sharedUi.
+- `DesktopLiquidPill.kt` has no 72 dp cap and no veil floor yet (same two lines as the classic pill).
+- Dialogs and popovers were not audited beyond the song menu; the full-screen player was not reviewed.
+### Exact next step
+Compile; at 360x640, 540x960, 720x1280 and 1280x800 dp check the top bar, pill, side panel overlay and the bottom of Home.
+
+## 360 T3: touch support
+### Did
+- Earlier attempt already had the setting (`DesktopTouchMode` AUTO/ALWAYS_ON/ALWAYS_OFF, persisted under `convertible_touch_mode`, settings chips in `DesktopApp.kt`), `LocalDesktopTouchMode` provided in `Main.kt`, `Dp.forTouch()` on caption buttons, the top bar, the pill, queue rows and the thin slider. Kept as is (the plan's new `DesktopTouchSettings.kt` would have duplicated `DesktopTouchSettings` in `DesktopTouchMode.kt`).
+- New `DesktopTouch.kt`: `DesktopTouchMath` (hit target, long-press timing, drag-to-scroll delta, fling distance, keyboard throttle), `Modifier.desktopTouchScroll(state)` (vertical finger drag scrolls with a short fling; active only in touch mode), `Modifier.desktopLongPress {}`, `DesktopTouchKeyboard.show()` (TabTip.exe via `ProcessBuilder`, Windows + touch mode only, once per focus, failures logged and ignored).
+- Hooks in `DesktopApp.kt` (`// 360 T3 hook`): `desktopTouchScroll` on eight `LazyColumn`s (settings list, history, search/library pages, licences, artist page, sidebar playlists, etc.); touch keyboard on search-field focus.
+### Files
+New: `DesktopTouch.kt`, `DesktopTouchMathTest.kt`. Edited: `DesktopApp.kt`.
+### Decisions
+- AUTO stays "tablet posture" (not "digitizer present"): on a touch laptop the digitizer is always there, so it would keep touch sizing on in laptop posture. `ALWAYS_ON` covers tent mode if Windows reports laptop.
+- Windows delivers touch as mouse events, so in touch mode a mouse drag also scrolls (no text selection by drag there). Documented in the modifier.
+### Verified
+**NOT compiled, tests NOT run.** `VelocityTracker`, `detectVerticalDragGestures`, `animateScrollBy`, `dispatchRawDelta` are standard Compose API but were not checkable offline; look there first if CI fails in `DesktopTouch.kt`.
+### Deferred
+- Not applied: horizontal shelves/Recents (`sharedUi`), the player's scrub bar (`sharedUi`), Home page scroller (`HomeScreen.kt`, `sharedUi`).
+- `desktopLongPress` is defined but unused: the app has no right-click menus (menus are buttons, track rows already have `onLongPress`).
+- Hover-only controls (card actions, pill knob, tooltips) were not audited. Pill progress bar already drags (ODEON-FIX); no larger thumb.
+### Exact next step
+Compile; in touch mode, drag the settings list and the history page with a finger, tap the search box and confirm the touch keyboard opens.
+
+## 360 T5: full-screen player and lyrics in portrait / tablet shapes
+### Did
+- `PlayerHost` got two defaulted members (`widePortraitLayout=false`, `maxContentWidth=null`); only `DesktopPlayerHost` overrides them (true, 900.dp). Android compiles and behaves unchanged.
+- New `PlayerWideLayout.kt` (pure: column width, artwork cap 62% of height, control-spread max 120 dp, action-row max 520 dp, lyric scale 1.0 up to 600 dp growing to 1.4 at 900 dp, lyric line gap). Off in landscape and when the host flag is off.
+- `NowPlayingScreen.kt`: `wide` value; the two `PLAYER_MAX_WIDTH` column uses now use `wide.columnMax`; sleeve capped; control spread cap raised; bottom action row held to 520 dp and centred in wide mode; `typeScale`/`wideLayout` passed to both `LyricsPanel` calls.
+- `PlayerLyrics.kt`: defaulted params `typeScale`, `wideLayout`; lead, sub and backing type scaled, line height x1.1, gap between lines in wide mode. Defaults give the exact old values.
+### Files
+New: `PlayerWideLayout.kt`, `sharedUi/src/jvmTest/.../ui/player/PlayerWideLayoutTest.kt`. Edited (all `// 360 T5 hook`): `PlayerHost.kt`, `NowPlayingScreen.kt`, `PlayerLyrics.kt`, `DesktopPlayerHost.kt`.
+### Decisions
+- Kept the 30 dp `PLAYER_GUTTER` (plan said 24 dp): `PlayerQueue.kt` and the lyrics list bleed by that constant and `PlayerQueue.kt` is not owned by this part.
+- Bottom row targets were already 44 dp (`PlayerControls.kt`, not owned); only its width and grouping changed, from `NowPlayingScreen.kt`.
+- `LandscapePlayer.kt` untouched.
+### Verified
+**NOT compiled, tests NOT run.** Brackets balanced by script; test values hand-traced.
+### Deferred
+- Look at real screenshots at 540x960, 720x1280, 900x1400. `Arrangement.spacedBy` between lyric rows relies on scroll maths using layout info (it does), but is unchecked on screen.
+### Exact next step
+Compile; open the player at the three sizes and lyrics at 720x1280.
+
+## 360 T4: album colours brighter and richer
+### Did
+- `DesktopAlbumPalette.kt`: chromatic floor 0.30 -> 0.42, chroma boost 1.12 -> 1.25, base L 0.18 -> 0.22, intensity floor 0.62 -> 0.80 (named `internal const` values).
+- `DesktopFluidity.kt`: role alphas 0.95/0.85/0.75/0.55; fuller radial falloff; full-window dominant-colour wash (20% alpha) under the glows, dissolving with them; light-cover scrim starts at brightness 0.62, max 0.35 (`fluidLightScrim`); `drawDither()` after the scrim.
+- New `DesktopDither.kt`: 512x512 premultiplied noise tile (about 2% alpha), built once, drawn with `drawImage` only (same Skia bitmap path as `DesktopArtworkMesh`); no shader, no per-frame allocation; failure to build is swallowed.
+- Tests added to `DesktopAlbumPaletteTest.kt`.
+### Files
+New: `DesktopDither.kt`. Edited: `DesktopAlbumPalette.kt`, `DesktopFluidity.kt`, `DesktopAlbumPaletteTest.kt`.
+### Decisions
+- `paletteStrength` default left at 1f (`DesktopApp.kt` compares against it).
+- No `ShaderBrush`/`ImageShader`: not used anywhere in the repo, so not confirmable offline.
+### Verified
+**NOT compiled, tests NOT run.** Noise balance (50.03% white) and navy/black/base colour values checked in Python replicas of the maths.
+### Deferred
+- Tune by eye on the laptop: wash alpha, glow falloff, dither visibility.
+### Exact next step
+Compile; compare a saturated, a dark and a white cover.

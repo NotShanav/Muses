@@ -62,7 +62,28 @@ fun main() {
     desktopMain()
 }
 
-private fun desktopMain() = application {
+private fun desktopMain() {
+    // 360 T1: log everything that escapes a thread, and never let a failed composition leave the
+    // process without a window: application{} returns normally only through exitApplication(),
+    // which exits the process itself, so getting past it means the window's event loop failed.
+    DesktopWindowGuard.install()
+    val limiter = RestartLimiter(maxRestarts = 5, windowMillis = 60_000L)
+    while (true) {
+        val failure = runCatching { desktopApplication() }.exceptionOrNull()
+        if (failure != null) {
+            DesktopTrackLog.log(DesktopWindowGuard.describe("main", failure))
+        } else {
+            DesktopTrackLog.log("window: application ended without a request to exit")
+        }
+        if (!limiter.allow(System.currentTimeMillis())) {
+            DesktopTrackLog.log("window: too many restarts in a minute; leaving playback and the tray running")
+            return
+        }
+        DesktopTrackLog.log("window: rebuilding the window (playback is not touched)")
+    }
+}
+
+private fun desktopApplication() = application {
     // Closing puts the window away rather than ending the process, while there is a tray icon to
     // bring it back from — see [DesktopWindowVisibility].
     val visible by DesktopWindowVisibility.visible.collectAsState()
@@ -74,13 +95,23 @@ private fun desktopMain() = application {
     // Rebuilding the Window gives it a new native peer and a new Skia surface; the player, the queue
     // and the audio engine live outside the composition, so playback carries on through it.
     var windowEpoch by remember { mutableIntStateOf(0) }
-    LaunchedEffect(placement) { state.placement = placement }
+    // 360 T1: the native frame's maximize is authoritative; only push a placement Compose does not
+    // already have, and never touch the size.
+    LaunchedEffect(placement) {
+        if (state.placement != placement) {
+            DesktopTrackLog.log("window: placement ${state.placement} -> $placement (requested by the app)")
+            state.placement = placement
+        }
+    }
     // UPGRADE M3: the diagnostic memory report schedule (does nothing unless its switch is on).
     LaunchedEffect(Unit) { DesktopMemoryReportSettings.runSchedule() }
     // ...and back, for the times the window is moved between placements by something that is not
     // us; see [DesktopWindowMode.adopt].
     LaunchedEffect(state) {
-        snapshotFlow { state.placement }.collect(DesktopWindowMode::adopt)
+        snapshotFlow { state.placement }.collect {
+            DesktopTrackLog.log("window: placement is now $it, size ${state.size}")
+            DesktopWindowMode.adopt(it)
+        }
     }
     key(windowEpoch) {
     Window(

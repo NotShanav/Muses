@@ -382,7 +382,7 @@ private fun ManualTab() {
         Spacer(Modifier.width(14.dp))
         // Beside the bands rather than behind a sheet: a window has the width for the list, and
         // seeing the curve move as a preset is picked is the point of having them.
-        PresetList(preset, Modifier.width(168.dp))
+        PresetList(preset, Modifier.width(if (LocalDesktopWindowClass.current == DesktopWindowClass.COMPACT) 112.dp else 168.dp)) // 360 T2 hook
     }
     Row(
         Modifier.fillMaxWidth().padding(horizontal = panelInset(22.dp), vertical = 8.dp),

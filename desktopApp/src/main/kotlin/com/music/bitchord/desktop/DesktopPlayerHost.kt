@@ -5,6 +5,8 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.dp
 import com.music.bitchord.data.canvas.CanvasArtwork
 import com.music.bitchord.data.lyrics.LyricLine
 import com.music.bitchord.data.lyrics.LyricsSource
@@ -52,6 +54,12 @@ internal object DesktopPlayerHost : PlayerHost {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
     override val settings: DesktopPlayerSettings = DesktopPlayerSettings
+
+    // 360 T5 hook: the desktop's portrait windows are wider than a phone; let the player fill them.
+    override val widePortraitLayout: Boolean = true
+
+    // 360 T5 hook: a huge portrait monitor still gets a designed, bounded column.
+    override val maxContentWidth: Dp? = 900.dp
 
     override fun cachedCanvas(song: Song): CanvasArtwork? = DesktopCanvasClient.cached(song)?.toShared()
 

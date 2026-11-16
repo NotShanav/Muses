@@ -59,7 +59,13 @@ internal fun DesktopSidePanelColumn(
         exit = shrinkHorizontally(tween(SLIDE_MS, easing = FastOutSlowInEasing), shrinkTowards = Alignment.Start) +
             fadeOut(tween(SLIDE_MS / 2)),
     ) {
-        Row(Modifier.width(SIDE_PANEL_WIDTH).fillMaxHeight()) {
+        // 360 T2 hook: in a narrow window the panel is a full-page overlay with its own solid ground
+        // (the frame puts it over the page), otherwise the 360 dp column beside it.
+        val overlay = DesktopAdaptiveMath.sidePanelAsOverlay(LocalDesktopAdaptive.current.widthDp)
+        Row(
+            if (overlay) Modifier.fillMaxSize().background(SIDE_PANEL_OVERLAY_GROUND)
+            else Modifier.width(SIDE_PANEL_WIDTH).fillMaxHeight(),
+        ) {
             // Let the page and lyrics glass meet without the old black one-pixel seam.
             Crossfade(
                 targetState = shown ?: return@Row,
@@ -118,6 +124,9 @@ internal fun DesktopSidePanelColumn(
 }
 
 private val SIDE_PANEL_WIDTH = 360.dp
+
+/** The page's own ground, so the page does not show through a panel that covers it. */
+private val SIDE_PANEL_OVERLAY_GROUND = Color(0xFF202020)
 private val HEADER_HEIGHT = 46.dp
 private val QUEUE_HEADER_HEIGHT = 30.dp
 private const val SLIDE_MS = 260

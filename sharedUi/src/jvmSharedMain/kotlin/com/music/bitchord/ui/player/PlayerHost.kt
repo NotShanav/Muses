@@ -3,6 +3,7 @@ package com.music.bitchord.ui.player
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntSize
 import com.music.bitchord.data.canvas.CanvasArtwork
 import com.music.bitchord.data.listentogether.PartyMember
@@ -108,6 +109,17 @@ interface PlayerHost {
      */
     @Composable
     fun LyricsShareSheet(hazeState: HazeState, request: LyricsShareRequest, onDismiss: () -> Unit) = Unit
+
+    // 360 T5 hook: defaulted so Android compiles and behaves unchanged.
+
+    /**
+     * Whether the portrait player and the lyrics may grow past the phone's
+     * 560 dp column in a window that is wider than a phone. Only the desktop sets it.
+     */
+    val widePortraitLayout: Boolean get() = false
+
+    /** The widest the portrait column may get when [widePortraitLayout] is on; null means 900 dp. */
+    val maxContentWidth: Dp? get() = null
 }
 
 private val NoCast = MutableStateFlow(CastUi())

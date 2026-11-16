@@ -180,4 +180,105 @@ class DesktopAlbumPaletteTest {
         assertEquals(a.colors, b.colors)
         assertEquals(a.base, b.base)
     }
+    // ---- 360 T4: brighter, richer colours ----
+
+    @Test
+    fun brightnessConstantsStayInRange() {
+        assertTrue(ALBUM_DARK_FLOOR_CHROMATIC > 0.30f && ALBUM_DARK_FLOOR_CHROMATIC < ALBUM_LIGHT_CAP)
+        assertTrue(ALBUM_CHROMA_BOOST in 1.12f..1.3f)
+        assertTrue(ALBUM_BASE_LIGHTNESS in 0.18f..0.30f)
+        assertTrue(ALBUM_INTENSITY_FLOOR in 0.75f..1f)
+        assertEquals(4, FluidRoleAlpha.size)
+        FluidRoleAlpha.forEach { assertTrue(it in 0f..1f) }
+        // Dominant first, tint last: never increasing.
+        for (i in 1 until FluidRoleAlpha.size) assertTrue(FluidRoleAlpha[i] <= FluidRoleAlpha[i - 1])
+        assertTrue(FLUID_WASH_ALPHA in 0.16f..0.24f)
+    }
+
+    @Test
+    fun darkColouredCoverIsVisiblyTintedNotBlack() {
+        val navy = 0xFF101840.toInt()
+        val p = palette(bands(navy to 100))
+        assertTrue(luminance(p.colors[0]) > 0.12f, "luminance ${luminance(p.colors[0])}")
+        assertTrue(saturation(p.colors[0]) > 0.2f, "saturation ${saturation(p.colors[0])}")
+        assertTrue(p.intensity >= ALBUM_INTENSITY_FLOOR - 1e-4f)
+    }
+
+    @Test
+    fun saturatedCoverGetsFullIntensity() {
+        val p = palette(bands(red to 100))
+        assertTrue(p.intensity > 0.95f, "intensity ${p.intensity}")
+    }
+
+    @Test
+    fun greyCoverGlowsAtTheFloor() {
+        val p = palette(bands(grey to 100))
+        assertEquals(ALBUM_INTENSITY_FLOOR, p.intensity, 1e-4f)
+    }
+
+    @Test
+    fun blackCoverStaysDarkAndNeutral() {
+        val p = palette(bands(black to 100))
+        assertTrue(saturation(p.colors[0]) < 0.12f)
+        assertTrue(luminance(p.colors[0]) < 0.30f, "luminance ${luminance(p.colors[0])}")
+    }
+
+    @Test
+    fun baseShadeIsDarkButNotBlack() {
+        val p = palette(bands(blue to 100))
+        val l = luminance(p.base)
+        assertTrue(l > 0.04f && l < 0.30f, "base luminance $l")
+    }
+
+    @Test
+    fun lightScrimStartsLateAndIsCapped() {
+        assertEquals(0f, fluidLightScrim(0f), 1e-6f)
+        assertEquals(0f, fluidLightScrim(0.62f), 1e-6f)
+        assertEquals(0f, fluidLightScrim(0.55f), 1e-6f)
+        assertTrue(fluidLightScrim(0.72f) > 0f)
+        assertEquals(FLUID_LIGHT_SCRIM_MAX, fluidLightScrim(0.82f), 1e-6f)
+        assertEquals(FLUID_LIGHT_SCRIM_MAX, fluidLightScrim(1f), 1e-6f)
+        assertTrue(FLUID_LIGHT_SCRIM_MAX <= 0.35f + 1e-6f)
+        var last = -1f
+        for (i in 0..20) {
+            val v = fluidLightScrim(i / 20f)
+            assertTrue(v in 0f..FLUID_LIGHT_SCRIM_MAX)
+            assertTrue(v >= last)
+            last = v
+        }
+    }
+
+    @Test
+    fun ditherTileIsValidPremultipliedNoise() {
+        val side = 64
+        val a = ditherPixels(side)
+        val b = ditherPixels(side)
+        assertTrue(a.contentEquals(b), "deterministic")
+        assertEquals(side * side, a.size)
+        var white = 0
+        a.forEach { argb ->
+            val alpha = (argb ushr 24) and 0xFF
+            assertEquals(DITHER_ALPHA, alpha)
+            val r = (argb shr 16) and 0xFF
+            val g = (argb shr 8) and 0xFF
+            val bl = argb and 0xFF
+            assertTrue(r <= alpha && g <= alpha && bl <= alpha, "premultiplied")
+            if (r == alpha) white++
+        }
+        val share = white / a.size.toFloat()
+        assertTrue(share in 0.35f..0.65f, "white share $share")
+        // About two percent: 5 / 255.
+        assertTrue(DITHER_ALPHA / 255f in 0.01f..0.03f)
+    }
+
+    @Test
+    fun ditherTileCountCoversTheWindow() {
+        assertEquals(0, ditherTileCount(0f))
+        assertEquals(0, ditherTileCount(-5f))
+        assertEquals(1, ditherTileCount(1f))
+        assertEquals(1, ditherTileCount(DITHER_TILE.toFloat()))
+        assertEquals(2, ditherTileCount(DITHER_TILE + 1f))
+        assertEquals(4, ditherTileCount(1920f))
+        assertEquals(3, ditherTileCount(1080f))
+    }
 }

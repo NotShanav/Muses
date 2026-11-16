@@ -36,7 +36,17 @@ private const val CHROMA_BIAS = 1.2f
 private const val NEUTRAL_CHROMA = 0.035f
 /** The lightest a glow may be (OKLab L): a soft light grey, never pure white. */
 internal const val ALBUM_LIGHT_CAP = 0.80f
-private const val DARK_FLOOR_CHROMATIC = 0.30f
+/**
+ * 360 T4: a chromatic glow is never darker than this (OKLab L). Was 0.30; a dark but coloured cover
+ * now reads as visibly tinted instead of near black.
+ */
+internal const val ALBUM_DARK_FLOOR_CHROMATIC = 0.42f
+/** 360 T4: chroma multiplier of a chromatic glow (was 1.12); the result is still gamut-clipped in [fromLch]. */
+internal const val ALBUM_CHROMA_BOOST = 1.25f
+/** 360 T4: lightness of the base shade under the glows (was 0.18). */
+internal const val ALBUM_BASE_LIGHTNESS = 0.22f
+/** 360 T4: the least [FluidPalette.intensity] any cover gets, grey covers included (was 0.62). */
+internal const val ALBUM_INTENSITY_FLOOR = 0.80f
 private const val DARK_FLOOR_NEUTRAL = 0.20f
 private const val RAD_TO_DEG = 57.29578f
 private const val DEG_TO_RAD = 0.017453292f
@@ -124,9 +134,9 @@ private fun distance(a: Cluster, b: Lab): Float {
 private fun displayOf(cluster: Cluster): Lch {
     val chroma = cluster.chroma
     val neutral = chroma < NEUTRAL_CHROMA
-    val floor = if (neutral) DARK_FLOOR_NEUTRAL else DARK_FLOOR_CHROMATIC
+    val floor = if (neutral) DARK_FLOOR_NEUTRAL else ALBUM_DARK_FLOOR_CHROMATIC
     val l = cluster.l.coerceIn(floor, ALBUM_LIGHT_CAP)
-    val c = if (neutral) chroma else (chroma * 1.12f).coerceAtMost(0.32f)
+    val c = if (neutral) chroma else (chroma * ALBUM_CHROMA_BOOST).coerceAtMost(0.32f) // 360 T4
     return Lch(l, c, cluster.hue)
 }
 
@@ -226,11 +236,13 @@ internal fun extractAlbumPalette(pixels: IntArray, width: Int, height: Int): Flu
     val shareSum = shares.sum().coerceAtLeast(1e-3f)
     val brightness = (0..2).sumOf { (shares[it] * picks[it].l).toDouble() }.toFloat() / shareSum
     val vividness = (0..2).sumOf { (shares[it] * picks[it].c).toDouble() }.toFloat() / shareSum
-    val intensity = (0.62f + 0.38f * (vividness / 0.12f).coerceIn(0f, 1f)).coerceIn(0.62f, 1f)
+    // 360 T4: floor 0.80 (was 0.62), so a grey or dark cover still carries real colour.
+    val intensity = (ALBUM_INTENSITY_FLOOR + (1f - ALBUM_INTENSITY_FLOOR) * (vividness / 0.12f).coerceIn(0f, 1f))
+        .coerceIn(ALBUM_INTENSITY_FLOOR, 1f)
 
     return FluidPalette(
         colors = listOf(picks[0].toColor(), picks[1].toColor(), picks[2].toColor(), tint.toColor()),
-        base = fromLch(0.18f, (dominant.c * 0.35f).coerceAtMost(0.04f), dominant.h),
+        base = fromLch(ALBUM_BASE_LIGHTNESS, (dominant.c * 0.35f).coerceAtMost(0.04f), dominant.h), // 360 T4
         intensity = intensity,
         shares = shares,
         brightness = brightness.coerceIn(0f, 1f),

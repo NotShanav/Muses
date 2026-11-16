@@ -1573,8 +1573,14 @@ internal fun LyricsPanel(
     onPickLine: (Int) -> Unit = {},
     /** Tap while picking: add or drop that line. */
     onTogglePick: (Int) -> Unit = {},
+    /** 360 T5 hook: lyric type multiplier for wide portrait windows; 1f is the phone's type. */
+    typeScale: Float = 1f,
+    /** 360 T5 hook: true in the desktop's wide portrait layout (more line height and line gap). */
+    wideLayout: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
+    // 360 T5 hook: every size below is multiplied by this; exactly 1f off the desktop.
+    val lineBoost = if (wideLayout) WIDE_LYRIC_LINE_HEIGHT_BOOST else 1f
     val panelPlaying = isPlaying && active
     val clock = rememberLyricClock(trackKey, playhead, panelPlaying)
     val subReveal = rememberSubLyricsReveal(subLines, trackKey)
@@ -1797,7 +1803,7 @@ internal fun LyricsPanel(
             start = PLAYER_GUTTER - GLOW_ROOM,
             end = PLAYER_GUTTER - GLOW_ROOM,
         ),
-        verticalArrangement = Arrangement.spacedBy(0.dp),
+        verticalArrangement = Arrangement.spacedBy(wideLyricGap(typeScale, wideLayout)), // 360 T5 hook
     ) {
         itemsIndexed(lines) { index, line ->
             if (!isSynced && isGeniusSectionHeader(line.text)) {
@@ -1955,15 +1961,15 @@ internal fun LyricsPanel(
                 val alignEnd = duet && line.alignment == LyricAlignment.End
                 val style = if (isSynced) {
                     MaterialTheme.typography.headlineLarge.copy(
-                        fontSize = 34.sp,
-                        lineHeight = 41.sp,
+                        fontSize = (34f * typeScale).sp, // 360 T5 hook
+                        lineHeight = (41f * typeScale * lineBoost).sp,
                         fontWeight = FontWeight.ExtraBold,
                         textAlign = if (alignEnd) TextAlign.End else TextAlign.Start,
                     )
                 } else {
                     MaterialTheme.typography.headlineMedium.copy(
-                        fontSize = 30.sp,
-                        lineHeight = 38.sp,
+                        fontSize = (30f * typeScale).sp, // 360 T5 hook
+                        lineHeight = (38f * typeScale * lineBoost).sp,
                         fontWeight = FontWeight.ExtraBold,
                         textAlign = if (alignEnd) TextAlign.End else TextAlign.Start,
                     )
@@ -2102,8 +2108,8 @@ internal fun LyricsPanel(
                 // seeks to the same place.
                 val sub = subReveal.lines?.getOrNull(index)
                 val subStyle = style.copy(
-                    fontSize = SUB_LYRIC_FONT_SIZE,
-                    lineHeight = SUB_LYRIC_LINE_HEIGHT,
+                    fontSize = (SUB_LYRIC_FONT_SIZE.value * typeScale).sp, // 360 T5 hook
+                    lineHeight = (SUB_LYRIC_LINE_HEIGHT.value * typeScale * lineBoost).sp,
                     fontWeight = FontWeight.Bold,
                 )
                 // The answering voice is only on screen while it is being sung,
@@ -2204,8 +2210,8 @@ internal fun LyricsPanel(
                                 line = backing.withoutBracketPunctuation(),
                                 clock = clock,
                                 style = style.copy(
-                                    fontSize = BACKING_FONT_SIZE,
-                                    lineHeight = BACKING_LINE_HEIGHT,
+                                    fontSize = (BACKING_FONT_SIZE.value * typeScale).sp, // 360 T5 hook
+                                    lineHeight = (BACKING_LINE_HEIGHT.value * typeScale * lineBoost).sp,
                                 ),
                                 isActive = isActive,
                                 sung = sung,
@@ -2234,8 +2240,8 @@ internal fun LyricsPanel(
                                         line = subBacking.withoutBracketPunctuation(),
                                         clock = clock,
                                         style = subStyle.copy(
-                                            fontSize = SUB_BACKING_FONT_SIZE,
-                                            lineHeight = SUB_BACKING_LINE_HEIGHT,
+                                            fontSize = (SUB_BACKING_FONT_SIZE.value * typeScale).sp, // 360 T5 hook
+                                            lineHeight = (SUB_BACKING_LINE_HEIGHT.value * typeScale * lineBoost).sp,
                                         ),
                                         isActive = isActive,
                                         sung = sung,

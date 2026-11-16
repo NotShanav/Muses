@@ -211,8 +211,22 @@ private const val FIRST_GLOW_FADE_MS = 800
 /** The dark neutral base shown while a cover has no palette yet. */
 private val FluidNeutralBase = Color(0xFF0B0D12)
 
-/** Glow alpha by role: dominant, second, third, tint of the dominant. */
-private val FluidRoleAlpha = floatArrayOf(0.85f, 0.70f, 0.60f, 0.45f)
+/** Glow alpha by role: dominant, second, third, tint of the dominant. 360 T4: raised from 0.85/0.70/0.60/0.45. */
+internal val FluidRoleAlpha = floatArrayOf(0.95f, 0.85f, 0.75f, 0.55f)
+
+/** 360 T4: how strongly the dominant colour washes the whole window under the glows (0.16 to 0.24 of alpha). */
+internal const val FLUID_WASH_ALPHA = 0.20f
+
+/** 360 T4: the light-cover scrim only starts above this brightness (was 0.55) ... */
+internal const val FLUID_LIGHT_SCRIM_START = 0.62f
+/** ... reaches full strength this much brightness later ... */
+internal const val FLUID_LIGHT_SCRIM_SPAN = 0.20f
+/** ... and never darkens the page by more than this (was 0.45). */
+internal const val FLUID_LIGHT_SCRIM_MAX = 0.35f
+
+/** 360 T4: the extra darkening a light cover (brightness 0..1) gets behind the text; 0 up to [FLUID_LIGHT_SCRIM_START]. */
+internal fun fluidLightScrim(brightness: Float): Float =
+    ((brightness - FLUID_LIGHT_SCRIM_START) / FLUID_LIGHT_SCRIM_SPAN).coerceIn(0f, 1f) * FLUID_LIGHT_SCRIM_MAX
 
 /** Where each glow lives and how it wanders. Speeds are cycles per second: periods of 17 to 29 s. */
 private class FluidGlow(
@@ -339,6 +353,12 @@ internal fun DesktopFluidBackdrop(
         val newBase = toPalette?.base ?: FluidNeutralBase
         drawRect(newBase.copy(alpha = baseAlpha * (if (dissolving) p else 1f)))
 
+        // 360 T4: a large faint wash of the dominant colour under the glows, so the page carries colour
+        // between them. Same dissolve as the glows: old out, new in.
+        val washScale = strength * (if (subtle) 0.75f else 1f)
+        if (fromPalette != null) drawFluidWash(fromPalette, reach, washScale * (1f - p))
+        if (toPalette != null) drawFluidWash(toPalette, reach, washScale * (if (dissolving) p else 1f))
+
         val glows = if (subtle) 2 else BLOB_COUNT
         for (i in 0 until glows) {
             val glow = FluidGlows[i]
@@ -363,7 +383,7 @@ internal fun DesktopFluidBackdrop(
         val brightFrom = fromPalette?.brightness ?: 0.3f
         val brightTo = toPalette?.brightness ?: 0.3f
         val brightness = if (dissolving) brightFrom * (1f - p) + brightTo * p else brightTo
-        val lightScrim = ((brightness - 0.55f) / 0.25f).coerceIn(0f, 1f) * 0.45f
+        val lightScrim = fluidLightScrim(brightness) // 360 T4
         val top = if (translucent) 0.10f else 0.16f
         val bottom = if (translucent) 0.26f else 0.38f
         drawRect(
@@ -374,7 +394,30 @@ internal fun DesktopFluidBackdrop(
                 ),
             ),
         )
+        // 360 T4: dither noise over the finished backdrop, so dark gradients do not band.
+        drawDither()
     }
+}
+
+/**
+ * 360 T4: the dominant colour as one window-sized radial wash (centre high, never ending on transparent
+ * black, so no ring). [scale] is the palette strength times this layer's share of the dissolve.
+ */
+private fun DrawScope.drawFluidWash(palette: FluidPalette, reach: Float, scale: Float) {
+    val alpha = (FLUID_WASH_ALPHA * palette.intensity * scale).coerceIn(0f, 0.5f)
+    if (alpha <= 0.002f) return
+    val color = palette.colors[0]
+    drawRect(
+        brush = Brush.radialGradient(
+            colorStops = arrayOf(
+                0f to color.copy(alpha = alpha),
+                0.55f to color.copy(alpha = alpha * 0.80f),
+                1f to color.copy(alpha = alpha * 0.55f),
+            ),
+            center = Offset(size.width * 0.5f, size.height * 0.42f),
+            radius = reach * 0.95f,
+        ),
+    )
 }
 
 /** UPGRADE M2: one glow of one palette layer, normal blending, [layerAlpha] being its share of the dissolve. */
@@ -394,10 +437,11 @@ private fun DrawScope.drawFluidGlow(
             // ODEON-FIX: every stop keeps the glow's own colour and only its alpha falls. Ending on
             // Color.Transparent (black, alpha 0) pulled the edge towards black and drew visible rings.
             colorStops = arrayOf(
+                // 360 T4: fuller falloff (was 0.78 / 0.42 / 0.14), so the glows carry more colour outwards.
                 0f to color.copy(alpha = alpha),
-                0.30f to color.copy(alpha = alpha * 0.78f),
-                0.55f to color.copy(alpha = alpha * 0.42f),
-                0.78f to color.copy(alpha = alpha * 0.14f),
+                0.30f to color.copy(alpha = alpha * 0.86f),
+                0.55f to color.copy(alpha = alpha * 0.52f),
+                0.78f to color.copy(alpha = alpha * 0.20f),
                 1f to color.copy(alpha = 0f),
             ),
             center = centre,

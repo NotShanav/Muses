@@ -26,7 +26,7 @@ internal object DesktopDisplayGeometry {
 
     /** What the window may shrink to when the screen is narrower than [MIN_WIDTH_DP], e.g. portrait. */
     const val NARROW_MIN_WIDTH_DP = 360.0
-    const val NARROW_MIN_HEIGHT_DP = 560.0
+    const val NARROW_MIN_HEIGHT_DP = 480.0
 
     fun isCompact(widthDp: Float): Boolean = widthDp < COMPACT_BREAKPOINT_DP
 

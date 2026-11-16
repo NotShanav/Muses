@@ -30,7 +30,7 @@ class DesktopDisplayGeometryTest {
         // 1080 x 1920 at 150% is 720 x 1280 dp: narrower than the old fixed 900dp minimum.
         val min = DesktopDisplayGeometry.minimumSize(work(1080, 1860), 1.5)
         assertEquals(540, min.width) // 360dp
-        assertEquals(840, min.height) // 560dp
+        assertEquals(720, min.height) // 480dp
     }
 
     @Test

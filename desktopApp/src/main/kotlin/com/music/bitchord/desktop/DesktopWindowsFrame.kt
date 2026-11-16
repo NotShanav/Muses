@@ -68,6 +68,26 @@ internal object DesktopWindowsFrame {
     fun refreshFrame(): Boolean =
         installed && runCatching { nativeRefreshFrame() }.getOrDefault(false)
 
+    /**
+     * The last WM_SIZE the native frame saw as [counter, type, left, top, right, bottom] (window rect,
+     * pixels), or null without the bridge. 360 T1: it is what the log shows for a snap or rotation.
+     */
+    fun lastSize(): IntArray? =
+        if (installed) runCatching { nativeLastSize() }.getOrNull() else null
+
+    /** Name of a WM_SIZE type code, for the log. */
+    fun sizeTypeName(type: Int): String = when (type) {
+        0 -> "RESTORED"
+        1 -> "MINIMIZED"
+        2 -> "MAXIMIZED"
+        3 -> "MAXSHOW"
+        4 -> "MAXHIDE"
+        else -> "type$type"
+    }
+
+    @JvmStatic
+    private external fun nativeLastSize(): IntArray?
+
     @JvmStatic
     private external fun nativeDisplayGeneration(): Long
 
