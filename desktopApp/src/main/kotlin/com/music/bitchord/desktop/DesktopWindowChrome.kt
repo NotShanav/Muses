@@ -51,7 +51,7 @@ internal fun DesktopTitleBar() {
     DesktopTitleBarDragArea(
         Modifier
             .fillMaxWidth()
-            .height(CAPTION_HEIGHT)
+            .height(CAPTION_HEIGHT.forTouch())
             .desktopWindowGlass(),
     ) {
         Box(Modifier.fillMaxSize()) {
@@ -117,7 +117,7 @@ internal fun DesktopWindowButtons(modifier: Modifier = Modifier) {
     val actions = LocalDesktopWindowActions.current ?: return
     val maximized by DesktopWindowMode.maximized.collectAsState()
     Row(
-        modifier = modifier.height(CAPTION_HEIGHT).padding(start = 2.dp),
+        modifier = modifier.height(CAPTION_HEIGHT.forTouch()).padding(start = 2.dp),
         horizontalArrangement = Arrangement.spacedBy(0.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -177,7 +177,8 @@ private fun MacCaptionButton(
     val hovered by interaction.collectIsHoveredAsState()
     Box(
         Modifier
-            .size(CAPTION_TOUCH_SIZE)
+            // 22dp for a pointer; a finger's width while touch mode is on. The dot drawn inside stays small.
+            .size(CAPTION_TOUCH_SIZE.forTouch())
             .hoverable(interaction)
             // The arrow, not the hand: this is window furniture, and the pointer says so before the
             // click does.

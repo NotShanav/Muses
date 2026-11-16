@@ -11,6 +11,14 @@ import com.music.bitchord.data.lyrics.LyricsTranslation
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.setValue
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.unit.dp
@@ -62,6 +70,10 @@ private fun desktopMain() = application {
     // [DesktopWindowMode].
     val placement by DesktopWindowMode.placement.collectAsState()
     val state = rememberWindowState(width = 1_220.dp, height = 780.dp)
+    // Bumped by [DesktopDisplayWatcher] when the window stopped drawing after a display change.
+    // Rebuilding the Window gives it a new native peer and a new Skia surface; the player, the queue
+    // and the audio engine live outside the composition, so playback carries on through it.
+    var windowEpoch by remember { mutableIntStateOf(0) }
     LaunchedEffect(placement) { state.placement = placement }
     // UPGRADE M3: the diagnostic memory report schedule (does nothing unless its switch is on).
     LaunchedEffect(Unit) { DesktopMemoryReportSettings.runSchedule() }
@@ -70,6 +82,7 @@ private fun desktopMain() = application {
     LaunchedEffect(state) {
         snapshotFlow { state.placement }.collect(DesktopWindowMode::adopt)
     }
+    key(windowEpoch) {
     Window(
         onCloseRequest = { if (DesktopWindowVisibility.onCloseRequest()) exitApplication() },
         visible = visible,
@@ -96,13 +109,13 @@ private fun desktopMain() = application {
                 composeWindow.background = java.awt.Color.BLACK
                 composeWindow.contentPane.background = java.awt.Color.BLACK
             }
-            // AWT measures this in device pixels while Compose's window state is in dp. Keeping
-            // the scale in the conversion makes the usable minimum consistent on every display.
+            // AWT measures this in device pixels while Compose's window state is in dp. The minimum
+            // is worked out from the screen the window is on, and never exceeds its work area: a
+            // portrait screen is narrower than the old fixed 900dp minimum. See
+            // [DesktopDisplayGeometry.minimumSize].
+            val watcher = DesktopDisplayWatcher(composeWindow, state) { windowEpoch += 1 }
+            watcher.applyMinimumSize()
             val transform = composeWindow.graphicsConfiguration.defaultTransform
-            composeWindow.minimumSize = Dimension(
-                (MIN_WINDOW_WIDTH_DP * transform.scaleX).roundToInt(),
-                (MIN_WINDOW_HEIGHT_DP * transform.scaleY).roundToInt(),
-            )
             // Setting AWT's minimum during the first composition can resize the native peer to
             // that minimum without updating Compose's state. Compose would then keep laying out a
             // 1220dp surface inside a 900dp window, cropping the right edge and putting its resize
@@ -112,9 +125,14 @@ private fun desktopMain() = application {
                 (openingSize.width.value * transform.scaleX).roundToInt(),
                 (openingSize.height.value * transform.scaleY).roundToInt(),
             )
+            // A portrait or small screen may be narrower than the opening size.
+            watcher.settle()
             if (DesktopPlatform.isWindows && DesktopWindowsFrame.install("Muses")) {
                 DesktopWindowBackdrop.apply()
             }
+            // Follows rotation, scaling and monitor changes from here on; returns only when the
+            // window has to be rebuilt.
+            watcher.watch()
         }
         val actions = remember {
             DesktopWindowActions(
@@ -146,14 +164,28 @@ private fun desktopMain() = application {
                 close = { if (DesktopWindowVisibility.onCloseRequest()) exitApplication() },
             )
         }
+        val touchMode by DesktopTouchSettings.active.collectAsState()
         CompositionLocalProvider(
             LocalDesktopWindowActions provides actions,
             LocalDesktopWindowScope provides this,
+            LocalDesktopTouchMode provides touchMode,
         ) {
-            BitChordDesktopApp()
+            // A transparent window lets the click through wherever a pixel has alpha 0, including the
+            // few at its outer edge that the app leaves unpainted — which is how a click at the
+            // screen's right or bottom edge reached the browser behind. One alpha step in 255 is
+            // invisible and makes every pixel of the window ours.
+            Box(
+                Modifier.fillMaxSize().then(
+                    if (DesktopWindowBackdrop.available) {
+                        Modifier.background(Color.Black.copy(alpha = 1f / 255f))
+                    } else {
+                        Modifier
+                    },
+                ),
+            ) {
+                BitChordDesktopApp()
+            }
         }
     }
+    }
 }
-
-private const val MIN_WINDOW_WIDTH_DP = 900.0
-private const val MIN_WINDOW_HEIGHT_DP = 600.0

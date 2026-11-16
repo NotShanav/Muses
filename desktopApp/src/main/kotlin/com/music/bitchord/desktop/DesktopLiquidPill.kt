@@ -379,6 +379,9 @@ internal fun DesktopLiquidPill(
     val rimColor = liquidMix(Color.White, accent, 0.45f * glassParams.albumInfluence)
     val fillColor = liquidMix(accent, Color.White, 0.35f)
     val fraction = liquidProgressFraction(progress)
+    // Same rules as the plain pill: a phone-sized window sheds shuffle and repeat into More.
+    val pillNarrow = DesktopDisplayGeometry.isNarrow(rememberWindowWidthDp().value)
+    val pillTouch = LocalDesktopTouchMode.current
 
     Box(
         Modifier
@@ -537,7 +540,7 @@ internal fun DesktopLiquidPill(
                         }
                     }
                 }
-                "previous" -> DesktopSpringButton(onClick = onPrevious, enabled = previousEnabled, size = 34.dp) {
+                "previous" -> if (!(pillNarrow && pillTouch)) DesktopSpringButton(onClick = onPrevious, enabled = previousEnabled, size = 34.dp) {
                     Icon(Icons.Rounded.FastRewind, "Previous", tint = if (previousEnabled) Color.White else Color.White.copy(alpha = 0.35f), modifier = Modifier.size(19.dp))
                 }
                 "play" -> DesktopSpringButton(onClick = onPlayPause, size = 38.dp) {
@@ -565,10 +568,10 @@ internal fun DesktopLiquidPill(
                 "next" -> DesktopSpringButton(onClick = onNext, size = 34.dp) {
                     Icon(Icons.Rounded.FastForward, DesktopStrings["widget_next", "Next"], tint = Color.White, modifier = Modifier.size(19.dp))
                 }
-                "shuffle" -> if (showShuffle) DesktopSpringButton(onClick = { onShuffleChange(!shuffle) }, size = 34.dp) {
+                "shuffle" -> if (showShuffle && !pillNarrow) DesktopSpringButton(onClick = { onShuffleChange(!shuffle) }, size = 34.dp) {
                     Icon(BitChordIcons.Shuffle, "Shuffle", tint = if (shuffle) accent else Color.White.copy(alpha = 0.62f), modifier = Modifier.size(17.dp))
                 }
-                "repeat" -> if (showRepeat) DesktopSpringButton(onClick = { onRepeatModeChange(repeatMode.next()) }, size = 34.dp) {
+                "repeat" -> if (showRepeat && !pillNarrow) DesktopSpringButton(onClick = { onRepeatModeChange(repeatMode.next()) }, size = 34.dp) {
                     if (repeatMode == DesktopRepeatMode.ONE) {
                         Text("1", color = accent, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.labelMedium)
                     } else {
@@ -584,11 +587,15 @@ internal fun DesktopLiquidPill(
                     DesktopSpringButton(onClick = { moreOpen = true }, size = 34.dp) {
                         Icon(Icons.Rounded.MoreHoriz, "More playback options", tint = Color.White.copy(alpha = 0.72f))
                     }
+                    if (moreOpen) DismissOnDisplayChange { moreOpen = false }
                     DropdownMenu(expanded = moreOpen, onDismissRequest = { moreOpen = false }) {
-                        if (!showShuffle || "shuffle" in pill.hiddenElements) {
+                        if (pillNarrow && pillTouch) {
+                            DropdownMenuItem(text = { Text("Previous") }, onClick = { moreOpen = false; onPrevious() })
+                        }
+                        if (!showShuffle || pillNarrow || "shuffle" in pill.hiddenElements) {
                             DropdownMenuItem(text = { Text(if (shuffle) "Turn shuffle off" else "Turn shuffle on") }, onClick = { moreOpen = false; onShuffleChange(!shuffle) })
                         }
-                        if (!showRepeat || "repeat" in pill.hiddenElements) {
+                        if (!showRepeat || pillNarrow || "repeat" in pill.hiddenElements) {
                             DropdownMenuItem(text = { Text("Repeat: ${repeatMode.label()}") }, onClick = { moreOpen = false; onRepeatModeChange(repeatMode.next()) })
                         }
                         DropdownMenuItem(text = { Text("Lyrics") }, onClick = { moreOpen = false; onMoreLyrics() })
@@ -600,7 +607,7 @@ internal fun DesktopLiquidPill(
             }
         }
         Row(
-            Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 6.dp),
+            Modifier.fillMaxSize().padding(horizontal = if (pillNarrow) 10.dp else 16.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(4.dp),
         ) {

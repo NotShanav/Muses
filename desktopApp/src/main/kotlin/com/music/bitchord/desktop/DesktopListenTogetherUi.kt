@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -370,7 +371,7 @@ private fun JoinConfirmation(
             onValueChange = onNicknameChange,
             label = { Text("Nickname") },
             singleLine = true,
-            modifier = Modifier.width(360.dp),
+            modifier = Modifier.fillMaxWidth().widthIn(max = 360.dp),
         )
         error?.let { Spacer(Modifier.height(10.dp)); Text(it, color = DesktopDestructive) }
         Spacer(Modifier.height(20.dp))

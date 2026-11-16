@@ -68,6 +68,69 @@ int resize_border(HWND window, bool horizontal) {
     return frame + padding;
 }
 
+
+// ---- Display and posture change tracking ------------------------------------------------------
+//
+// Rotating a 2-in-1, changing the scaling or plugging a monitor all arrive here as window
+// messages. They are passed on to AWT first (it resizes the peer for WM_DPICHANGED itself) and
+// then counted. Kotlin polls the counters rather than being called back: a callback would run
+// Java on the window thread in the middle of a message, and the poll costs one atomic read.
+std::atomic<long long> g_display_generation{0};
+std::atomic<long long> g_posture_generation{0};
+// The backdrop last asked for, so a refresh can put the same frame margins back.
+std::atomic<int> g_backdrop_kind{0};
+
+#ifndef SM_CONVERTIBLESLATEMODE
+#define SM_CONVERTIBLESLATEMODE 0x2003
+#endif
+#ifndef SM_SYSTEMDOCKED
+#define SM_SYSTEMDOCKED 0x2004
+#endif
+#ifndef SM_TABLETPC
+#define SM_TABLETPC 86
+#endif
+#ifndef SM_DIGITIZER
+#define SM_DIGITIZER 94
+#endif
+
+/**
+ * Whether the pixel at [point] belongs to a resize border rather than to the content.
+ *
+ * A side only resizes while the window's edge on that side is clear of the monitor's work area.
+ * An edge lying on the work area (snapped, maximized, or simply dragged against the screen) cannot
+ * be pulled outward, and the pixels there are the ones Compose draws its scrollbars, buttons and
+ * mini player in: they are client pixels, never a border and never click-through.
+ */
+struct EdgeSides {
+    bool left, top, right, bottom;
+};
+
+EdgeSides resizable_sides(const RECT& bounds, const RECT& work) {
+    constexpr LONG slack = 1;
+    return EdgeSides{
+        bounds.left > work.left + slack,
+        bounds.top > work.top + slack,
+        bounds.right < work.right - slack,
+        bounds.bottom < work.bottom - slack,
+    };
+}
+
+bool work_area_of(HWND window, RECT* work, RECT* monitor_rect) {
+    MONITORINFO monitor{sizeof(MONITORINFO)};
+    const HMONITOR handle = MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST);
+    if (handle == nullptr || GetMonitorInfoW(handle, &monitor) == FALSE) return false;
+    if (work != nullptr) *work = monitor.rcWork;
+    if (monitor_rect != nullptr) *monitor_rect = monitor.rcMonitor;
+    return true;
+}
+
+LRESULT call_original(HWND window, UINT message, WPARAM wparam, LPARAM lparam) {
+    WNDPROC original = g_original_proc;
+    return original != nullptr
+        ? CallWindowProcW(original, window, message, wparam, lparam)
+        : DefWindowProcW(window, message, wparam, lparam);
+}
+
 LRESULT CALLBACK frame_proc(HWND window, UINT message, WPARAM wparam, LPARAM lparam) {
     if (message == WM_NCCALCSIZE && wparam == TRUE) {
         // Keep the native overlapped-window styles but give the full surface to Compose. DWM still
@@ -86,24 +149,73 @@ LRESULT CALLBACK frame_proc(HWND window, UINT message, WPARAM wparam, LPARAM lpa
         return 0;
     }
 
-    if (message == WM_NCHITTEST && !IsZoomed(window)) {
+    if (message == WM_NCHITTEST) {
         POINT point{GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam)};
         RECT bounds{};
-        GetWindowRect(window, &bounds);
-        const int border_x = resize_border(window, true);
-        const int border_y = resize_border(window, false);
-        const bool left = point.x < bounds.left + border_x;
-        const bool right = point.x >= bounds.right - border_x;
-        const bool top = point.y < bounds.top + border_y;
-        const bool bottom = point.y >= bounds.bottom - border_y;
-        if (top && left) return HTTOPLEFT;
-        if (top && right) return HTTOPRIGHT;
-        if (bottom && left) return HTBOTTOMLEFT;
-        if (bottom && right) return HTBOTTOMRIGHT;
-        if (left) return HTLEFT;
-        if (right) return HTRIGHT;
-        if (top) return HTTOP;
-        if (bottom) return HTBOTTOM;
+        if (GetWindowRect(window, &bounds) != FALSE && PtInRect(&bounds, point) != FALSE) {
+            // Maximized, or filling the work area: every pixel is content. The client is the work
+            // area (see WM_NCCALCSIZE), so there is no resize strip to hand out.
+            if (IsZoomed(window)) return HTCLIENT;
+            RECT work{};
+            const bool known = work_area_of(window, &work, nullptr);
+            const EdgeSides sides = known ? resizable_sides(bounds, work) : EdgeSides{true, true, true, true};
+            const int border_x = resize_border(window, true);
+            const int border_y = resize_border(window, false);
+            const bool left = sides.left && point.x < bounds.left + border_x;
+            const bool right = sides.right && point.x >= bounds.right - border_x;
+            const bool top = sides.top && point.y < bounds.top + border_y;
+            const bool bottom = sides.bottom && point.y >= bounds.bottom - border_y;
+            if (top && left) return HTTOPLEFT;
+            if (top && right) return HTTOPRIGHT;
+            if (bottom && left) return HTBOTTOMLEFT;
+            if (bottom && right) return HTBOTTOMRIGHT;
+            if (left) return HTLEFT;
+            if (right) return HTRIGHT;
+            if (top) return HTTOP;
+            if (bottom) return HTBOTTOM;
+            // Inside the window and not on a border: ours, whatever alpha is painted there.
+            return HTCLIENT;
+        }
+    }
+
+    if (message == WM_GETMINMAXINFO) {
+        // AWT fills this from the window's minimumSize, which Kotlin sets in device pixels. A
+        // rotated monitor can be narrower than that minimum; Windows then lets the window grow
+        // past the screen and the swap chain and the native size disagree. Never ask for more
+        // than the monitor's work area, and maximize to exactly that area.
+        const LRESULT handled = call_original(window, message, wparam, lparam);
+        auto* info = reinterpret_cast<MINMAXINFO*>(lparam);
+        RECT work{}, monitor_rect{};
+        if (info != nullptr && work_area_of(window, &work, &monitor_rect)) {
+            const LONG width = work.right - work.left;
+            const LONG height = work.bottom - work.top;
+            if (info->ptMinTrackSize.x > width) info->ptMinTrackSize.x = width;
+            if (info->ptMinTrackSize.y > height) info->ptMinTrackSize.y = height;
+            info->ptMaxPosition.x = work.left - monitor_rect.left;
+            info->ptMaxPosition.y = work.top - monitor_rect.top;
+            info->ptMaxSize.x = width;
+            info->ptMaxSize.y = height;
+            if (info->ptMaxTrackSize.x < width) info->ptMaxTrackSize.x = width;
+            if (info->ptMaxTrackSize.y < height) info->ptMaxTrackSize.y = height;
+        }
+        return handled;
+    }
+
+    if (message == WM_DISPLAYCHANGE || message == WM_DPICHANGED || message == WM_SETTINGCHANGE) {
+        const LRESULT handled = call_original(window, message, wparam, lparam);
+        if (message == WM_SETTINGCHANGE) {
+            // A work area change is a display change; the named settings (ConvertibleSlateMode,
+            // UserInteractionMode) arrive with wparam 0 and a string in lparam that is not read
+            // here: the posture is asked for by value, so one more poll is all it costs.
+            if (wparam == SPI_SETWORKAREA) {
+                g_display_generation.fetch_add(1);
+            } else if (wparam == 0) {
+                g_posture_generation.fetch_add(1);
+            }
+        } else {
+            g_display_generation.fetch_add(1);
+        }
+        return handled;
     }
 
     if (message == WM_BITCHORD_DRAG) {
@@ -196,6 +308,7 @@ bool set_backdrop(HWND window, int kind) {
     DwmSetWindowAttribute(
         window, static_cast<DWMWINDOWATTRIBUTE>(DARK_MODE_ATTRIBUTE), &dark, sizeof(dark));
     const bool material = kind == 2 || kind == 3;
+    g_backdrop_kind = material ? kind : 0;
     const int type = material ? kind : BACKDROP_NONE;
     const HRESULT applied = DwmSetWindowAttribute(
         window, static_cast<DWMWINDOWATTRIBUTE>(BACKDROP_ATTRIBUTE), &type, sizeof(type));
@@ -731,6 +844,59 @@ Java_com_music_bitchord_desktop_DesktopWindowsFrame_nativeToggleMaximize(JNIEnv*
     if (window == nullptr || !IsWindow(window)) return JNI_FALSE;
     return send_system_command(IsZoomed(window) ? SC_RESTORE : SC_MAXIMIZE)
         ? JNI_TRUE : JNI_FALSE;
+}
+
+JNIEXPORT jlong JNICALL
+Java_com_music_bitchord_desktop_DesktopWindowsFrame_nativeDisplayGeneration(JNIEnv*, jclass) {
+    return static_cast<jlong>(g_display_generation.load());
+}
+
+JNIEXPORT jlong JNICALL
+Java_com_music_bitchord_desktop_DesktopWindowsFrame_nativePostureGeneration(JNIEnv*, jclass) {
+    return static_cast<jlong>(g_posture_generation.load());
+}
+
+/** Bit 0: tablet (slate) mode right now. Bit 1: the machine has touch/tablet hardware. Bit 2: docked. */
+JNIEXPORT jint JNICALL
+Java_com_music_bitchord_desktop_DesktopWindowsFrame_nativePosture(JNIEnv*, jclass) {
+    jint flags = 0;
+    // SM_CONVERTIBLESLATEMODE is 0 in slate mode and 1 in laptop mode.
+    if (GetSystemMetrics(SM_CONVERTIBLESLATEMODE) == 0) flags |= 1;
+    // Touch hardware: a tablet PC, or an integrated/external touch digitizer.
+    if (GetSystemMetrics(SM_TABLETPC) != 0 || (GetSystemMetrics(SM_DIGITIZER) & 0x3) != 0) flags |= 2;
+    if (GetSystemMetrics(SM_SYSTEMDOCKED) != 0) flags |= 4;
+    return flags;
+}
+
+/** {left, top, right, bottom, dpi} of the work area of the monitor the window is on, in pixels. */
+JNIEXPORT jintArray JNICALL
+Java_com_music_bitchord_desktop_DesktopWindowsFrame_nativeWorkArea(JNIEnv* env, jclass) {
+    HWND window = g_window;
+    RECT work{};
+    if (window == nullptr || !IsWindow(window) || !work_area_of(window, &work, nullptr)) return nullptr;
+    jint values[5] = {work.left, work.top, work.right, work.bottom, static_cast<jint>(GetDpiForWindow(window))};
+    jintArray result = env->NewIntArray(5);
+    if (result != nullptr) env->SetIntArrayRegion(result, 0, 5, values);
+    return result;
+}
+
+/**
+ * Asks DWM to redraw the frame and re-applies the frame margins. The same thing a maximize and
+ * restore does to a window whose composed surface went stale, without moving anything.
+ */
+JNIEXPORT jboolean JNICALL
+Java_com_music_bitchord_desktop_DesktopWindowsFrame_nativeRefreshFrame(JNIEnv*, jclass) {
+    HWND window = g_window;
+    if (window == nullptr || !IsWindow(window)) return JNI_FALSE;
+    const int kind = g_backdrop_kind.load();
+    const bool material = kind == 2 || kind == 3;
+    MARGINS margins = material ? MARGINS{-1, -1, -1, -1} : MARGINS{1, 1, 1, 1};
+    DwmExtendFrameIntoClientArea(window, &margins);
+    SetWindowPos(
+        window, nullptr, 0, 0, 0, 0,
+        SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+    RedrawWindow(window, nullptr, nullptr, RDW_INVALIDATE | RDW_ALLCHILDREN | RDW_UPDATENOW | RDW_FRAME);
+    return JNI_TRUE;
 }
 
 JNIEXPORT jint JNICALL

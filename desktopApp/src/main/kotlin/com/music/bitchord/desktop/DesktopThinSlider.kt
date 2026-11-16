@@ -69,7 +69,7 @@ internal fun DesktopThinSlider(
     Box(
         modifier = modifier
             // Generous invisible hit target — the visible bar is only ~7dp.
-            .height(activeHeight + 22.dp)
+            .height((activeHeight + 22.dp).forTouch())
             // One gesture loop for both clicks and drags.
             .pointerInput(Unit) {
                 awaitEachGesture {

@@ -52,6 +52,37 @@ internal object DesktopWindowsFrame {
     @JvmStatic
     private external fun nativeStartDrag(): Boolean
 
+    /** Counts display, DPI and work-area changes the window has been told about. 0 without the bridge. */
+    fun displayGeneration(): Long =
+        if (installed) runCatching { nativeDisplayGeneration() }.getOrDefault(0L) else 0L
+
+    /** Flags for [DesktopTouchPolicy.postureFromFlags], or -1 without the bridge. */
+    fun postureFlags(): Int =
+        if (installed) runCatching { nativePosture() }.getOrDefault(-1) else -1
+
+    /** The work area of the window's monitor as {left, top, right, bottom, dpi}, or null. */
+    fun workArea(): IntArray? =
+        if (installed) runCatching { nativeWorkArea() }.getOrNull() else null
+
+    /** Has DWM redraw the frame and re-applies its margins; the cheap fix for a stale surface. */
+    fun refreshFrame(): Boolean =
+        installed && runCatching { nativeRefreshFrame() }.getOrDefault(false)
+
+    @JvmStatic
+    private external fun nativeDisplayGeneration(): Long
+
+    @JvmStatic
+    private external fun nativePostureGeneration(): Long
+
+    @JvmStatic
+    private external fun nativePosture(): Int
+
+    @JvmStatic
+    private external fun nativeWorkArea(): IntArray?
+
+    @JvmStatic
+    private external fun nativeRefreshFrame(): Boolean
+
     /**
      * Puts DWM's material behind the window — [DesktopBackdrop.nativeKind] — or takes it away.
      * False without the native frame, or on a Windows too old to have one.

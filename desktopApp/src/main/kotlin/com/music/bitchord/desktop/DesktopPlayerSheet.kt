@@ -21,6 +21,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -60,6 +61,14 @@ internal fun DesktopPlayerSheet(
         val heightPx = with(LocalDensity.current) { maxHeight.toPx() }
         val offset = remember { Animatable(heightPx) }
         val scope = rememberCoroutineScope()
+        // The window's height changes when the screen rotates or the scaling does. The drag limits
+        // and the resting "down" position follow it, not the height the sheet first saw: a sheet
+        // that was down would otherwise sit partly on screen, and one being dragged would stop at
+        // the old edge.
+        val currentHeightPx by rememberUpdatedState(heightPx)
+        LaunchedEffect(heightPx) {
+            if (!visible) offset.snapTo(heightPx) else if (offset.value > heightPx) offset.snapTo(heightPx)
+        }
 
         LaunchedEffect(visible) {
             if (visible) {
@@ -69,13 +78,13 @@ internal fun DesktopPlayerSheet(
                     offset.animateTo(0f, tween(SHEET_OPEN_MS, easing = FastOutSlowInEasing))
                 }
             } else {
-                offset.animateTo(heightPx, tween(SHEET_CLOSE_MS, easing = FastOutSlowInEasing))
+                offset.animateTo(currentHeightPx, tween(SHEET_CLOSE_MS, easing = FastOutSlowInEasing))
                 mounted = false
             }
         }
 
         val dragState = rememberDraggableState { delta ->
-            scope.launch { offset.snapTo((offset.value + delta).coerceIn(0f, heightPx)) }
+            scope.launch { offset.snapTo((offset.value + delta).coerceIn(0f, currentHeightPx)) }
         }
         Box(
             Modifier
@@ -85,7 +94,7 @@ internal fun DesktopPlayerSheet(
                     state = dragState,
                     orientation = Orientation.Vertical,
                     onDragStopped = { velocity ->
-                        if (offset.value > heightPx * DISMISS_FRACTION || velocity > DISMISS_VELOCITY) {
+                        if (offset.value > currentHeightPx * DISMISS_FRACTION || velocity > DISMISS_VELOCITY) {
                             onDismiss()
                         } else {
                             offset.animateTo(0f, tween(SHEET_SETTLE_MS, easing = FastOutSlowInEasing))

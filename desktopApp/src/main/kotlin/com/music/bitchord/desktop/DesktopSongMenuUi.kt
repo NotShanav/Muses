@@ -309,6 +309,8 @@ private fun sleepTimerLabel(minutes: Int?, afterTrack: Boolean): String = when {
 /** The panel a menu is drawn in: a floating card in the app's own glass. */
 @Composable
 private fun DesktopMenuSurface(onDismiss: () -> Unit, content: @Composable () -> Unit) {
+    // Placed in window coordinates when it opens, so a rotation closes it rather than strand it.
+    DismissOnDisplayChange(onDismiss)
     Popup(
         popupPositionProvider = remember { DesktopMenuPosition() },
         onDismissRequest = onDismiss,

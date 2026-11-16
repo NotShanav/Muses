@@ -4137,9 +4137,17 @@ private fun DesktopTopBar(
     var searchOpen by remember { mutableStateOf(false) }
     var accountMenuOpen by remember { mutableStateOf(false) }
     val searchFocusRequester = remember { FocusRequester() }
+    // A phone-sized window or a portrait screen: Back, Forward and Customise move into the account
+    // menu, and the search field takes the strip while it is open.
+    val windowWidth = rememberWindowWidthDp()
+    val narrow = DesktopDisplayGeometry.isNarrow(windowWidth.value)
+    val buttonSize = 34.dp.forTouch()
+    val captionReserve = if (inlineCaption) 76.dp else 0.dp
     val searchWidth by animateDpAsState(
         targetValue = if (searchOpen) {
-            if (compact) 132.dp else 340.dp
+            if (narrow) {
+                (windowWidth - captionReserve - 16.dp - (buttonSize * 2 + 12.dp)).coerceAtLeast(96.dp)
+            } else if (compact) 132.dp else 340.dp
         } else {
             0.dp
         },
@@ -4154,22 +4162,22 @@ private fun DesktopTopBar(
         DesktopDestination.EXPLORE to "Explore",
         DesktopDestination.LIBRARY to "Library",
     )
-    val tabWidth = if (compact) 64.dp else 82.dp
+    val tabWidth = if (narrow) 52.dp else if (compact) 64.dp else 82.dp
     val activeIndex = tabs.indexOfFirst { it.first == destination }.coerceAtLeast(0)
     val slide by animateFloatAsState(activeIndex.toFloat(), MusesMotion.settle(reduceMotion), label = "navigationPill")
 
     DesktopTitleBarDragArea(Modifier.fillMaxWidth().height(64.dp)) {
         Box(Modifier.fillMaxSize()) {
             Row(
-                Modifier.fillMaxSize().desktopWindowGlass(DesktopChromeEdge.BOTTOM).padding(horizontal = 14.dp),
+                Modifier.fillMaxSize().desktopWindowGlass(DesktopChromeEdge.BOTTOM).padding(horizontal = if (narrow) 8.dp else 14.dp),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                horizontalArrangement = Arrangement.spacedBy(if (narrow) 4.dp else 8.dp),
             ) {
                 if (inlineCaption) DesktopWindowButtons()
-                if (destination == DesktopDestination.LISTEN_NOW) DesktopSpringButton(onClick = onOpenHomeSections, size = 34.dp) {
+                if (!narrow && destination == DesktopDestination.LISTEN_NOW) DesktopSpringButton(onClick = onOpenHomeSections, size = 34.dp) {
                     Icon(Icons.Rounded.Tune, "Customise Home", tint = DesktopSecondary, modifier = Modifier.size(19.dp))
                 }
-                Box(Modifier.height(40.dp)) {
+                Box(Modifier.height(40.dp.forTouch())) {
                     Box(
                         Modifier.align(Alignment.CenterStart).width(tabWidth).fillMaxHeight()
                             .graphicsLayer { translationX = slide * tabWidth.toPx() }
@@ -4191,7 +4199,7 @@ private fun DesktopTopBar(
                     }
                 }
                 Spacer(Modifier.weight(1f))
-                DesktopSpringButton(onClick = common.onBack, enabled = common.canGoBack, size = 34.dp) {
+                if (!narrow) DesktopSpringButton(onClick = common.onBack, enabled = common.canGoBack, size = 34.dp) {
                     Icon(Icons.Rounded.ArrowBack, "Back", tint = if (common.canGoBack) Color.White else DesktopSecondary.copy(alpha = 0.4f))
                 }
                 DesktopSpringButton(
@@ -4200,12 +4208,18 @@ private fun DesktopTopBar(
                 ) {
                     Icon(if (searchOpen) Icons.Rounded.Close else BitChordIcons.Search, if (searchOpen) "Close search" else "Search", tint = if (searchOpen) Color.White else DesktopSecondary, modifier = Modifier.size(19.dp))
                 }
-                DesktopSpringButton(onClick = common.onForward, enabled = common.canGoForward, size = 34.dp) {
+                if (!narrow) DesktopSpringButton(onClick = common.onForward, enabled = common.canGoForward, size = 34.dp) {
                     Icon(Icons.Rounded.ArrowForward, "Forward", tint = if (common.canGoForward) Color.White else DesktopSecondary.copy(alpha = 0.4f))
                 }
                 Box {
                     DesktopAccountButton(avatar = common.accountAvatar) { accountMenuOpen = true }
+                    if (accountMenuOpen) DismissOnDisplayChange { accountMenuOpen = false }
                     DropdownMenu(expanded = accountMenuOpen, onDismissRequest = { accountMenuOpen = false }) {
+                        if (narrow) {
+                            if (common.canGoBack) DropdownMenuItem(text = { Text("Back") }, onClick = { accountMenuOpen = false; common.onBack() })
+                            if (common.canGoForward) DropdownMenuItem(text = { Text("Forward") }, onClick = { accountMenuOpen = false; common.onForward() })
+                            if (destination == DesktopDestination.LISTEN_NOW) DropdownMenuItem(text = { Text("Customise Home") }, onClick = { accountMenuOpen = false; onOpenHomeSections() })
+                        }
                         DropdownMenuItem(text = { Text("Switch account") }, onClick = { accountMenuOpen = false; common.onOpenAccounts() })
                         DropdownMenuItem(text = { Text("History") }, onClick = { accountMenuOpen = false; onOpenHistory() })
                         DropdownMenuItem(text = { Text("Settings") }, onClick = { accountMenuOpen = false; onOpenSettings() })
@@ -4213,8 +4227,8 @@ private fun DesktopTopBar(
                 }
             }
             Box(
-                Modifier.align(Alignment.CenterEnd).padding(end = 134.dp)
-                    .width(searchWidth).height(38.dp)
+                Modifier.align(Alignment.CenterEnd).padding(end = if (narrow) (buttonSize * 2 + 12.dp) else 134.dp)
+                    .width(searchWidth).height(38.dp.forTouch())
                     .graphicsLayer { alpha = if (searchOpen) 1f else 0f },
             ) {
                 DesktopSearchField(
@@ -4343,7 +4357,7 @@ internal fun DesktopSpringButton(
         label = "modernButtonPress",
     )
     Box(
-        Modifier.size(size).graphicsLayer { scaleX = scale; scaleY = scale }
+        Modifier.size(size.forTouch()).graphicsLayer { scaleX = scale; scaleY = scale }
             .clip(CircleShape)
             .background(if (hovered) Color.White.copy(alpha = 0.08f) else Color.Transparent)
             .clickable(interactionSource = interaction, indication = null, enabled = enabled, onClick = onClick),
@@ -4565,6 +4579,11 @@ internal fun DesktopFloatingMiniPlayer(
     val rimStrength by DesktopMiniPlayerAppearance.rim.collectAsState()
     val custom by DesktopAdvancedAppearance.config.collectAsState()
     val pill = custom.pillConfig
+    // On a phone-sized window the pill keeps artwork, title, previous/play/next and More; shuffle and
+    // repeat move into More (they already do whenever they are hidden), and with fingers' worth of
+    // buttons previous goes too.
+    val pillNarrow = DesktopDisplayGeometry.isNarrow(rememberWindowWidthDp().value)
+    val pillTouch = LocalDesktopTouchMode.current
     val entrance = remember { Animatable(0f) }
     LaunchedEffect(song.videoId, reduceMotion) {
         entrance.snapTo(0f)
@@ -4636,7 +4655,7 @@ internal fun DesktopFloatingMiniPlayer(
                 alpha = entrance.value
                 translationY = (1f - entrance.value) * 14.dp.toPx()
             }
-            .padding(horizontal = 16.dp, vertical = 6.dp),
+            .padding(horizontal = if (pillNarrow) 10.dp else 16.dp, vertical = 6.dp),
     ) {
         // Keep a controlled dark veil over the moving album palette so the title, time and
         // transport icons remain legible over bright artwork. The underlying glass still shows.
@@ -4659,25 +4678,27 @@ internal fun DesktopFloatingMiniPlayer(
                         Text("${formatTime(positionMs)} / ${formatTime(durationMs)}", color = DesktopSecondary, style = MaterialTheme.typography.labelSmall, maxLines = 1)
                     }
                 }
-                "previous" -> DesktopSpringButton(onClick = onPrevious, enabled = previousEnabled, size = 34.dp) {
+                "previous" -> if (!(pillNarrow && pillTouch)) DesktopSpringButton(onClick = onPrevious, enabled = previousEnabled, size = 34.dp) {
                     Icon(Icons.Rounded.FastRewind, "Previous", tint = if (previousEnabled) Color.White else DesktopSecondary.copy(alpha = 0.4f), modifier = Modifier.size(19.dp))
                 }
                 "play" -> DesktopSpringButton(onClick = onPlayPause, size = 38.dp) {
                     Icon(if (isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow, if (isPlaying) "Pause" else "Play", tint = Color.White, modifier = Modifier.size(24.dp))
                 }
                 "next" -> DesktopSpringButton(onClick = onNext, size = 34.dp) { Icon(Icons.Rounded.FastForward, DesktopStrings["widget_next", "Next"], tint = Color.White, modifier = Modifier.size(19.dp)) }
-                "shuffle" -> if (custom.miniPlayerShowShuffle) DesktopSpringButton(onClick = { onShuffleChange(!shuffle) }, size = 34.dp) {
+                "shuffle" -> if (custom.miniPlayerShowShuffle && !pillNarrow) DesktopSpringButton(onClick = { onShuffleChange(!shuffle) }, size = 34.dp) {
                     Icon(BitChordIcons.Shuffle, "Shuffle", tint = if (shuffle) DesktopAccent else DesktopSecondary, modifier = Modifier.size(17.dp))
                 }
-                "repeat" -> if (custom.miniPlayerShowRepeat) DesktopSpringButton(onClick = { onRepeatModeChange(repeatMode.next()) }, size = 34.dp) {
+                "repeat" -> if (custom.miniPlayerShowRepeat && !pillNarrow) DesktopSpringButton(onClick = { onRepeatModeChange(repeatMode.next()) }, size = 34.dp) {
                     if (repeatMode == DesktopRepeatMode.ONE) Text("1", color = DesktopAccent, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.labelMedium)
                     else Icon(BitChordIcons.Repeat, "Repeat ${repeatMode.label()}", tint = if (repeatMode == DesktopRepeatMode.OFF) DesktopSecondary else DesktopAccent, modifier = Modifier.size(17.dp))
                 }
                 "more" -> Box {
                     DesktopSpringButton(onClick = { moreOpen = true }, size = 34.dp) { Icon(Icons.Rounded.MoreHoriz, "More playback options", tint = DesktopSecondary) }
+                    if (moreOpen) DismissOnDisplayChange { moreOpen = false }
                     DropdownMenu(expanded = moreOpen, onDismissRequest = { moreOpen = false }) {
-                        if (!custom.miniPlayerShowShuffle || "shuffle" in pill.hiddenElements) DropdownMenuItem(text = { Text(if (shuffle) "Turn shuffle off" else "Turn shuffle on") }, onClick = { moreOpen = false; onShuffleChange(!shuffle) })
-                        if (!custom.miniPlayerShowRepeat || "repeat" in pill.hiddenElements) DropdownMenuItem(text = { Text("Repeat: ${repeatMode.label()}") }, onClick = { moreOpen = false; onRepeatModeChange(repeatMode.next()) })
+                        if (pillNarrow && pillTouch) DropdownMenuItem(text = { Text("Previous") }, onClick = { moreOpen = false; onPrevious() })
+                        if (!custom.miniPlayerShowShuffle || pillNarrow || "shuffle" in pill.hiddenElements) DropdownMenuItem(text = { Text(if (shuffle) "Turn shuffle off" else "Turn shuffle on") }, onClick = { moreOpen = false; onShuffleChange(!shuffle) })
+                        if (!custom.miniPlayerShowRepeat || pillNarrow || "repeat" in pill.hiddenElements) DropdownMenuItem(text = { Text("Repeat: ${repeatMode.label()}") }, onClick = { moreOpen = false; onRepeatModeChange(repeatMode.next()) })
                         DropdownMenuItem(text = { Text("Lyrics") }, onClick = { moreOpen = false; onMoreLyrics() })
                         DropdownMenuItem(text = { Text("Queue") }, onClick = { moreOpen = false; onMoreQueue() })
                         DropdownMenuItem(text = { Text("Audio output") }, onClick = { moreOpen = false; onMoreOutput() })
@@ -4941,7 +4962,7 @@ private fun DesktopFrame(
                 DesktopTitleBar()
                 Box(Modifier.fillMaxWidth().weight(1f)) {
                     BoxWithConstraints(Modifier.fillMaxSize()) {
-                        val compact = maxWidth < 980.dp
+                        val compact = DesktopDisplayGeometry.isCompact(maxWidth.value)
                         // Legacy keeps its full-height sidebar; Modern moves primary navigation
                         // to the top strip and floats its player over the page.
                         Row(Modifier.fillMaxSize()) {
@@ -5735,7 +5756,7 @@ private fun DesktopSettingsScreen(
                         onQueryChange = onQueryChange,
                         onSearch = {},
                         placeholder = DesktopStrings["settings_search_hint", "Search settings"],
-                        modifier = Modifier.padding(start = 24.dp).width(280.dp),
+                        modifier = Modifier.padding(start = 12.dp).widthIn(min = 120.dp, max = 280.dp).weight(1f, fill = false),
                     )
                 }
                 // STUDIO S1 hook: category rail (wide) or chips (narrow); only the chosen category's groups show
@@ -5968,6 +5989,7 @@ private fun DesktopSettingsScreen(
                             DesktopStrings["app_language", "App language"],
                             DesktopStrings.languageLabel(),
                         ) { languageMenuOpen = true }
+                        if (languageMenuOpen) DismissOnDisplayChange { languageMenuOpen = false }
                         DropdownMenu(languageMenuOpen, onDismissRequest = { languageMenuOpen = false }) {
                             DesktopStrings.available.forEach { language ->
                                 DropdownMenuItem(
@@ -6084,6 +6106,37 @@ private fun DesktopSettingsScreen(
                         DesktopInterfaceSettings.setMode(
                             if (modern) DesktopInterfaceMode.MODERN else DesktopInterfaceMode.LEGACY,
                         )
+                    }
+                    val touchTitle = DesktopStrings["convertible_touch_mode", "Convertible / touch mode"]
+                    val touchSubtitle = DesktopStrings[
+                        "convertible_touch_mode_subtitle",
+                        "Larger touch targets for tablet, tent and stand postures. Auto follows the posture Windows reports.",
+                    ]
+                    if (settingsRowVisible(touchTitle, touchSubtitle)) {
+                        val touchMode by DesktopTouchSettings.mode.collectAsState()
+                        Column(Modifier.fillMaxWidth().padding(vertical = 12.dp)) {
+                            Text(touchTitle, fontWeight = FontWeight.Medium)
+                            Text(touchSubtitle, color = DesktopSecondary, style = MaterialTheme.typography.bodySmall)
+                            Spacer(Modifier.height(10.dp))
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                DesktopTouchMode.entries.forEach { option ->
+                                    FilterChip(
+                                        colors = desktopChipColors(),
+                                        selected = touchMode == option,
+                                        onClick = { DesktopTouchSettings.setMode(option) },
+                                        label = {
+                                            Text(
+                                                when (option) {
+                                                    DesktopTouchMode.AUTO -> DesktopStrings["touch_mode_auto", "Auto"]
+                                                    DesktopTouchMode.ALWAYS_ON -> DesktopStrings["touch_mode_on", "Always on"]
+                                                    DesktopTouchMode.ALWAYS_OFF -> DesktopStrings["touch_mode_off", "Always off"]
+                                                },
+                                            )
+                                        },
+                                    )
+                                }
+                            }
+                        }
                     }
                     SettingsToggle(
                         DesktopStrings["full_screen_cover_art", "Full-screen cover art"],
@@ -7253,12 +7306,12 @@ private fun DesktopSourceSettingsRow(
         }
         Spacer(Modifier.width(8.dp))
         if (onMoveUp != null) {
-            IconButton(onClick = onMoveUp, modifier = Modifier.size(32.dp)) {
+            IconButton(onClick = onMoveUp, modifier = Modifier.size(32.dp.forTouch())) {
                 Icon(Icons.Rounded.KeyboardArrowUp, "Move source earlier")
             }
         }
         if (onMoveDown != null) {
-            IconButton(onClick = onMoveDown, modifier = Modifier.size(32.dp)) {
+            IconButton(onClick = onMoveDown, modifier = Modifier.size(32.dp.forTouch())) {
                 Icon(Icons.Rounded.KeyboardArrowDown, "Move source later")
             }
         }
@@ -7550,6 +7603,7 @@ private fun DesktopCollectionPage(
                             )
                             Box {
                                 DesktopCircleButton(Icons.Rounded.MoreHoriz, DesktopStrings["more", "More"], onClick = { moreOpen = true })
+                                if (moreOpen) DismissOnDisplayChange { moreOpen = false }
                                 DropdownMenu(expanded = moreOpen, onDismissRequest = { moreOpen = false }) {
                                     DropdownMenuItem(
                                         text = { Text(DesktopStrings["download_all", "Download all"]) },
@@ -7730,7 +7784,7 @@ private fun DesktopCollectionSongRow(
             horizontalArrangement = Arrangement.End,
         ) {
             onRemove?.let { remove ->
-                IconButton(onClick = { remove(song) }, modifier = Modifier.size(34.dp)) {
+                IconButton(onClick = { remove(song) }, modifier = Modifier.size(34.dp.forTouch())) {
                     Icon(
                         Icons.Rounded.RemoveCircleOutline,
                         DesktopStrings["d_remove_from_playlist", "Remove from playlist"],
@@ -7740,7 +7794,7 @@ private fun DesktopCollectionSongRow(
                 }
             }
             onToggleLike?.let { onLike ->
-                IconButton(onClick = { onLike(song) }, modifier = Modifier.size(34.dp)) {
+                IconButton(onClick = { onLike(song) }, modifier = Modifier.size(34.dp.forTouch())) {
                     Icon(
                         if (liked) BitChordIcons.HeartFilled else BitChordIcons.Heart,
                         "Favorite",
@@ -7750,7 +7804,7 @@ private fun DesktopCollectionSongRow(
                 }
             }
             onDownload?.let { onSave ->
-                IconButton(onClick = { if (!downloaded) onSave(song) }, modifier = Modifier.size(34.dp)) {
+                IconButton(onClick = { if (!downloaded) onSave(song) }, modifier = Modifier.size(34.dp.forTouch())) {
                     if (downloadInProgress) {
                         CircularProgressIndicator(Modifier.size(16.dp), color = DesktopAccent, strokeWidth = 2.dp)
                     } else {
@@ -7764,7 +7818,7 @@ private fun DesktopCollectionSongRow(
                 }
             }
             onAddToPlaylist?.let { onAdd ->
-                IconButton(onClick = { onAdd(song) }, modifier = Modifier.size(34.dp)) {
+                IconButton(onClick = { onAdd(song) }, modifier = Modifier.size(34.dp.forTouch())) {
                     Icon(BitChordIcons.Plus, DesktopStrings["add_to_playlist", "Add to playlist"], tint = DesktopSecondary, modifier = Modifier.size(18.dp))
                 }
             }
@@ -8047,7 +8101,7 @@ internal fun BoxScope.DesktopShelfArrow(
     ) {
         Box(
             Modifier
-                .size(34.dp)
+                .size(34.dp.forTouch())
                 .clip(CircleShape)
                 .background(Color.Black.copy(alpha = 0.55f))
                 .clickable(onClick = onClick),
