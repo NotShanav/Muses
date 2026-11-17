@@ -600,3 +600,57 @@ NOT compiled, tests NOT run. Bracket counts compared with the original by script
 ### Unverified / to tune by eye
 - Default Vivid values (floor 0.60, chroma x1.25, wash 0.34, base alpha 0.58 over Acrylic/Mica). The higher translucent base alpha trades a little of the Acrylic see-through for cleaner colour; lower `translucentBaseAlpha` in `DesktopBackdropTunings` if the glass feel matters more.
 - Grain is still available but off; `DesktopDither.kt` unchanged.
+
+## ART-TRANSITION ENGINE (account A): artwork-disintegration transition, engine only, NOT wired in
+New files only, package `com.music.bitchord.desktop`, all `internal`: `DesktopArtTransition.kt` (controller, `ArtParticleSim`, `ArtGridSampler`), `DesktopArtTransitionPhysics.kt` (pure maths), `DesktopArtTransitionOverlay.kt` (composable), test `DesktopArtTransitionMathTest.kt`. No existing file touched. The CONTRACT is matched exactly; extras are listed below.
+### For account B (wiring)
+- Put `DesktopArtTransitionOverlay()` last in the root Box, no padding/offset: Canvas pixels must be the window pixels that `sourceBounds`, `pointer` and `targetBounds()` use. It has no pointer input and runs no frame loop while `active` is false.
+- Set `DesktopArtTransition.targetBounds` to the live pill thumbnail bounds (window px). A zero or tiny rect ends the run at once with reveal = 1. Optional: set `backdropSink` (called on the UI thread, at most 12 times per run, colour = average of one slice of background particles, position = their average source position, strength 0.15..1).
+- Call `start(ArtTransitionRequest(...))` when a song is picked and `audioReady(videoId)` when its audio is actually playing. Either order works (`audioReady` before `start` for the same id counts as ready; a replay of the same id right after it also skips the hold). Playback must not wait on anything here.
+- Hide the pill's real thumbnail while `reveal < 1`; draw it at `reveal` alpha (the particles fade out as reveal rises, so it is a crossfade). While nothing runs, reveal is 1.
+- Extra, optional: `DesktopArtTransition.sourceFade` (0..1, rises over ~30..100 ms). Draw the source thumbnail at `1 - sourceFade` so it does not sit under the leaving particles. Without it the source simply stays visible.
+- `enabled = false` or `DesktopAppearanceSettings.reduceAnimation` true: `start()` just calls `cancel()` (reveal = 1).
+### Decisions (no questions allowed)
+- Timeline on the sim's own clock, which starts when the sampled grid is ready (not at `start()`); dt clamped to 50 ms. Lift 0-80 ms (+5%); sweep releases particles at 80 + 360 * delay ms (delay = 0.72 diagonal + 0.28 hash noise); pill particles fly at 300 + 220 * delay (+<=40) ms for 360-500 ms (all home by ~1100); spring settle uses `MusesMotion.SETTLE_STIFFNESS/SETTLE_DAMPING`; reveal 0 -> 1 over 200 ms starting at max(1100, last settle start + 120).
+- Reveal starts only once audio is ready AND every pill particle has begun settling. Not ready when particles arrive: they orbit above the thumbnail (ellipse centred 0.30 x height above its top); ready releases them with a 0-140 ms stagger. The orbit is visual only: after 6.5 s of sim time without audio the particles settle anyway.
+- Loading gets 700 ms (artwork `artworkAt(256)` via `DesktopArtworkCache.load`, then `toAwtImage()`, centre square crop, two bilinear Graphics2D downscales to 48x48). Failure, null url or timeout: finish instantly, reveal = 1. Grids cached in a 16-entry `DesktopCountLru` by sized url. reveal is 0 from `start()` until then.
+- 35% of cells (hash) are background particles: drift away from the pill (direction +-0.7 rad), grow up to ~4x, fade by ~950 ms, never reach the pill.
+- A watchdog ends a run (reveal = 1) if no overlay frame arrives for 700 ms, or after 12 s, so a missing overlay can never leave the thumbnail hidden.
+- `start()` while running: the old sim keeps drawing for 150 ms with alpha fading to 0, then goes; only one fading sim is kept.
+- No source bounds: a 80x80 box around `pointer`; neither: a box above the pill.
+- Draw loop: FloatArrays, no per-frame allocation. Deviation from "one drawRect": `drawRoundRect` while flying/orbiting (rounded feel), `drawRect` once home; bright particles in motion get one extra low-alpha halo round-rect.
+### Verified
+NOT compiled, tests NOT run. Written against the existing APIs only (`DesktopArtworkCache.load`, `DesktopCountLru`, `MusesMotion`, `DesktopAppearanceSettings.reduceAnimation`, `String?.artworkAt`, `toAwtImage`); the spring was derived by hand and `springStepIsTimestepIndependent` checks it.
+### Unverified / to tune by eye
+- Sizes at real thumbnail scale (a ~56 px pill thumbnail gives ~1.2 px cells; `FLIGHT_MIN_DOT` 1.6 px keeps flying particles visible), sweep and flight stagger, orbit radius, halo strength, `toAwtImage` availability in this Compose version.
+
+
+## Artwork particle transition wiring (Muses desktop) - NOT COMPILED
+
+Engine: real `DesktopArtTransition*.kt` was in the zip, so **no stub was created** (STUB list: none). Coded against the contract; engine types are `internal`.
+
+Touched (all under `desktopApp/src/main/kotlin/com/music/bitchord/desktop/`):
+- `DesktopArtwork.kt`: new `internal object DesktopArtBounds` (register/unregister/`nearest(url, pointer)`, `lastPress`, `lastPressNanos`). `DesktopArtwork` registers one `Entry` per instance keyed by the original `url` (DisposableEffect), rect refreshed by `onGloballyPositioned` (one Rect per layout pass, nothing per frame).
+- `DesktopApp.kt`:
+  - `BitChordDesktopApp`: `DesktopFrame(...)` is now wrapped in `Box(Modifier.fillMaxSize().pointerInput(Unit){...Initial pass, records Press, consumes nothing})`; `DesktopArtTransitionOverlay()` is the last child of that Box (top-most, no pointer input). Wrapper starts at the old `DesktopFrame(` line (~2897), overlay line ~4104.
+  - `playCurrent()` (~813): captures `previousVideoId` before `selectedSong = song`; after `playbackEngine.load` starts the transition only if `DesktopArtTransition.enabled`, press < 600 ms old, and (song changed OR mode == EVERY_CLICK). Clears `lastPressNanos` so one press starts at most one transition. Playback is never delayed.
+  - After `val playback by ...` (~1711): LaunchedEffect tracks isLoading true->false for the same videoId and calls `audioReady`.
+  - Root, next to `reduceAnimation` (~2881): LaunchedEffect maps mode + reduceAnimation to `DesktopArtTransition.enabled` (reduce animations = off, also calls `cancel()`); LaunchedEffect(Unit) sets `backdropSink = DesktopBackdropPulses`.
+  - `DesktopPillArtwork` (~4796): uses `Modifier.artTransitionTarget()` and the instant path while revealing.
+  - Pill zone rows: non-artwork elements wrapped in `PillRevealFade` (alpha 0 until reveal 0.6, then to 1).
+  - Settings screen: "Artwork transition" chips in the "Glass and motion" group, plus the `modified()` entry.
+- `DesktopLiquidPill.kt`: it draws its own artwork (`LiquidPillArtwork`), so the same changes were applied (target bounds, revealing -> instant path, `PillRevealFade` on elements).
+- `DesktopAdvancedAppearance.kt`: `enum DesktopArtTransitionMode { OFF, EVERY_CLICK, SONG_CHANGE }`, `DesktopAppearanceConfig.artTransitionMode` (default SONG_CHANGE; persisted in the existing config JSON, no schema bump since defaults forward-fill), registry entry `desktop.art_transition`. Strings via `DesktopStrings[key, default]`: art_transition, art_transition_desc, art_transition_off, art_transition_every, art_transition_change.
+- `DesktopFluidity.kt` `DesktopFluidBackdrop`: draws live pulses as SrcOver radial glows just before the light-cover scrim.
+- NEW `DesktopBackdropPulses.kt` (sink, 6 slots, 600 ms quadratic decay) and NEW `DesktopArtTransitionWiring.kt` (pill helpers).
+
+Decisions made without asking:
+- Default mode is "Only when the song changes".
+- Pointer coords are the Box's local coords, which equal window px because the Box is the window root content.
+- `nearest()` can return the pill's own artwork instance if it is the closest; the click position normally wins.
+
+Not covered / known gaps:
+- Pulses only draw where `DesktopFluidBackdrop` is drawn: Fluidity ON. Not drawn with Fluidity OFF (page backdrop), nor with a system material and Fluidity off (no backdrop is drawn). The full-player album-reactive/acrylic backgrounds were not touched.
+- If isLoading never flips true while the song is selected (very fast load), `audioReady` is not called; relies on the engine's own timeout.
+- The pill's own artwork instance also registers in `DesktopArtBounds`.
+- Not compiled. CI/Gradle must verify (check `Modifier.artTransitionTarget()` composable-modifier usage and the shadowed `modifier` val in `DesktopArtwork`).

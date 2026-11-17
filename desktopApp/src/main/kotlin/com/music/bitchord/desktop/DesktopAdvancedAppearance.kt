@@ -23,6 +23,7 @@ internal data class DesktopAppearanceConfig(
     val miniPlayerProgress: DesktopMiniProgress = DesktopMiniProgress.THIN,
     val miniPlayerArtShape: DesktopArtworkShape = DesktopArtworkShape.ROUNDED,
     val miniPlayerMaterial: DesktopMiniPlayerMaterial = DesktopMiniPlayerMaterial.GLASS,
+    val artTransitionMode: DesktopArtTransitionMode = DesktopArtTransitionMode.SONG_CHANGE,
     val miniPlayerShowShuffle: Boolean = true,
     val miniPlayerShowRepeat: Boolean = true,
     val miniPlayerTapExpands: Boolean = true,
@@ -72,6 +73,9 @@ internal enum class DesktopMiniProgress { HIDDEN, THIN, FULL }
 internal enum class DesktopArtworkShape { SQUARE, ROUNDED, CIRCLE }
 @Serializable
 internal enum class DesktopMiniPlayerMaterial { GLASS, SOLID, ACCENT }
+
+/** Artwork particle transition: off, on every song click, or only when the clicked song differs from the playing one. */
+internal enum class DesktopArtTransitionMode { OFF, EVERY_CLICK, SONG_CHANGE }
 
 @Serializable
 private data class DesktopAppearanceFile(
@@ -134,6 +138,7 @@ internal object DesktopAppearanceRegistry {
         DesktopAppearanceSetting("desktop.dock", "Mini-player", "Floating player appearance", "Position and tune the floating mini-player.", setOf("dock", "mini player", "position", "width", "corner", "contrast", "rim")),
         DesktopAppearanceSetting("desktop.dock_contents", "Mini-player", "Mini-player contents", "Adjust artwork, track text, progress, and optional shortcut visibility.", setOf("artwork", "title", "artist", "progress", "shuffle", "repeat", "tap")),
         DesktopAppearanceSetting("desktop.dock_material", "Mini-player", "Mini-player material", "Choose the floating player glass, solid, or accent-tinted surface.", setOf("glass", "solid", "accent", "background")),
+        DesktopAppearanceSetting("desktop.art_transition", "Glass and motion", DesktopStrings["art_transition", "Artwork transition"], DesktopStrings["art_transition_desc", "Particle animation from a clicked cover to the floating player."], setOf("artwork", "particles", "animation", "transition", "cover")),
         DesktopAppearanceSetting("desktop.window_material", "Window", "Window material", "Choose the supported Windows desktop material.", setOf("mica", "acrylic", "windows", "title bar")),
     )
 }
