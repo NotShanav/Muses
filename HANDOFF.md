@@ -624,33 +624,8 @@ NOT compiled, tests NOT run. Written against the existing APIs only (`DesktopArt
 ### Unverified / to tune by eye
 - Sizes at real thumbnail scale (a ~56 px pill thumbnail gives ~1.2 px cells; `FLIGHT_MIN_DOT` 1.6 px keeps flying particles visible), sweep and flight stagger, orbit radius, halo strength, `toAwtImage` availability in this Compose version.
 
-
-## Artwork particle transition wiring (Muses desktop) - NOT COMPILED
-
-Engine: real `DesktopArtTransition*.kt` was in the zip, so **no stub was created** (STUB list: none). Coded against the contract; engine types are `internal`.
-
-Touched (all under `desktopApp/src/main/kotlin/com/music/bitchord/desktop/`):
-- `DesktopArtwork.kt`: new `internal object DesktopArtBounds` (register/unregister/`nearest(url, pointer)`, `lastPress`, `lastPressNanos`). `DesktopArtwork` registers one `Entry` per instance keyed by the original `url` (DisposableEffect), rect refreshed by `onGloballyPositioned` (one Rect per layout pass, nothing per frame).
-- `DesktopApp.kt`:
-  - `BitChordDesktopApp`: `DesktopFrame(...)` is now wrapped in `Box(Modifier.fillMaxSize().pointerInput(Unit){...Initial pass, records Press, consumes nothing})`; `DesktopArtTransitionOverlay()` is the last child of that Box (top-most, no pointer input). Wrapper starts at the old `DesktopFrame(` line (~2897), overlay line ~4104.
-  - `playCurrent()` (~813): captures `previousVideoId` before `selectedSong = song`; after `playbackEngine.load` starts the transition only if `DesktopArtTransition.enabled`, press < 600 ms old, and (song changed OR mode == EVERY_CLICK). Clears `lastPressNanos` so one press starts at most one transition. Playback is never delayed.
-  - After `val playback by ...` (~1711): LaunchedEffect tracks isLoading true->false for the same videoId and calls `audioReady`.
-  - Root, next to `reduceAnimation` (~2881): LaunchedEffect maps mode + reduceAnimation to `DesktopArtTransition.enabled` (reduce animations = off, also calls `cancel()`); LaunchedEffect(Unit) sets `backdropSink = DesktopBackdropPulses`.
-  - `DesktopPillArtwork` (~4796): uses `Modifier.artTransitionTarget()` and the instant path while revealing.
-  - Pill zone rows: non-artwork elements wrapped in `PillRevealFade` (alpha 0 until reveal 0.6, then to 1).
-  - Settings screen: "Artwork transition" chips in the "Glass and motion" group, plus the `modified()` entry.
-- `DesktopLiquidPill.kt`: it draws its own artwork (`LiquidPillArtwork`), so the same changes were applied (target bounds, revealing -> instant path, `PillRevealFade` on elements).
-- `DesktopAdvancedAppearance.kt`: `enum DesktopArtTransitionMode { OFF, EVERY_CLICK, SONG_CHANGE }`, `DesktopAppearanceConfig.artTransitionMode` (default SONG_CHANGE; persisted in the existing config JSON, no schema bump since defaults forward-fill), registry entry `desktop.art_transition`. Strings via `DesktopStrings[key, default]`: art_transition, art_transition_desc, art_transition_off, art_transition_every, art_transition_change.
-- `DesktopFluidity.kt` `DesktopFluidBackdrop`: draws live pulses as SrcOver radial glows just before the light-cover scrim.
-- NEW `DesktopBackdropPulses.kt` (sink, 6 slots, 600 ms quadratic decay) and NEW `DesktopArtTransitionWiring.kt` (pill helpers).
-
-Decisions made without asking:
-- Default mode is "Only when the song changes".
-- Pointer coords are the Box's local coords, which equal window px because the Box is the window root content.
-- `nearest()` can return the pill's own artwork instance if it is the closest; the click position normally wins.
-
-Not covered / known gaps:
-- Pulses only draw where `DesktopFluidBackdrop` is drawn: Fluidity ON. Not drawn with Fluidity OFF (page backdrop), nor with a system material and Fluidity off (no backdrop is drawn). The full-player album-reactive/acrylic backgrounds were not touched.
-- If isLoading never flips true while the song is selected (very fast load), `audioReady` is not called; relies on the engine's own timeout.
-- The pill's own artwork instance also registers in `DesktopArtBounds`.
-- Not compiled. CI/Gradle must verify (check `Modifier.artTransitionTarget()` composable-modifier usage and the shadowed `modifier` val in `DesktopArtwork`).
+### ART-TRANSITION ENGINE, update 2 (account A): source location and scaling
+Bug seen: particles came only from a small patch at the pointer, not the whole artwork. Cause: `start()` got `sourceBounds = null`, so the engine used its 80x80 px box around the click. Fixes, all in the engine files:
+- NEW `Modifier.artTransitionSource(videoId)` (in DesktopArtTransitionOverlay.kt). **Account B: add it to the artwork view of EVERY card/row/tile that can start playback** (Recents, Song mixes, Listen again, lists, search...). The engine then finds the clicked view itself at `start()`: it uses the full unclipped box of the reported view for that videoId (the one containing the pointer wins), then `request.sourceBounds`, then any reported view, then the pointer box. Passing `sourceBounds` is still fine but no longer required.
+- Scaling is "cover"/Crop-aware: the square artwork is as big as the box's longer side, centred; cells the box crops away start invisible and fade in as they let go. Same for the pill: home cells are a `max(w,h)` square centred on `targetBounds()`; cells outside a non-square thumbnail fade out on arrival. If the pill/cards use FillBounds or Fit instead of Crop, tell me and the mapping changes.
+- Contract unchanged. Not compiled, tests not run (new test: `coverGeometryMatchesCropScaling`).
