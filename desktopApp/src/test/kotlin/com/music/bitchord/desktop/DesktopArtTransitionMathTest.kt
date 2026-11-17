@@ -182,6 +182,22 @@ class DesktopArtTransitionMathTest {
     }
 
     @Test
+    fun coverGeometryMatchesCropScaling() {
+        assertEquals(300f, p.coverSide(200f, 300f))
+        assertEquals(300f, p.coverSide(300f, 200f))
+        assertTrue(near(p.coverOffset(0.5f / 48f, 300f), -150f + 150f / 48f, 1e-2f))
+        assertTrue(near(p.coverOffset(0.5f, 300f), 0f))
+        // Portrait 200x300 box: a cell 100 px left of centre is on screen, 140 px left is cropped away.
+        assertTrue(!p.outsideCover(-100f, 100f, 6.25f))
+        assertTrue(p.outsideCover(-140f, 100f, 6.25f))
+        // A square box shows every cell.
+        for (c in 0 until p.GRID) {
+            val off = p.coverOffset((c + 0.5f) / p.GRID, 200f)
+            assertTrue(!p.outsideCover(off, 100f, 200f / p.GRID))
+        }
+    }
+
+    @Test
     fun liftIsSmallAndSettlesAtEightyMs() {
         assertTrue(near(p.liftScale(0f), 1f))
         assertTrue(near(p.liftScale(80f), 1f + p.LIFT_SCALE))

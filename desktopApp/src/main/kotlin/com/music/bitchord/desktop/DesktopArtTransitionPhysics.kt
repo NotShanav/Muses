@@ -1,6 +1,7 @@
 package com.music.bitchord.desktop
 
 import kotlin.math.PI
+import kotlin.math.abs
 import kotlin.math.cos
 import kotlin.math.exp
 import kotlin.math.max
@@ -119,6 +120,19 @@ internal object ArtTransitionPhysics {
         out[1] = (h - side) / 2
         out[2] = side
     }
+
+    /**
+     * Side of the square artwork once it is drawn "cover" (Crop) into a [w] x [h] box: the whole box is
+     * filled, so the square is as big as the longer side and its overflow is cropped.
+     */
+    fun coverSide(w: Float, h: Float): Float = max(w, h)
+
+    /** Offset from the box centre of a point at fraction [frac] (0..1) across a square of side [side]. */
+    fun coverOffset(frac: Float, side: Float): Float = (frac - 0.5f) * side
+
+    /** True when a cell centred [offset] from the centre falls outside a box of half size [halfExtent]. */
+    fun outsideCover(offset: Float, halfExtent: Float, cell: Float): Boolean =
+        abs(offset) > halfExtent + cell * 0.5f
 
     // ---- Noise ---------------------------------------------------------------------------------
 

@@ -812,33 +812,11 @@ fun BitChordDesktopApp() {
     /** Opens whatever the queue is currently pointing at. */
     fun playCurrent(startPlaying: Boolean = true) {
         val song = liveQueue.current ?: return
-        val previousVideoId = selectedSong?.videoId
         selectedSong = song
         history = (listOf(song) + history.filterNot { it.videoId == song.videoId }).take(50)
         saveQueue()
         persistence.saveHistory(history)
         playbackEngine.load(song, startPlaying)
-        // Artwork transition: only for a user press in the last ~600 ms, so auto-advance, next at
-        // track end and restores stay animation-free. Never gates playback.
-        run {
-            val press = DesktopArtBounds.lastPress
-            val fresh = press != null && DesktopArtBounds.lastPressNanos != 0L &&
-                System.nanoTime() - DesktopArtBounds.lastPressNanos < 600_000_000L
-            val mode = DesktopAdvancedAppearance.config.value.artTransitionMode
-            if (DesktopArtTransition.enabled && fresh &&
-                (previousVideoId != song.videoId || mode == DesktopArtTransitionMode.EVERY_CLICK)
-            ) {
-                DesktopArtBounds.lastPressNanos = 0L // one press starts at most one transition
-                DesktopArtTransition.start(
-                    ArtTransitionRequest(
-                        videoId = song.videoId,
-                        artworkUrl = song.thumbnailUrl,
-                        sourceBounds = DesktopArtBounds.nearest(song.thumbnailUrl, press),
-                        pointer = press,
-                    ),
-                )
-            }
-        }
         partySyncHolder[0]?.onLocalIntent(song.videoId)
         scope.launch { DesktopScrobbling.updateNowPlaying(song) }
     }
@@ -1731,18 +1709,6 @@ fun BitChordDesktopApp() {
         }
     }
     val playback by playbackEngine.state.collectAsState()
-    // Artwork transition: isLoading true -> false for the same song means audio is ready.
-    val artLoadingFor = remember { arrayOfNulls<String>(1) }
-    LaunchedEffect(playback.isLoading, selectedSong?.videoId) {
-        val id = selectedSong?.videoId
-        if (playback.isLoading) {
-            artLoadingFor[0] = id
-        } else {
-            val was = artLoadingFor[0]
-            artLoadingFor[0] = null
-            if (was != null && was == id) DesktopArtTransition.audioReady(was)
-        }
-    }
 
     // The shared player reads the playhead off this one object, and only where it
     // draws it — see PlaybackPosition — so a tick never recomposes the player.
@@ -2913,13 +2879,6 @@ fun BitChordDesktopApp() {
     val fluidity by DesktopFluiditySettings.enabled.collectAsState()
     val interfaceMode by DesktopInterfaceSettings.mode.collectAsState()
     val reduceAnimation by DesktopAppearanceSettings.reduceAnimation.collectAsState()
-    val artTransitionModeSetting = DesktopAdvancedAppearance.config.collectAsState().value.artTransitionMode
-    LaunchedEffect(artTransitionModeSetting, reduceAnimation) {
-        // Reduce animations counts as Off.
-        DesktopArtTransition.enabled = artTransitionModeSetting != DesktopArtTransitionMode.OFF && !reduceAnimation
-        if (!DesktopArtTransition.enabled) DesktopArtTransition.cancel()
-    }
-    LaunchedEffect(Unit) { DesktopArtTransition.backdropSink = DesktopBackdropPulses }
     val modernInterface = interfaceMode == DesktopInterfaceMode.MODERN
     // The full-screen player's own backdrop: Album reactive always provides one; Acrylic glass
     // provides today's fluid one in Fluidity mode and null (the shared player's mesh) otherwise.
@@ -2935,22 +2894,6 @@ fun BitChordDesktopApp() {
             LocalNowPlaying provides selectedSong,
             LocalPlayerBackdropOverride provides fluidPlayerBackdrop,
         ) {
-            Box(
-                Modifier.fillMaxSize().pointerInput(Unit) {
-                    // Artwork transition: remember the last press (window px) without consuming anything.
-                    awaitPointerEventScope {
-                        while (true) {
-                            val ev = awaitPointerEvent(PointerEventPass.Initial)
-                            if (ev.type == PointerEventType.Press) {
-                                ev.changes.firstOrNull()?.let {
-                                    DesktopArtBounds.lastPress = it.position
-                                    DesktopArtBounds.lastPressNanos = System.nanoTime()
-                                }
-                            }
-                        }
-                    }
-                },
-            ) {
             DesktopFrame(
                 modernMode = modernInterface,
                 pageTransitionKey = here().key,
@@ -4142,8 +4085,6 @@ fun BitChordDesktopApp() {
 
             }
         }
-            DesktopArtTransitionOverlay() // artwork transition: top-most, no pointer input
-            }
         }
     }
 
@@ -4773,13 +4714,13 @@ internal fun DesktopFloatingMiniPlayer(
         }
         Row(Modifier.fillMaxSize(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                for (id in pill.zones["left"].orEmpty()) if (id == "artwork") drawPillElement(id) else PillRevealFade { drawPillElement(id) }
+                for (id in pill.zones["left"].orEmpty()) drawPillElement(id)
             }
             Row(Modifier.weight(1f).fillMaxHeight(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                for (id in pill.zones["center"].orEmpty()) if (id == "artwork") drawPillElement(id) else PillRevealFade { drawPillElement(id) }
+                for (id in pill.zones["center"].orEmpty()) drawPillElement(id)
             }
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                for (id in pill.zones["right"].orEmpty()) if (id == "artwork") drawPillElement(id) else PillRevealFade { drawPillElement(id) }
+                for (id in pill.zones["right"].orEmpty()) drawPillElement(id)
             }
         }
         if (dockHovered) Box(Modifier.align(Alignment.TopEnd).padding(3.dp).zIndex(2f)) {
@@ -4802,12 +4743,11 @@ private fun DesktopPillArtwork(
     instantTrackChange: Boolean,
     durationMs: Int,
 ) {
-    val artRevealing = rememberArtRevealing()
     Box(
-        artworkModifier.size(size).artTransitionTarget().clip(shape).graphicsLayer { rotationZ = rotationDegrees },
+        artworkModifier.size(size).clip(shape).graphicsLayer { rotationZ = rotationDegrees },
     ) {
         val art = song.videoId to song.thumbnailUrl
-        if (instantTrackChange || artRevealing) {
+        if (instantTrackChange) {
             DesktopArtwork(art.second, Modifier.fillMaxSize(), px = ROW_ART_PX)
         } else {
             Crossfade(
@@ -6787,7 +6727,6 @@ internal fun DesktopAdvancedCustomizationSettings(onOpenHomeSections: () -> Unit
         "desktop.fluidity" -> fluidity
         "desktop.reduce_blur" -> reduceBlur
         "desktop.reduce_motion" -> reduceMotion
-        "desktop.art_transition" -> config.artTransitionMode != DesktopArtTransitionMode.SONG_CHANGE
         "desktop.dock" -> dockPosition != DesktopMiniPlayerPosition.CENTER || dockWidth != 720 || dockBottom != 16 ||
             dockCorner != 20 || dockContrast != 0.72f || dockRim != 0.32f
         "desktop.dock_contents" -> config.miniPlayerHeight != DesktopMiniPlayerHeight.DEFAULT || !config.miniPlayerArtwork ||
@@ -7063,28 +7002,10 @@ internal fun DesktopAdvancedCustomizationSettings(onOpenHomeSections: () -> Unit
             }
             TextButton(onClick = { DesktopInterfaceSettings.setMode(DesktopInterfaceMode.DEFAULT) }) { Text("Reset navigation") }
         }
-        if (matches("desktop.fluidity") || matches("desktop.reduce_blur") || matches("desktop.reduce_motion") || matches("desktop.art_transition")) SettingsGroup("Glass and motion") {
+        if (matches("desktop.fluidity") || matches("desktop.reduce_blur") || matches("desktop.reduce_motion")) SettingsGroup("Glass and motion") {
             if (matches("desktop.fluidity")) SettingsToggle("Fluidity${if (modified("desktop.fluidity")) " · modified" else ""}", "Artwork-coloured glass and motion across the desktop shell", fluidity, DesktopFluiditySettings::setEnabled)
             if (matches("desktop.reduce_blur")) SettingsToggle("Reduce dynamic blur${if (modified("desktop.reduce_blur")) " · modified" else ""}", "Accessibility/performance override; solid fallbacks win over glass choices", reduceBlur, DesktopAppearanceSettings::setReduceDynamicBlur)
             if (matches("desktop.reduce_motion")) SettingsToggle("Reduce animations${if (modified("desktop.reduce_motion")) " · modified" else ""}", "Accessibility override; disables motion-heavy transitions", reduceMotion, DesktopAppearanceSettings::setReduceAnimation)
-            if (matches("desktop.art_transition")) {
-                Text(DesktopStrings["art_transition", "Artwork transition"] + if (reduceMotion) " (off while Reduce animations is on)" else "", color = DesktopSecondary, style = MaterialTheme.typography.bodySmall)
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(vertical = 8.dp)) {
-                    DesktopArtTransitionMode.entries.forEach { option ->
-                        FilterChip(colors = desktopChipColors(), selected = config.artTransitionMode == option,
-                            onClick = { DesktopAdvancedAppearance.update { it.copy(artTransitionMode = option) } },
-                            label = {
-                                Text(
-                                    when (option) {
-                                        DesktopArtTransitionMode.OFF -> DesktopStrings["art_transition_off", "Off"]
-                                        DesktopArtTransitionMode.EVERY_CLICK -> DesktopStrings["art_transition_every", "Every song click"]
-                                        DesktopArtTransitionMode.SONG_CHANGE -> DesktopStrings["art_transition_change", "Only when the song changes"]
-                                    },
-                                )
-                            })
-                    }
-                }
-            }
             TextButton(onClick = {
                 DesktopFluiditySettings.setEnabled(false)
                 DesktopFluiditySettings.setSubtle(false)

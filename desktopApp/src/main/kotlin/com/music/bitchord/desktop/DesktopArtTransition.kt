@@ -2,9 +2,12 @@ package com.music.bitchord.desktop
 
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.toAwtImage
+import androidx.compose.ui.layout.LayoutCoordinates
+import androidx.compose.ui.layout.positionInWindow
 import com.music.bitchord.data.model.artworkAt
 import java.awt.RenderingHints
 import java.awt.image.BufferedImage
@@ -264,10 +267,47 @@ internal object DesktopArtTransition {
         _active.value = fading != null
     }
 
+    /** Artwork views that reported themselves with `Modifier.artTransitionSource`, by layout node. */
+    private val sources = HashMap<LayoutCoordinates, String>()
+
+    /** Called from `Modifier.artTransitionSource`: remembers where the artwork for [videoId] is drawn. */
+    internal fun reportSource(videoId: String, coords: LayoutCoordinates) {
+        synchronized(sources) {
+            if (sources.size > 96) sources.keys.removeAll { !it.isAttached }
+            sources[coords] = videoId
+        }
+    }
+
+    /** Where a reported artwork view for [videoId] is right now (full, unclipped box, window px). */
+    private fun lookupSource(videoId: String, pointer: Offset?): Rect? {
+        var best: Rect? = null
+        synchronized(sources) {
+            val it = sources.entries.iterator()
+            while (it.hasNext()) {
+                val e = it.next()
+                if (!e.key.isAttached) {
+                    it.remove()
+                    continue
+                }
+                if (e.value != videoId) continue
+                val pos = e.key.positionInWindow()
+                val r = Rect(pos, Size(e.key.size.width.toFloat(), e.key.size.height.toFloat()))
+                if (r.width < 2f || r.height < 2f) continue
+                if (pointer != null && r.contains(pointer)) return r
+                if (best == null) best = r
+            }
+        }
+        return best
+    }
+
     private fun resolveSource(request: ArtTransitionRequest): Rect {
+        val p = request.pointer
+        // The live, unclipped box of the view that was clicked beats any bounds passed in.
+        val hit = lookupSource(request.videoId, p)
+        if (hit != null && (p == null || hit.contains(p))) return hit
         val b = request.sourceBounds
         if (b != null && b.width >= 2f && b.height >= 2f) return b
-        val p = request.pointer
+        if (hit != null) return hit
         if (p != null) return Rect(p.x - 40f, p.y - 40f, p.x + 40f, p.y + 40f)
         val tb = try {
             targetBounds()
@@ -379,6 +419,7 @@ internal class ArtParticleSim(
     private val dirX = FloatArray(count)
     private val dirY = FloatArray(count)
     private val glowAmt = FloatArray(count)
+    private val srcHidden = BooleanArray(count)
 
     private val chunkR = FloatArray(ArtTransitionPhysics.SINK_CHUNKS)
     private val chunkG = FloatArray(ArtTransitionPhysics.SINK_CHUNKS)
@@ -391,9 +432,13 @@ internal class ArtParticleSim(
 
     private val srcCx = srcRect.left + srcRect.width * 0.5f
     private val srcCy = srcRect.top + srcRect.height * 0.5f
-    private val srcW = srcRect.width
-    private val cellSW = srcRect.width / ArtTransitionPhysics.GRID
-    private val cellSH = srcRect.height / ArtTransitionPhysics.GRID
+    // The artwork is a square drawn "cover" into the source box, so it is as big as the longer side.
+    private val srcSide = ArtTransitionPhysics.coverSide(srcRect.width, srcRect.height)
+    private val srcW = srcSide
+    private val srcHalfW = srcRect.width * 0.5f
+    private val srcHalfH = srcRect.height * 0.5f
+    private val cellSW = srcSide / ArtTransitionPhysics.GRID
+    private val cellSH = srcSide / ArtTransitionPhysics.GRID
 
     private val tmp = FloatArray(2)
     private val tmp2 = FloatArray(2)
@@ -421,6 +466,9 @@ internal class ArtParticleSim(
     // Per-frame values shared with the per-particle helpers.
     private var fL = 0f
     private var fT = 0f
+    private var fCx = 0f
+    private var fCy = 0f
+    private var fS = 0f
     private var fTw = 0f
     private var fTh = 0f
     private var fCw = 0f
@@ -460,8 +508,11 @@ internal class ArtParticleSim(
             ang[p] = ph.hash01(col, row, seed + 5) * 6.2831855f
             hx[p] = (col + 0.5f) / n
             hy[p] = (row + 0.5f) / n
-            sx[p] = srcRect.left + (col + 0.5f) * cellSW
-            sy[p] = srcRect.top + (row + 0.5f) * cellSH
+            sx[p] = srcCx + ph.coverOffset(hx[p], srcSide)
+            sy[p] = srcCy + ph.coverOffset(hy[p], srcSide)
+            // Cells of the square that the box crops away start invisible and fade in as they let go.
+            srcHidden[p] = ph.outsideCover(sx[p] - srcCx, srcHalfW, cellSW) ||
+                ph.outsideCover(sy[p] - srcCy, srcHalfH, cellSH)
             val bg = ph.hash01(col, row, seed + 101) < ArtTransitionPhysics.BG_FRACTION
             isBg[p] = bg
             if (bg) {
@@ -533,8 +584,12 @@ internal class ArtParticleSim(
         fT = tb.top
         fTw = tw
         fTh = th
-        fCw = tw / n
-        fCh = th / n
+        // The pill thumbnail shows the square artwork "cover" too: a square as big as its longer side, centred.
+        fCx = tb.left + tw * 0.5f
+        fCy = tb.top + th * 0.5f
+        fS = ph.coverSide(tw, th)
+        fCw = fS / n
+        fCh = fS / n
         fOcx = tb.left + tw * 0.5f
         fOcy = tb.top - th * 0.30f
         fLift = ph.liftScale(tMs)
@@ -629,7 +684,7 @@ internal class ArtParticleSim(
             py[p] = by
             dw[p] = baseW
             dh[p] = baseH
-            alpha[p] = ph.smoothstep(20f, 100f, t)
+            alpha[p] = if (srcHidden[p]) 0f else ph.smoothstep(20f, 100f, t)
             rad[p] = 0f
             return
         }
@@ -649,7 +704,7 @@ internal class ArtParticleSim(
         val grow = 1f + (2.2f + noise2[p] * 1.6f) * e
         dw[p] = max(baseW * grow, 1.4f * e)
         dh[p] = max(baseH * grow, 1.4f * e)
-        alpha[p] = 0.9f * (1f - ph.easeInCubic(u))
+        alpha[p] = 0.9f * (1f - ph.easeInCubic(u)) * (if (srcHidden[p]) ph.clamp01(u * 5f) else 1f)
         rad[p] = 1f
     }
 
@@ -671,7 +726,7 @@ internal class ArtParticleSim(
                 py[p] = by
                 dw[p] = baseW
                 dh[p] = baseH
-                alpha[p] = ph.smoothstep(20f, 100f, t)
+                alpha[p] = if (srcHidden[p]) 0f else ph.smoothstep(20f, 100f, t)
                 rad[p] = 0f
                 glow[p] = 0f
                 return 1
@@ -684,7 +739,7 @@ internal class ArtParticleSim(
                 py[p] = by + tmp[1] * amp
                 dw[p] = baseW * (1f + 0.4f * u)
                 dh[p] = baseH * (1f + 0.4f * u)
-                alpha[p] = 1f
+                alpha[p] = if (srcHidden[p]) u else 1f
                 rad[p] = u
                 glow[p] = glowAmt[p] * u * 0.5f
                 return 1
@@ -695,8 +750,10 @@ internal class ArtParticleSim(
             sy0[p] = py[p]
         }
 
-        val hxp = fL + hx[p] * fTw
-        val hyp = fT + hy[p] * fTh
+        val hxp = fCx + ph.coverOffset(hx[p], fS)
+        val hyp = fCy + ph.coverOffset(hy[p], fS)
+        // Cells that land outside a non-square thumbnail fade out on arrival instead of spilling over.
+        val homeOut = ph.outsideCover(hxp - fCx, fTw * 0.5f, fCw) || ph.outsideCover(hyp - fCy, fTh * 0.5f, fCh)
 
         if (st == 2) {
             val pr = ph.clamp01((t - fsMs[p]) / fdMs[p])
@@ -728,7 +785,7 @@ internal class ArtParticleSim(
             val swell = 1f + 0.9f * env
             dw[p] = max(ph.lerp(baseW, fCw, e) * swell, FLIGHT_MIN_DOT * env)
             dh[p] = max(ph.lerp(baseH, fCh, e) * swell, FLIGHT_MIN_DOT * env)
-            alpha[p] = (1f - 0.12f * env) * (1f - fRevealFade)
+            alpha[p] = (1f - 0.12f * env) * (1f - fRevealFade) * (if (homeOut) 1f - ph.smoothstep(0.55f, 0.95f, pr) else 1f)
             rad[p] = 1f
             glow[p] = glowAmt[p] * env
             if (pr >= 1f) {
@@ -764,7 +821,7 @@ internal class ArtParticleSim(
             dh[p] += (fCh + SEAM_PX - dh[p]) * k
             rad[p] = max(0f, rad[p] - fDtMs / 160f)
             glow[p] = max(0f, glow[p] - fDtMs / 200f)
-            alpha[p] = 1f - fRevealFade
+            alpha[p] = if (homeOut) 0f else 1f - fRevealFade
             val ex = px[p] - hxp
             val ey = py[p] - hyp
             if (ex * ex + ey * ey < 0.04f && vx[p] * vx[p] + vy[p] * vy[p] < 4f && rad[p] <= 0f) state[p] = 5
@@ -778,7 +835,7 @@ internal class ArtParticleSim(
         dh[p] = fCh + SEAM_PX
         rad[p] = 0f
         glow[p] = 0f
-        alpha[p] = 1f - fRevealFade
+        alpha[p] = if (homeOut) 0f else 1f - fRevealFade
         return 0
     }
 

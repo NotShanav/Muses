@@ -5,12 +5,6 @@ import com.music.bitchord.data.model.artworkAt
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.remember
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Rect
-import androidx.compose.ui.layout.boundsInWindow
-import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.produceState
 import androidx.compose.ui.Modifier
@@ -63,55 +57,6 @@ internal object DesktopArtworkCache {
     }
 }
 
-
-/**
- * Window-space bounds of every live [DesktopArtwork], keyed by the ORIGINAL url (not the sized one),
- * so the artwork transition can launch from the cover that was actually clicked.
- *
- * Each instance owns one [Entry] and overwrites its rect on layout; nothing is allocated per frame.
- */
-internal object DesktopArtBounds {
-    internal class Entry { @Volatile var rect: Rect? = null }
-
-    private val entries = HashMap<String, MutableList<Entry>>()
-
-    /** Last mouse press in window px, and when. Written by the root observer, read by playCurrent(). */
-    @Volatile var lastPress: Offset? = null
-    @Volatile var lastPressNanos: Long = 0L
-
-    fun register(url: String, entry: Entry) = synchronized(entries) {
-        entries.getOrPut(url) { ArrayList(2) }.add(entry)
-    }
-
-    fun unregister(url: String, entry: Entry) = synchronized(entries) {
-        entries[url]?.let { list ->
-            list.remove(entry)
-            if (list.isEmpty()) entries.remove(url)
-        }
-    }
-
-    /** Instance nearest the pointer (0 distance if it contains it), or the first laid-out one without a pointer. */
-    fun nearest(url: String?, pointer: Offset?): Rect? {
-        if (url.isNullOrBlank()) return null
-        synchronized(entries) {
-            val list = entries[url] ?: return null
-            var best: Rect? = null
-            var bestD = Float.MAX_VALUE
-            for (e in list) {
-                val r = e.rect ?: continue
-                if (pointer == null) return r
-                val d = if (r.contains(pointer)) 0f else {
-                    val dx = pointer.x - r.center.x
-                    val dy = pointer.y - r.center.y
-                    dx * dx + dy * dy
-                }
-                if (d < bestD) { bestD = d; best = r }
-            }
-            return best
-        }
-    }
-}
-
 /** Artwork, fetched at the size the surface drawing it actually needs. */
 @Composable
 fun DesktopArtwork(
@@ -122,15 +67,6 @@ fun DesktopArtwork(
     px: Int? = null,
 ) {
     val sized = if (px != null) url.artworkAt(px) else url
-    val boundsEntry = remember { DesktopArtBounds.Entry() }
-    DisposableEffect(url) {
-        if (url != null) DesktopArtBounds.register(url, boundsEntry)
-        onDispose {
-            boundsEntry.rect = null
-            if (url != null) DesktopArtBounds.unregister(url, boundsEntry)
-        }
-    }
-    val modifier = modifier.onGloballyPositioned { boundsEntry.rect = it.boundsInWindow() }
     val bitmap by produceState<ImageBitmap?>(initialValue = null, key1 = sized) {
         value = withContext(Dispatchers.IO) {
             DesktopArtworkCache.load(sized)

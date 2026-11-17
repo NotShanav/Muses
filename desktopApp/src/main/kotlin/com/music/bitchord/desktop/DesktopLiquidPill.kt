@@ -612,13 +612,13 @@ internal fun DesktopLiquidPill(
             horizontalArrangement = Arrangement.spacedBy(4.dp),
         ) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                for (id in pill.zones["left"].orEmpty()) if (id == "artwork") drawPillElement(id) else PillRevealFade { drawPillElement(id) }
+                for (id in pill.zones["left"].orEmpty()) drawPillElement(id)
             }
             Row(Modifier.weight(1f).fillMaxHeight(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                for (id in pill.zones["center"].orEmpty()) if (id == "artwork") drawPillElement(id) else PillRevealFade { drawPillElement(id) }
+                for (id in pill.zones["center"].orEmpty()) drawPillElement(id)
             }
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                for (id in pill.zones["right"].orEmpty()) if (id == "artwork") drawPillElement(id) else PillRevealFade { drawPillElement(id) }
+                for (id in pill.zones["right"].orEmpty()) drawPillElement(id)
             }
         }
         if (hovered) Box(Modifier.align(Alignment.TopEnd).padding(3.dp).zIndex(2f)) {
@@ -640,13 +640,12 @@ private fun LiquidPillArtwork(
     instantTrackChange: Boolean,
     durationMs: Int,
 ) {
-    val artRevealing = rememberArtRevealing()
     Box(
-        modifier.size(size).artTransitionTarget().clip(shape).border(0.8.dp, Color.White.copy(alpha = 0.22f), shape),
+        modifier.size(size).clip(shape).border(0.8.dp, Color.White.copy(alpha = 0.22f), shape),
     ) {
         Box(Modifier.fillMaxSize().graphicsLayer { rotationZ = rotation() }) {
             val art = song.videoId to song.thumbnailUrl
-            if (instantTrackChange || artRevealing) {
+            if (instantTrackChange) {
                 DesktopArtwork(art.second, Modifier.fillMaxSize(), px = ROW_ART_PX)
             } else {
                 Crossfade(

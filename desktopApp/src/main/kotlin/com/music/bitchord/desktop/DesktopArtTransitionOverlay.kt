@@ -16,6 +16,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.layout.onGloballyPositioned
 import kotlin.math.min
 
 /**
@@ -50,6 +51,14 @@ internal fun DesktopArtTransitionOverlay() {
         if (cur != null) drawParticles(cur)
     }
 }
+
+/**
+ * Put this on the view that draws a song's artwork (every card, row and tile that can start playback).
+ * The transition then starts from that view's real box, so the whole picture turns into particles,
+ * scaled to it, whatever the click position or scroll offset.
+ */
+internal fun Modifier.artTransitionSource(videoId: String): Modifier =
+    this.onGloballyPositioned { DesktopArtTransition.reportSource(videoId, it) }
 
 /** One draw call per particle (round-rect while it is flying, plain rect once home), plus a soft halo on bright ones in motion. */
 private fun DrawScope.drawParticles(sim: ArtParticleSim) {
