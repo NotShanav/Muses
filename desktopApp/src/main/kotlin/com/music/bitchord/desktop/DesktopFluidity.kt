@@ -270,10 +270,22 @@ internal fun DesktopFluidBackdrop(
     val windowVisible by DesktopWindowVisibility.visible.collectAsState()
     val material by DesktopWindowBackdrop.active.collectAsState()
     val appearance by DesktopAdvancedAppearance.config.collectAsState()
+    // BACKDROP-STYLE: the owner's look (Vivid / Natural / Deep), brightness, colour intensity and grain.
+    val look by DesktopBackdropSettings.look.collectAsState()
+    val lookBrightness by DesktopBackdropSettings.brightness.collectAsState()
+    val lookVibrance by DesktopBackdropSettings.vibrance.collectAsState()
+    val grain by DesktopBackdropSettings.grain.collectAsState()
+    val tuning = DesktopBackdropTunings.of(look)
     val translucent = overMaterial && material != DesktopBackdrop.OFF
     val running = windowVisible && !reduceAnimation
 
-    val target = rememberFluidPalette(artworkUrl)
+    val rawTarget = rememberFluidPalette(artworkUrl)
+    val target = remember(rawTarget, look, lookBrightness, lookVibrance) {
+        rawTarget?.let { restylePalette(it, tuning, lookBrightness, lookVibrance) }
+    }
+    // The cover the palette last came from: a change of look or slider on the SAME cover updates at once
+    // (no 1.4 s dissolve and no swell on every slider tick); a new cover still dissolves.
+    val seenCover = remember { arrayOfNulls<FluidPalette>(1) }
     val strength by animateFloatAsState(
         appearance.paletteStrength,
         if (reduceAnimation) snap() else tween(400),
@@ -294,6 +306,14 @@ internal fun DesktopFluidBackdrop(
             progress.snapTo(1f)
             return@LaunchedEffect
         }
+        val sameCover = rawTarget != null && seenCover[0] === rawTarget
+        seenCover[0] = rawTarget
+        if (sameCover) {
+            to = target
+            from = null
+            progress.snapTo(1f)
+            return@LaunchedEffect
+        }
         val firstGlow = to == null
         // Retarget mid-dissolve: the old target becomes `from` outright (a tiny jump, accepted).
         from = to
@@ -309,7 +329,7 @@ internal fun DesktopFluidBackdrop(
 
     // A swell of glow whenever the cover changes, so a skip is something you see.
     val burst = remember { Animatable(0f) }
-    LaunchedEffect(target) {
+    LaunchedEffect(rawTarget) {
         if (reduceAnimation) return@LaunchedEffect
         burst.snapTo(1f)
         burst.animateTo(0f, tween(2000, easing = FastOutSlowInEasing))
@@ -345,7 +365,7 @@ internal fun DesktopFluidBackdrop(
 
         // Base: old out, new in. Over a translucent material both layers share the one base alpha
         // (old fades as 1 - p) so the sum never stacks darker than a settled base.
-        val baseAlpha = if (translucent) 0.46f else 1f
+        val baseAlpha = if (translucent) tuning.translucentBaseAlpha else 1f
         if (dissolving) {
             val oldBase = fromPalette?.base ?: FluidNeutralBase
             drawRect(oldBase.copy(alpha = if (translucent) baseAlpha * (1f - p) else baseAlpha))
@@ -356,8 +376,8 @@ internal fun DesktopFluidBackdrop(
         // 360 T4: a large faint wash of the dominant colour under the glows, so the page carries colour
         // between them. Same dissolve as the glows: old out, new in.
         val washScale = strength * (if (subtle) 0.75f else 1f)
-        if (fromPalette != null) drawFluidWash(fromPalette, reach, washScale * (1f - p))
-        if (toPalette != null) drawFluidWash(toPalette, reach, washScale * (if (dissolving) p else 1f))
+        if (fromPalette != null) drawFluidWash(fromPalette, reach, washScale * (1f - p), tuning.washAlpha)
+        if (toPalette != null) drawFluidWash(toPalette, reach, washScale * (if (dissolving) p else 1f), tuning.washAlpha)
 
         val glows = if (subtle) 2 else BLOB_COUNT
         for (i in 0 until glows) {
@@ -369,7 +389,7 @@ internal fun DesktopFluidBackdrop(
             val breathing = if (subtle) 1f else 1f + 0.07f * sin(t * 0.5f + glow.phase)
             val radius = reach * glow.radius * breathing * (1f + 0.18f * swell)
             // Role alpha (dominant, second, third, tint) times this glow's ratio to the first glow.
-            val roleAlpha = FluidRoleAlpha[i] * (glow.alpha / FluidGlows[0].alpha)
+            val roleAlpha = FluidRoleAlpha[i] * tuning.roleAlphaScale * (glow.alpha / FluidGlows[0].alpha)
             val ambient = roleAlpha * strength * (if (subtle) 0.75f else 1f) * (1f + 0.3f * swell)
             if (fromPalette != null) {
                 drawFluidGlow(fromPalette, i, centre, radius, ambient, 1f - p)
@@ -394,8 +414,9 @@ internal fun DesktopFluidBackdrop(
                 ),
             ),
         )
-        // 360 T4: dither noise over the finished backdrop, so dark gradients do not band.
-        drawDither()
+        // Grain is the owner's choice and off by default (it made the glow look rough; the ring banding it was
+        // added for is fixed by the gradient stops).
+        if (grain) drawDither()
     }
 }
 
@@ -403,8 +424,8 @@ internal fun DesktopFluidBackdrop(
  * 360 T4: the dominant colour as one window-sized radial wash (centre high, never ending on transparent
  * black, so no ring). [scale] is the palette strength times this layer's share of the dissolve.
  */
-private fun DrawScope.drawFluidWash(palette: FluidPalette, reach: Float, scale: Float) {
-    val alpha = (FLUID_WASH_ALPHA * palette.intensity * scale).coerceIn(0f, 0.5f)
+private fun DrawScope.drawFluidWash(palette: FluidPalette, reach: Float, scale: Float, washAlpha: Float) {
+    val alpha = (washAlpha * palette.intensity * scale).coerceIn(0f, 0.5f)
     if (alpha <= 0.002f) return
     val color = palette.colors[0]
     drawRect(

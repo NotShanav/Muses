@@ -584,3 +584,19 @@ New: `DesktopDither.kt`. Edited: `DesktopAlbumPalette.kt`, `DesktopFluidity.kt`,
 - Tune by eye on the laptop: wash alpha, glow falloff, dither visibility.
 ### Exact next step
 Compile; compare a saturated, a dark and a white cover.
+
+## BACKDROP-STYLE: owner-chosen background look, grain off (after the 360 round)
+### Owner's report
+Vertical and tablet layouts work well. The 360 T4 colour update made the backgrounds grainy (the dither noise), duller and darker, and the colour recognition looked as if it chose darker colours. The ring banding is gone. The owner wants bright colours and a setting to choose the kind of background.
+### Did
+- **Grain is off by default.** `drawDither()` only runs when the new setting "Grain texture" is on (the rings it was added for were fixed by the gradient stops).
+- **Background looks** (new `DesktopBackdropStyle.kt`): `DesktopBackdropLook { VIVID, NATURAL, DEEP }` with a tuning table (`DesktopBackdropTuning`: chroma scale, lightness floors/cap/shift, base lightness, glow alpha scale, wash alpha, translucent base alpha, intensity min/scale). Default VIVID. NATURAL equals the T4 look.
+- **Two sliders**: Brightness (moves every glow +-0.15 OKLab lightness) and Colour intensity (chroma x0.5 to x1.5), 0.5 = no change. Persisted as strings (`backdrop_look`, `backdrop_brightness`, `backdrop_vibrance`, `backdrop_grain`).
+- **Restyle, not re-extraction**: `restylePalette(palette, tuning, brightness, vibrance)` (end of `DesktopAlbumPalette.kt`, pure) restyles the extracted palette when it is drawn, so changing look or sliders is instant and cheap. `DesktopFluidBackdrop` (`DesktopFluidity.kt`) applies it, uses the look's wash alpha, glow alpha scale and translucent base alpha, and a change on the SAME cover updates at once (no 1.4 s dissolve, no swell per slider tick); a new cover still dissolves.
+- **Settings UI**: Settings > Appearance > Colours and background: chips Vivid / Natural / Deep, short description, the two sliders, a Grain toggle and "Reset background colours" (`// BACKDROP-STYLE hook` in `DesktopApp.kt`). It also drives the player's Album reactive background because both use `DesktopFluidBackdrop`.
+- Tests: `DesktopBackdropStyleTest` (ordering of looks, stored-value fallback, slider range, vivid > natural > deep, natural keeps the cover, sliders move lightness/saturation, greys stay neutral, ranges, intensity).
+### Verified
+NOT compiled, tests NOT run. Bracket counts compared with the original by script; tests hand-traced for the OKLab behaviour (a Deep look is darker through `lightnessShift`, not through chroma alone).
+### Unverified / to tune by eye
+- Default Vivid values (floor 0.60, chroma x1.25, wash 0.34, base alpha 0.58 over Acrylic/Mica). The higher translucent base alpha trades a little of the Acrylic see-through for cleaner colour; lower `translucentBaseAlpha` in `DesktopBackdropTunings` if the glass feel matters more.
+- Grain is still available but off; `DesktopDither.kt` unchanged.

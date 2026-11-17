@@ -248,3 +248,44 @@ internal fun extractAlbumPalette(pixels: IntArray, width: Int, height: Int): Flu
         brightness = brightness.coerceIn(0f, 1f),
     )
 }
+
+/**
+ * BACKDROP-STYLE: the extracted palette restyled for a look. [brightness] and [vibrance] are the owner's two
+ * sliders (0..1, 0.5 = no change): brightness moves every glow's lightness by up to +-0.15, vibrance scales the
+ * chroma of the coloured glows between x0.5 and x1.5. White, grey and black glows keep their chroma. Pure.
+ */
+internal fun restylePalette(
+    palette: FluidPalette,
+    tuning: DesktopBackdropTuning,
+    brightness: Float,
+    vibrance: Float,
+): FluidPalette {
+    val lift = (brightness.coerceIn(0f, 1f) - 0.5f) * 0.30f
+    val chromaMultiplier = tuning.chromaScale * (0.5f + vibrance.coerceIn(0f, 1f))
+    val shares = palette.shares
+    var weightedLightness = 0f
+    val styled = palette.colors.mapIndexed { index, colour ->
+        val lab = toLab(colour.red, colour.green, colour.blue)
+        val chroma = lab.chroma
+        val neutral = chroma < NEUTRAL_CHROMA
+        val floor = if (neutral) tuning.neutralFloor else tuning.chromaticFloor
+        val l = (lab.l.coerceIn(floor, tuning.lightCap) + tuning.lightnessShift + lift).coerceIn(0.10f, 0.92f)
+        val c = if (neutral) chroma else (chroma * chromaMultiplier).coerceAtMost(0.34f)
+        if (index < 3) weightedLightness += l * shares.getOrElse(index) { 0f }
+        fromLch(l, c, lab.hue)
+    }
+    val shareSum = shares.sum().coerceAtLeast(1e-3f)
+    val dominant = toLab(palette.colors[0].red, palette.colors[0].green, palette.colors[0].blue)
+    val base = fromLch(
+        (tuning.baseLightness + lift * 0.5f).coerceIn(0.08f, 0.50f),
+        (dominant.chroma * 0.35f).coerceAtMost(0.05f),
+        dominant.hue,
+    )
+    return FluidPalette(
+        colors = styled,
+        base = base,
+        intensity = (max(palette.intensity, tuning.intensityMin) * tuning.intensityScale).coerceIn(0f, 1f),
+        shares = shares,
+        brightness = (weightedLightness / shareSum).coerceIn(0f, 1f),
+    )
+}

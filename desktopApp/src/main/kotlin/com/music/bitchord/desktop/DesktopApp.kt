@@ -6218,6 +6218,72 @@ private fun DesktopSettingsScreen(
                             DesktopFluiditySettings::setSubtle,
                         )
                     }
+                    // BACKDROP-STYLE hook: what kind of background the owner wants behind the app and the player.
+                    val lookTitle = DesktopStrings["backdrop_look", "Background colours"]
+                    val lookSubtitle = DesktopStrings[
+                        "backdrop_look_subtitle",
+                        "How bright and colourful the glow behind the app is, taken from the album art",
+                    ]
+                    if (settingsRowVisible(lookTitle, lookSubtitle)) {
+                        val look by DesktopBackdropSettings.look.collectAsState()
+                        val lookBrightness by DesktopBackdropSettings.brightness.collectAsState()
+                        val lookVibrance by DesktopBackdropSettings.vibrance.collectAsState()
+                        val lookGrain by DesktopBackdropSettings.grain.collectAsState()
+                        Column(Modifier.fillMaxWidth().padding(vertical = 12.dp)) {
+                            Text(lookTitle, fontWeight = FontWeight.Medium)
+                            Text(lookSubtitle, color = DesktopSecondary, style = MaterialTheme.typography.bodySmall)
+                            Spacer(Modifier.height(10.dp))
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                DesktopBackdropLook.entries.forEach { option ->
+                                    FilterChip(
+                                        colors = desktopChipColors(),
+                                        selected = look == option,
+                                        onClick = { DesktopBackdropSettings.setLook(option) },
+                                        label = {
+                                            Text(
+                                                when (option) {
+                                                    DesktopBackdropLook.VIVID -> "Vivid"
+                                                    DesktopBackdropLook.NATURAL -> "Natural"
+                                                    DesktopBackdropLook.DEEP -> "Deep"
+                                                },
+                                            )
+                                        },
+                                    )
+                                }
+                            }
+                            Spacer(Modifier.height(8.dp))
+                            Text(
+                                when (look) {
+                                    DesktopBackdropLook.VIVID -> "Bright, saturated colours and a strong glow."
+                                    DesktopBackdropLook.NATURAL -> "The colours of the cover as they are."
+                                    DesktopBackdropLook.DEEP -> "Calm, darker and more muted."
+                                },
+                                color = DesktopSecondary,
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                            MiniPlayerAppearanceSlider(
+                                "Brightness",
+                                "${(lookBrightness * 100).roundToInt()}%",
+                                lookBrightness,
+                                0f..1f,
+                                19,
+                            ) { value -> DesktopBackdropSettings.setBrightness(value) }
+                            MiniPlayerAppearanceSlider(
+                                "Colour intensity",
+                                "${(lookVibrance * 100).roundToInt()}%",
+                                lookVibrance,
+                                0f..1f,
+                                19,
+                            ) { value -> DesktopBackdropSettings.setVibrance(value) }
+                            SettingsToggle(
+                                "Grain texture",
+                                "A faint film grain over the background. Off keeps it perfectly smooth",
+                                lookGrain,
+                                DesktopBackdropSettings::setGrain,
+                            )
+                            TextButton(onClick = DesktopBackdropSettings::reset) { Text("Reset background colours") }
+                        }
+                    }
                     val playerBackgroundTitle = DesktopStrings["player_background", "Player background"]
                     val playerBackgroundSubtitle = DesktopStrings[
                         "player_background_subtitle",
