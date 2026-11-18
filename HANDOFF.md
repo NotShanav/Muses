@@ -629,3 +629,29 @@ Bug seen: particles came only from a small patch at the pointer, not the whole a
 - NEW `Modifier.artTransitionSource(videoId)` (in DesktopArtTransitionOverlay.kt). **Account B: add it to the artwork view of EVERY card/row/tile that can start playback** (Recents, Song mixes, Listen again, lists, search...). The engine then finds the clicked view itself at `start()`: it uses the full unclipped box of the reported view for that videoId (the one containing the pointer wins), then `request.sourceBounds`, then any reported view, then the pointer box. Passing `sourceBounds` is still fine but no longer required.
 - Scaling is "cover"/Crop-aware: the square artwork is as big as the box's longer side, centred; cells the box crops away start invisible and fade in as they let go. Same for the pill: home cells are a `max(w,h)` square centred on `targetBounds()`; cells outside a non-square thumbnail fade out on arrival. If the pill/cards use FillBounds or Fit instead of Crop, tell me and the mapping changes.
 - Contract unchanged. Not compiled, tests not run (new test: `coverGeometryMatchesCropScaling`).
+
+## Artwork transition wiring (not compiled)
+
+Confirmed by grep first: nothing in DesktopApp.kt, DesktopFluidity.kt, DesktopLiquidPill.kt referenced the engine.
+
+Touched (all in desktopApp/.../desktop/):
+- DesktopArtTransition.kt: println diagnostics in start() (disabled / reduceAnimation / blank url); lookupSource/resolveSource also match "url:<request.artworkUrl>"; reportSource prune amortized (`lastPruneSize`, prune when size > max(96, 2x last)).
+- DesktopArtTransitionWiring.kt: added `DesktopArtPress`, `Modifier.artPressTracker()` (Initial pass, never consumes, window coords via positionInWindow origin), `maybeStartArtTransition(...)` (logs "no fresh press" / "same song" / "disabled"), `ArtTransitionHostEffects()` (sets backdropSink once; maps setting to `enabled`).
+- DesktopArtwork.kt: onGloballyPositioned reports "url:" + original url.
+- DesktopApp.kt: `artPressTracker()` on DesktopFrame root Box (~4971); `ArtTransitionHostEffects()` + `DesktopArtTransitionOverlay()` as last children of that Box (~5077); playCurrent (~813) calls maybeStartArtTransition before playbackEngine.load; isLoading true->false LaunchedEffect -> audioReady (~1712); DesktopPillArtwork: artTransitionTarget + instant path while revealing; pill elements except artwork wrapped in PillRevealFade; legacy mini player 40dp art gets artTransitionTarget; settings chips "Artwork transition" (~7088) + modified-marker.
+- DesktopLiquidPill.kt: same (target + instant path via new `transitionTarget` param, fade wrapper); both disabled for the Studio preview (`preview`) so it cannot steal targetBounds.
+- DesktopAdvancedAppearance.kt: `DesktopArtTransitionMode {OFF, EVERY_CLICK, ON_CHANGE}`, config field `artTransitionMode` (default EVERY_CLICK, persisted in the existing JSON config), registry entry "desktop.art_transition".
+- DesktopFluidity.kt: pulses drawn as SrcOver radial glows in the Canvas draw lambda, before the light scrim; no state read, existing 30 fps clock redraws.
+
+Decisions:
+- Root Box is in DesktopFrame (~4971), not at DesktopFluidBackdrop (~2906, which sits in a backdrop lambda); overlay placed there.
+- Step 3 vs 8: ON_CHANGE requires a different videoId; EVERY_CLICK requires only a fresh press (re-clicking the playing song replays the animation). Auto-advance never animates in either mode.
+- Press position = pointer-local + root Box window origin.
+- Press tracker is not shared with the window title bar region differences; Box assumed at window origin otherwise.
+
+Uncovered / risks:
+- Only one `targetBounds` exists: if two live pills compose at once the last wins. Full-player bar (~4303) and DesktopPillStudio artwork are not targets.
+- resolveSource falls back to any artwork with the same url (could be the pill itself when replaying the same song).
+- Pill element wrappers add a Box + graphicsLayer per element even when inactive (visually identical, tiny cost).
+- Reveal fade starts at ~0.6 of reveal per helper; unchanged.
+- Strings use DesktopStrings[key, default]; no catalogue entries added for other languages.

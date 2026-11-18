@@ -441,7 +441,7 @@ internal fun DesktopLiquidPill(
                 }
             },
         )
-        val drawPillElement: @Composable (String) -> Unit = { id ->
+        val drawPillElementRaw: @Composable (String) -> Unit = { id ->
             if (id !in pill.hiddenElements) when (id) {
                 "artwork" -> if (showArt) LiquidPillArtwork(
                     song = song,
@@ -451,6 +451,7 @@ internal fun DesktopLiquidPill(
                     rotation = { spinAnim.value },
                     instantTrackChange = reduceMotion || pill.trackAnimation == DesktopPillAnimation.NONE,
                     durationMs = pill.trackAnimationMs,
+                    transitionTarget = !preview,
                 )
                 "metadata" -> if (showMetadata || custom.miniPlayerProgress != DesktopMiniProgress.HIDDEN) Column(
                     Modifier.fillMaxWidth(),
@@ -606,6 +607,10 @@ internal fun DesktopLiquidPill(
                 }
             }
         }
+        // Artwork transition: title/artist/progress and controls fade in with the reveal (not in the Studio preview).
+        val drawPillElement: @Composable (String) -> Unit = { id ->
+            if (id == "artwork" || preview) drawPillElementRaw(id) else PillRevealFade { drawPillElementRaw(id) }
+        }
         Row(
             Modifier.fillMaxSize().padding(horizontal = if (pillNarrow) 10.dp else 16.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -639,13 +644,17 @@ private fun LiquidPillArtwork(
     rotation: () -> Float,
     instantTrackChange: Boolean,
     durationMs: Int,
+    transitionTarget: Boolean = false,
 ) {
+    // Artwork transition: only the live pill (not the Studio preview) is the landing target.
+    val artRevealing = rememberArtRevealing()
     Box(
-        modifier.size(size).clip(shape).border(0.8.dp, Color.White.copy(alpha = 0.22f), shape),
+        modifier.size(size).then(if (transitionTarget) Modifier.artTransitionTarget() else Modifier)
+            .clip(shape).border(0.8.dp, Color.White.copy(alpha = 0.22f), shape),
     ) {
         Box(Modifier.fillMaxSize().graphicsLayer { rotationZ = rotation() }) {
             val art = song.videoId to song.thumbnailUrl
-            if (instantTrackChange) {
+            if (instantTrackChange || (transitionTarget && artRevealing)) {
                 DesktopArtwork(art.second, Modifier.fillMaxSize(), px = ROW_ART_PX)
             } else {
                 Crossfade(

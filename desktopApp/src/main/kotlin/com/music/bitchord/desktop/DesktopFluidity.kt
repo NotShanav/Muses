@@ -399,6 +399,31 @@ internal fun DesktopFluidBackdrop(
             }
         }
 
+        // Artwork transition: colour pulses poured in by the particles, as soft radial glows (SrcOver, draw
+        // phase only). Nothing here reads state, so it costs no recomposition; the clock above redraws.
+        val pulseNow = System.nanoTime()
+        for (pi in 0 until DesktopBackdropPulses.SLOTS) {
+            val pulse = DesktopBackdropPulses.slot(pi)
+            val ps = DesktopBackdropPulses.liveStrength(pulse, pulseNow)
+            if (ps <= 0.002f) continue
+            val pc = pulse.color
+            val pa = (ps * 0.6f).coerceAtMost(0.7f)
+            val pr = reach * (0.20f + 0.14f * (1f - ps))
+            drawCircle(
+                brush = Brush.radialGradient(
+                    colorStops = arrayOf(
+                        0f to pc.copy(alpha = pa),
+                        0.45f to pc.copy(alpha = pa * 0.55f),
+                        1f to pc.copy(alpha = 0f),
+                    ),
+                    center = Offset(pulse.x, pulse.y),
+                    radius = pr,
+                ),
+                radius = pr,
+                center = Offset(pulse.x, pulse.y),
+            )
+        }
+
         // ODEON-FIX: a light cover (white, cream, pastel) darkens the page behind the text, in step with the dissolve.
         val brightFrom = fromPalette?.brightness ?: 0.3f
         val brightTo = toPalette?.brightness ?: 0.3f

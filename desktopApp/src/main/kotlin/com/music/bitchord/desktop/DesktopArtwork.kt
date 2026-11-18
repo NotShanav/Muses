@@ -12,6 +12,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.painter.BitmapPainter
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.foundation.Image
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -67,19 +68,22 @@ fun DesktopArtwork(
     px: Int? = null,
 ) {
     val sized = if (px != null) url.artworkAt(px) else url
+    // Lets the artwork transition find the thumbnail that was clicked. Keyed by the ORIGINAL url.
+    val reportKey = if (url.isNullOrBlank()) null else "url:$url"
+    val reported = if (reportKey == null) modifier else modifier.onGloballyPositioned { DesktopArtTransition.reportSource(reportKey, it) }
     val bitmap by produceState<ImageBitmap?>(initialValue = null, key1 = sized) {
         value = withContext(Dispatchers.IO) {
             DesktopArtworkCache.load(sized)
         }
     }
     if (bitmap == null) {
-        Box(modifier.background(Color(0xFF2B2B35)))
+        Box(reported.background(Color(0xFF2B2B35)))
     } else {
         Image(
             painter = BitmapPainter(bitmap!!),
             contentDescription = contentDescription,
             contentScale = contentScale,
-            modifier = modifier,
+            modifier = reported,
         )
     }
 }

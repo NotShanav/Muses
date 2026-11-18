@@ -127,7 +127,13 @@ internal object DesktopArtTransition {
      * one replaces it. Off, or with "Reduce animation" on, this does nothing but make sure [reveal] is 1.
      */
     fun start(request: ArtTransitionRequest) {
-        if (!enabled || DesktopAppearanceSettings.reduceAnimation.value) {
+        if (!enabled) {
+            println("ArtTransition skipped: disabled")
+            cancel()
+            return
+        }
+        if (DesktopAppearanceSettings.reduceAnimation.value) {
+            println("ArtTransition skipped: reduceAnimation")
             cancel()
             return
         }
@@ -135,6 +141,7 @@ internal object DesktopArtTransition {
         synchronized(lock) {
             retire()
             if (url.isNullOrBlank()) {
+                println("ArtTransition skipped: blank url")
                 finishLocked()
                 return
             }
@@ -269,17 +276,24 @@ internal object DesktopArtTransition {
 
     /** Artwork views that reported themselves with `Modifier.artTransitionSource`, by layout node. */
     private val sources = HashMap<LayoutCoordinates, String>()
+    private var lastPruneSize = 0
 
     /** Called from `Modifier.artTransitionSource`: remembers where the artwork for [videoId] is drawn. */
     internal fun reportSource(videoId: String, coords: LayoutCoordinates) {
         synchronized(sources) {
-            if (sources.size > 96) sources.keys.removeAll { !it.isAttached }
+            // Amortized prune: only when the map has doubled since the last prune, so hundreds of
+            // attached thumbnails do not cost O(n) on every layout.
+            if (sources.size > maxOf(96, lastPruneSize * 2)) {
+                sources.keys.removeAll { !it.isAttached }
+                lastPruneSize = sources.size
+            }
             sources[coords] = videoId
         }
     }
 
     /** Where a reported artwork view for [videoId] is right now (full, unclipped box, window px). */
-    private fun lookupSource(videoId: String, pointer: Offset?): Rect? {
+    private fun lookupSource(videoId: String, artworkUrl: String?, pointer: Offset?): Rect? {
+        val urlKey = if (artworkUrl.isNullOrBlank()) null else "url:$artworkUrl"
         var best: Rect? = null
         synchronized(sources) {
             val it = sources.entries.iterator()
@@ -289,7 +303,7 @@ internal object DesktopArtTransition {
                     it.remove()
                     continue
                 }
-                if (e.value != videoId) continue
+                if (e.value != videoId && (urlKey == null || e.value != urlKey)) continue
                 val pos = e.key.positionInWindow()
                 val r = Rect(pos, Size(e.key.size.width.toFloat(), e.key.size.height.toFloat()))
                 if (r.width < 2f || r.height < 2f) continue
@@ -303,7 +317,7 @@ internal object DesktopArtTransition {
     private fun resolveSource(request: ArtTransitionRequest): Rect {
         val p = request.pointer
         // The live, unclipped box of the view that was clicked beats any bounds passed in.
-        val hit = lookupSource(request.videoId, p)
+        val hit = lookupSource(request.videoId, request.artworkUrl, p)
         if (hit != null && (p == null || hit.contains(p))) return hit
         val b = request.sourceBounds
         if (b != null && b.width >= 2f && b.height >= 2f) return b

@@ -812,10 +812,13 @@ fun BitChordDesktopApp() {
     /** Opens whatever the queue is currently pointing at. */
     fun playCurrent(startPlaying: Boolean = true) {
         val song = liveQueue.current ?: return
+        val artPreviousId = selectedSong?.videoId
         selectedSong = song
         history = (listOf(song) + history.filterNot { it.videoId == song.videoId }).take(50)
         saveQueue()
         persistence.saveHistory(history)
+        // Artwork transition: a click only (fresh press), never auto-advance. Playback never waits on it.
+        maybeStartArtTransition(song.videoId, song.thumbnailUrl, artPreviousId, DesktopAdvancedAppearance.config.value.artTransitionMode)
         playbackEngine.load(song, startPlaying)
         partySyncHolder[0]?.onLocalIntent(song.videoId)
         scope.launch { DesktopScrobbling.updateNowPlaying(song) }
@@ -1709,6 +1712,13 @@ fun BitChordDesktopApp() {
         }
     }
     val playback by playbackEngine.state.collectAsState()
+    // Artwork transition: audio finished loading (isLoading true -> false). Never gates playback.
+    var artWasLoading by remember { mutableStateOf(false) }
+    LaunchedEffect(playback.isLoading, playback.song?.videoId) {
+        val id = playback.song?.videoId
+        if (artWasLoading && !playback.isLoading && id != null) DesktopArtTransition.audioReady(id)
+        artWasLoading = playback.isLoading
+    }
 
     // The shared player reads the playhead off this one object, and only where it
     // draws it — see PlaybackPosition — so a tick never recomposes the player.
@@ -4666,7 +4676,7 @@ internal fun DesktopFloatingMiniPlayer(
         val veilBase = if (custom.miniPlayerMaterial == DesktopMiniPlayerMaterial.GLASS) surfaceContrast else surfaceContrast * 0.45f
         val veil = DesktopAdaptiveMath.pillVeil(veilBase, adaptive.windowClass, adaptive.isPortrait) // 360 T2 hook: page text never shows through
         Box(Modifier.fillMaxSize().background(Color(0xFF080A12).copy(alpha = veil), shape))
-        val drawPillElement: @Composable (String) -> Unit = { id ->
+        val drawPillElementRaw: @Composable (String) -> Unit = { id ->
             if (id !in pill.hiddenElements) when (id) {
                 "artwork" -> if (showArt) DesktopPillArtwork(song, artworkModifier, artSize, artShape, spinAnim.value, reduceMotion || pill.trackAnimation == DesktopPillAnimation.NONE, pill.trackAnimationMs)
                 "metadata" -> if (showMetadata || custom.miniPlayerProgress != DesktopMiniProgress.HIDDEN) Column(Modifier.fillMaxWidth()) {
@@ -4712,6 +4722,10 @@ internal fun DesktopFloatingMiniPlayer(
                 }
             }
         }
+        // Artwork transition: title/artist/progress and the controls fade in with the reveal; the artwork has its own.
+        val drawPillElement: @Composable (String) -> Unit = { id ->
+            if (id == "artwork") drawPillElementRaw(id) else PillRevealFade { drawPillElementRaw(id) }
+        }
         Row(Modifier.fillMaxSize(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                 for (id in pill.zones["left"].orEmpty()) drawPillElement(id)
@@ -4743,11 +4757,13 @@ private fun DesktopPillArtwork(
     instantTrackChange: Boolean,
     durationMs: Int,
 ) {
+    // Artwork transition: while revealing, take the instant (non-Crossfade) path; otherwise unchanged.
+    val artRevealing = rememberArtRevealing()
     Box(
-        artworkModifier.size(size).clip(shape).graphicsLayer { rotationZ = rotationDegrees },
+        artworkModifier.size(size).artTransitionTarget().clip(shape).graphicsLayer { rotationZ = rotationDegrees },
     ) {
         val art = song.videoId to song.thumbnailUrl
-        if (instantTrackChange) {
+        if (instantTrackChange || artRevealing) {
             DesktopArtwork(art.second, Modifier.fillMaxSize(), px = ROW_ART_PX)
         } else {
             Crossfade(
@@ -4830,7 +4846,7 @@ private fun DesktopLegacyMiniPlayer(
             .fluidClickable(onExpand).padding(horizontal = 12.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        DesktopArtwork(song.thumbnailUrl, Modifier.size(40.dp).clip(RoundedCornerShape(8.dp)), px = ROW_ART_PX)
+        DesktopArtwork(song.thumbnailUrl, Modifier.size(40.dp).artTransitionTarget().clip(RoundedCornerShape(8.dp)), px = ROW_ART_PX)
         Spacer(Modifier.width(10.dp))
         Column(Modifier.weight(1f)) {
             Text(song.title, maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.SemiBold)
@@ -4952,7 +4968,7 @@ private fun DesktopFrame(
     // Fluidity always lets the material through the page too: the glow is the page's background.
     val materialBehindApp = glass && (appBackground || fluid)
     CompositionLocalProvider(LocalDesktopHaze provides haze, LocalDesktopGlass provides glassState) { // STUDIO G2 hook
-        Box(modifier.fillMaxSize().then(if (glass) Modifier else Modifier.background(containerColor))) {
+        Box(modifier.fillMaxSize().artPressTracker().then(if (glass) Modifier else Modifier.background(containerColor))) {
             // Fluidity: one glow across the whole window, title bar and sidebar included. It is
             // deliberately not a haze source, so the panes above it never re-blur as it moves.
             if (fluid) {
@@ -5057,6 +5073,9 @@ private fun DesktopFrame(
                     } // 360 T2 hook: end of CompositionLocalProvider
                 }
             }
+            // Artwork transition: last child of the root Box, no padding/offset, so canvas px = window px.
+            ArtTransitionHostEffects()
+            DesktopArtTransitionOverlay()
         }
     }
 }
@@ -6734,6 +6753,7 @@ internal fun DesktopAdvancedCustomizationSettings(onOpenHomeSections: () -> Unit
             config.miniPlayerArtShape != DesktopArtworkShape.ROUNDED || !config.miniPlayerShowShuffle ||
             !config.miniPlayerShowRepeat || !config.miniPlayerTapExpands
         "desktop.dock_material" -> config.miniPlayerMaterial != DesktopMiniPlayerMaterial.GLASS
+        "desktop.art_transition" -> config.artTransitionMode != DesktopArtTransitionMode.EVERY_CLICK
         "desktop.window_material" -> windowMaterial != DesktopBackdrop.MICA
         else -> false
     }
@@ -7066,6 +7086,19 @@ internal fun DesktopAdvancedCustomizationSettings(onOpenHomeSections: () -> Unit
                 }
                 SettingsToggle("Tap player to expand", "Open the full-screen player when its body is clicked", config.miniPlayerTapExpands) { value ->
                     DesktopAdvancedAppearance.update { it.copy(miniPlayerTapExpands = value) }
+                }
+                Text(DesktopStrings["artwork_transition", "Artwork transition"], color = DesktopSecondary, style = MaterialTheme.typography.bodySmall)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(vertical = 8.dp)) {
+                    DesktopArtTransitionMode.entries.forEach { option ->
+                        val label = when (option) {
+                            DesktopArtTransitionMode.OFF -> DesktopStrings["artwork_transition_off", "Off"]
+                            DesktopArtTransitionMode.EVERY_CLICK -> DesktopStrings["artwork_transition_every_click", "Every song click"]
+                            DesktopArtTransitionMode.ON_CHANGE -> DesktopStrings["artwork_transition_on_change", "Only when the song changes"]
+                        }
+                        FilterChip(colors = desktopChipColors(), selected = config.artTransitionMode == option,
+                            onClick = { DesktopAdvancedAppearance.update { it.copy(artTransitionMode = option) } },
+                            label = { Text(label) })
+                    }
                 }
                 TextButton(onClick = {
                     DesktopAdvancedAppearance.update {
