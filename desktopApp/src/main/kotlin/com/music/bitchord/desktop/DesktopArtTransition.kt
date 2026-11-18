@@ -62,6 +62,8 @@ internal object DesktopArtTransition {
 
     private const val ARTWORK_PX = 256
     private const val GRID_CACHE = 16
+    private const val LOADED_URLS = 256
+    private const val TARGET_WAIT_MS = 400L
     private const val LOAD_TIMEOUT_MS = 700L
     private const val STALL_MS = 700L
     private const val HARD_CAP_MS = 12_000L
@@ -70,6 +72,60 @@ internal object DesktopArtTransition {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val lock = Any()
     private val grids = DesktopCountLru<IntArray>(GRID_CACHE)
+
+    /** original artwork url -> the (sized) url a thumbnail actually loaded, so its cached bitmap can be reused. */
+    private val loadedUrls = DesktopCountLru<String>(LOADED_URLS)
+
+    /** Window size in px, kept by the root Box; only used to aim at bottom-centre when the pill has no bounds yet. */
+    @Volatile internal var windowSize: Size = Size.Zero
+    private var targetFallbackLogged = false
+
+    /** Called by DesktopArtwork after a bitmap loaded. Cheap: one LRU put. */
+    internal fun noteLoaded(originalUrl: String?, loadedUrl: String?) {
+        if (originalUrl.isNullOrBlank() || loadedUrl.isNullOrBlank()) return
+        loadedUrls.put(originalUrl, loadedUrl)
+    }
+
+    // ---- landing-target registry: the last VISIBLE registrant wins ----
+    private val targets = LinkedHashMap<Any, () -> Rect>()
+
+    internal fun registerTarget(token: Any, provider: () -> Rect) {
+        synchronized(targets) { targets.remove(token); targets[token] = provider }
+    }
+
+    internal fun unregisterTarget(token: Any) {
+        synchronized(targets) { targets.remove(token) }
+    }
+
+    private fun bestTarget(): Rect {
+        synchronized(targets) {
+            for (p in targets.values.toList().asReversed()) {
+                val r = try { p() } catch (t: Throwable) { Rect.Zero }
+                if (r.width >= 2f && r.height >= 2f) return r
+            }
+        }
+        return Rect.Zero
+    }
+
+    private fun targetValid(): Boolean {
+        val r = try { targetBounds() } catch (t: Throwable) { Rect.Zero }
+        return r.width >= 2f && r.height >= 2f
+    }
+
+    /** The pill's rect, or (pill not laid out yet) a small box at the bottom-centre of the window. */
+    private fun liveTarget(): Rect {
+        val r = try { targetBounds() } catch (t: Throwable) { Rect.Zero }
+        if (r.width >= 2f && r.height >= 2f) return r
+        val ws = windowSize
+        if (ws.width < 2f || ws.height < 2f) return r
+        if (!targetFallbackLogged) {
+            targetFallbackLogged = true
+            println("ArtTransition target zero: aiming at bottom-centre of window")
+        }
+        val cx = ws.width / 2f
+        val cy = ws.height - 60f
+        return Rect(cx - 24f, cy - 24f, cx + 24f, cy + 24f)
+    }
 
     private val _active = MutableStateFlow(false)
     private val _reveal = MutableStateFlow(1f)
@@ -89,7 +145,7 @@ internal object DesktopArtTransition {
 
     /** Live bounds of the pill thumbnail, window px. Read every frame; a zero rect ends the run. */
     @Volatile
-    var targetBounds: () -> Rect = { Rect.Zero }
+    var targetBounds: () -> Rect = { bestTarget() }
 
     @Volatile
     var backdropSink: ArtBackdropSink? = null
@@ -153,10 +209,23 @@ internal object DesktopArtTransition {
             _active.value = true
             val t0 = System.currentTimeMillis()
             loadJob = scope.launch {
-                val grid = withTimeoutOrNull(LOAD_TIMEOUT_MS) { gridFor(url) }
+                val grid = withTimeoutOrNull(LOAD_TIMEOUT_MS) { gridFor(request.artworkUrl, url) }
+                if (grid != null && !targetValid()) {
+                    // First song after launch: the pill may not be laid out yet. Give it a moment.
+                    var waited = 0L
+                    while (waited < TARGET_WAIT_MS && !targetValid()) {
+                        delay(25)
+                        waited += 25
+                    }
+                    if (!targetValid()) println("ArtTransition: targetBounds still zero after ${TARGET_WAIT_MS}ms, using bottom-centre fallback")
+                }
                 synchronized(lock) {
-                    if (gen != generation) return@launch
+                    if (gen != generation) {
+                        println("ArtTransition skipped: superseded while loading")
+                        return@launch
+                    }
                     if (grid == null) {
+                        println("ArtTransition skipped: grid null or timed out after ${LOAD_TIMEOUT_MS}ms (artwork still downloading; warming for next play)")
                         finishLocked()
                         return@launch
                     }
@@ -177,6 +246,7 @@ internal object DesktopArtTransition {
                     val now = System.currentTimeMillis()
                     val ref = max(lastTickWallMs, t0)
                     if (now - ref > STALL_MS || now - t0 > HARD_CAP_MS) {
+                        println(if (now - t0 > HARD_CAP_MS) "ArtTransition skipped: hard cap ${HARD_CAP_MS}ms" else "ArtTransition skipped: stalled, no frames for ${STALL_MS}ms (overlay not drawing?)")
                         synchronized(lock) { if (gen == generation) finishLocked() }
                         return@launch
                     }
@@ -210,11 +280,7 @@ internal object DesktopArtTransition {
         lastFrameNanos = frameNanos
         if (dtMs > MAX_DT_MS) dtMs = MAX_DT_MS
         if (dtMs < 0f) dtMs = 0f
-        val tb = try {
-            targetBounds()
-        } catch (t: Throwable) {
-            Rect.Zero
-        }
+        val tb = liveTarget()
         val sink = backdropSink
         synchronized(lock) {
             val p = pending
@@ -317,25 +383,58 @@ internal object DesktopArtTransition {
     private fun resolveSource(request: ArtTransitionRequest): Rect {
         val p = request.pointer
         // The live, unclipped box of the view that was clicked beats any bounds passed in.
-        val hit = lookupSource(request.videoId, request.artworkUrl, p)
-        if (hit != null && (p == null || hit.contains(p))) return hit
-        val b = request.sourceBounds
-        if (b != null && b.width >= 2f && b.height >= 2f) return b
-        if (hit != null) return hit
-        if (p != null) return Rect(p.x - 40f, p.y - 40f, p.x + 40f, p.y + 40f)
-        val tb = try {
-            targetBounds()
-        } catch (t: Throwable) {
-            Rect.Zero
+        fun chosen(branch: String, r: Rect): Rect {
+            println("ArtTransition source: $branch $r")
+            return r
         }
-        val c = tb.center
-        return Rect(c.x - 40f, c.y - 220f, c.x + 40f, c.y - 140f)
+        val hit = lookupSource(request.videoId, request.artworkUrl, p)
+        if (hit != null && (p == null || hit.contains(p))) return chosen("reported view", hit)
+        val b = request.sourceBounds
+        if (b != null && b.width >= 2f && b.height >= 2f) return chosen("sourceBounds", b)
+        if (hit != null) return chosen("reported view (pointer outside it)", hit)
+        if (p != null) return chosen("pointer box", Rect(p.x - 40f, p.y - 40f, p.x + 40f, p.y + 40f))
+        val c = liveTarget().center
+        return chosen("above pill", Rect(c.x - 40f, c.y - 220f, c.x + 40f, c.y - 140f))
     }
 
-    private suspend fun gridFor(url: String): IntArray? {
-        grids.get(url)?.let { return it }
-        // Own job, so a timed-out wait does not stop the download: the next play finds it cached.
+    private suspend fun gridFor(original: String?, url: String): IntArray? {
+        grids.get(url)?.let {
+            println("ArtTransition grid: from grid cache")
+            return it
+        }
+        // (a) the size the on-screen thumbnail really loaded, if its bitmap is still cached (instant).
+        val noted = if (original.isNullOrBlank()) null else loadedUrls.get(original)
+        if (noted != null) {
+            val bmp = DesktopArtworkCache.cached(noted)
+            if (bmp != null) {
+                val g = sampleSafe(bmp)
+                if (g != null) {
+                    println("ArtTransition grid: from on-screen thumbnail ${bmp.width}x${bmp.height}")
+                    grids.put(url, g)
+                    return g
+                }
+            }
+        }
+        // (b) the 256px url if it is already cached.
+        val cachedBmp = DesktopArtworkCache.cached(url)
+        if (cachedBmp != null) {
+            val g = sampleSafe(cachedBmp)
+            if (g != null) {
+                println("ArtTransition grid: from cached 256px")
+                grids.put(url, g)
+                return g
+            }
+        }
+        // (c) download the 256px url. Own job, so a timed-out wait does not stop the download: the next
+        // play finds it cached (this is also the background warm-up after a miss).
+        println("ArtTransition grid: downloading 256px (nothing cached)")
         return scope.async(Dispatchers.IO) { computeGrid(url) }.await()
+    }
+
+    private fun sampleSafe(bitmap: ImageBitmap): IntArray? = try {
+        ArtGridSampler.sample(bitmap)
+    } catch (t: Throwable) {
+        null
     }
 
     private suspend fun computeGrid(url: String): IntArray? {

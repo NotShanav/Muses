@@ -655,3 +655,17 @@ Uncovered / risks:
 - Pill element wrappers add a Box + graphicsLayer per element even when inactive (visually identical, tiny cost).
 - Reveal fade starts at ~0.6 of reveal per helper; unchanged.
 - Strings use DesktopStrings[key, default]; no catalogue entries added for other languages.
+
+## Artwork transition: silent-abort fix (not compiled)
+
+Cause (as suspected): start() sampled the 256px url, which no on-screen thumbnail had loaded, so gridFor() had to download inside LOAD_TIMEOUT_MS=700 and finishLocked() ran with no log.
+
+Changes:
+- DesktopArtwork.kt: `DesktopArtworkCache.cached(url)` (peek, never downloads); after a bitmap loads, `DesktopArtTransition.noteLoaded(originalUrl = url, loadedUrl = sized)`.
+- DesktopArtTransition.kt: `loadedUrls` LRU (256 entries, not 64: strings are cheap and a list can show 100+ thumbnails before a click); gridFor(original, url) order = grid cache -> noted loaded url if still cached -> cached 256px -> download 256px (own `scope.async`, so it keeps running after the timeout = background warm-up). A ~120px source is sampled as is.
+- Logs for every exit: disabled, reduceAnimation, blank url, superseded, grid null/timeout, stall, hard cap, plus which grid branch and which resolveSource branch + final Rect.
+- Target zero: the load coroutine waits up to 400 ms (25 ms polls) for a non-zero rect; tick()/resolveSource() use `liveTarget()` which falls back to a 48px box at bottom-centre (windowSize set by the root Box's onGloballyPositioned in artPressTracker) and logs once per process.
+- Landing target: registry in the engine (`registerTarget/unregisterTarget/bestTarget`); `targetBounds` default now returns the most recently registered target with non-empty bounds. `artTransitionTarget()` registers only on the invisible->visible transition (attached, size >= 2px), unregisters when it becomes invisible and on dispose. LiquidPill with `transitionTarget=false` (Studio preview) never calls it; Studio's own artwork uses plain DesktopArtwork.
+- Spinner: neither the app pill nor the liquid pill has an isLoading spinner/placeholder (grep found none). The only one tied to the transition is the top-bar play button (DesktopApp.kt ~4285), now hidden while `DesktopArtTransition.active`. The pill thumbnail is already alpha 0 while revealing. NowPlayingScreen's loading state untouched.
+
+Risks: a grid sampled from a small thumbnail is cached under the 256 key, so that run keeps the lower detail until the cache entry is evicted. The fix for "first play after a cold start" still falls back to the old path if the download exceeds 700 ms, but now logs it and the next play is instant.

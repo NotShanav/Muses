@@ -42,16 +42,31 @@ internal fun rememberArtRevealing(): Boolean {
 internal fun Modifier.artTransitionTarget(): Modifier {
     val holder = remember { arrayOf(Rect.Zero) }
     val provider = remember { { holder[0] } }
-    DisposableEffect(provider) {
-        DesktopArtTransition.targetBounds = provider
+    val token = remember { Any() }
+    val registered = remember { booleanArrayOf(false) }
+    // Registered only while attached and visible (non-empty bounds); the last one to become visible wins.
+    DisposableEffect(token) {
         onDispose {
-            if (DesktopArtTransition.targetBounds === provider) DesktopArtTransition.targetBounds = { Rect.Zero }
+            DesktopArtTransition.unregisterTarget(token)
+            registered[0] = false
+            holder[0] = Rect.Zero
         }
     }
     val active: State<Boolean> = DesktopArtTransition.active.collectAsState()
     val reveal: State<Float> = DesktopArtTransition.reveal.collectAsState()
     return this
-        .onGloballyPositioned { holder[0] = it.boundsInWindow() }
+        .onGloballyPositioned {
+            val r = if (it.isAttached) it.boundsInWindow() else Rect.Zero
+            holder[0] = r
+            val visible = r.width >= 2f && r.height >= 2f
+            if (visible && !registered[0]) {
+                DesktopArtTransition.registerTarget(token, provider)
+                registered[0] = true
+            } else if (!visible && registered[0]) {
+                DesktopArtTransition.unregisterTarget(token)
+                registered[0] = false
+            }
+        }
         .graphicsLayer { alpha = if (active.value && reveal.value < 1f) reveal.value.coerceIn(0f, 1f) else 1f }
 }
 
@@ -93,7 +108,10 @@ internal object DesktopArtPress {
 internal fun Modifier.artPressTracker(): Modifier {
     val origin = remember { arrayOf(Offset.Zero) }
     return this
-        .onGloballyPositioned { origin[0] = it.positionInWindow() }
+        .onGloballyPositioned {
+            origin[0] = it.positionInWindow()
+            DesktopArtTransition.windowSize = androidx.compose.ui.geometry.Size(it.size.width.toFloat(), it.size.height.toFloat())
+        }
         .pointerInput(Unit) {
             awaitPointerEventScope {
                 while (true) {

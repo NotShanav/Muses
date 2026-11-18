@@ -4282,7 +4282,9 @@ private fun DesktopLegacyTopBar(common: DesktopShellCallbacks, compact: Boolean)
                         Icon(Icons.Rounded.FastRewind, "Previous", tint = if (common.previousEnabled) Color.White else DesktopSecondary.copy(alpha = 0.4f), modifier = Modifier.size(20.dp))
                     }
                     DesktopToolbarButton(onClick = common.onPlayPause, size = 32.dp) {
-                        if (common.isLoading) CircularProgressIndicator(Modifier.size(18.dp), color = Color.White, strokeWidth = 2.dp)
+                        // Artwork transition: the particles fill the wait, so no spinner while it is active.
+                        val artActive by DesktopArtTransition.active.collectAsState()
+                        if (common.isLoading && !artActive) CircularProgressIndicator(Modifier.size(18.dp), color = Color.White, strokeWidth = 2.dp)
                         else Icon(if (common.isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow, if (common.isPlaying) "Pause" else "Play", tint = Color.White, modifier = Modifier.size(23.dp))
                     }
                     DesktopToolbarButton(onClick = common.onNext, size = 32.dp) {

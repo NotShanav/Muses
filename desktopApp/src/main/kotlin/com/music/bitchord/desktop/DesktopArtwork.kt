@@ -46,6 +46,9 @@ internal object DesktopArtworkCache {
     /** Everything held, dropped — what the Storage settings' "Clear image cache" does. */
     fun clear() = images.clear()
 
+    /** The decoded bitmap if it is already held; never downloads. */
+    fun cached(url: String?): ImageBitmap? = if (url.isNullOrBlank()) null else images.get(url)
+
     suspend fun load(url: String?): ImageBitmap? {
         if (url.isNullOrBlank()) return null
         images.get(url)?.let { return it }
@@ -72,9 +75,12 @@ fun DesktopArtwork(
     val reportKey = if (url.isNullOrBlank()) null else "url:$url"
     val reported = if (reportKey == null) modifier else modifier.onGloballyPositioned { DesktopArtTransition.reportSource(reportKey, it) }
     val bitmap by produceState<ImageBitmap?>(initialValue = null, key1 = sized) {
-        value = withContext(Dispatchers.IO) {
+        val loaded = withContext(Dispatchers.IO) {
             DesktopArtworkCache.load(sized)
         }
+        // Artwork transition: remember which (already cached) size this thumbnail really drew.
+        if (loaded != null) DesktopArtTransition.noteLoaded(originalUrl = url, loadedUrl = sized)
+        value = loaded
     }
     if (bitmap == null) {
         Box(reported.background(Color(0xFF2B2B35)))
