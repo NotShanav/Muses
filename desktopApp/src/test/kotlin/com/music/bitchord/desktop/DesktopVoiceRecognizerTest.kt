@@ -191,7 +191,7 @@ class DesktopVoiceRecognizerTest {
             val exe = root.resolve("sherpa-onnx-offline.exe").also { Files.write(it, ByteArray(0)) }
             val seen = ArrayList<List<String>>()
             val runner = VoiceProcessRunner { command, _, _ ->
-                seen += command
+                seen.add(command)
                 if (command.any { it.startsWith("--model-type") }) {
                     VoiceProcessResult(1, "", "unknown option", false)
                 } else {
