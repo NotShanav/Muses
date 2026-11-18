@@ -24,31 +24,27 @@ import java.util.concurrent.TimeUnit
  */
 
 /** Everything about the recognizer program download in ONE place. */
+// VOICE V5 hook: release asset/version verified against the official Windows x64 download table.
 internal object DesktopVoiceSidecarSpec {
 
-    /**
-     * UNVERIFIED: this version and these asset names were NOT checked against the project's release
-     * page (no release page could be read in the chat that wrote this). Only older names were seen
-     * ("sherpa-onnx-v1.9.x-win-x64-shared.tar.bz2" on a Hugging Face mirror). Whether this version
-     * can run the Parakeet unified model is also unconfirmed. The "choose the program yourself" path
-     * is therefore a first-class path in Settings (V4).
-     */
-    const val VERIFIED = false
-    const val VERSION = "1.12.21"
-    const val RELEASES_PAGE = "https://github.com/k2-fsa/sherpa-onnx/releases"
+    /** Verified against the official sherpa-onnx Windows x64 download table on 2026-11-18. */
+    const val VERIFIED = true
+    const val VERSION = "2.0.1"
+    const val RELEASES_PAGE = "https://github.com/k2-fsa/sherpa-onnx/releases/tag/v2.0.1"
     const val RELEASE_BASE = "https://github.com/k2-fsa/sherpa-onnx/releases/download"
 
-    /** Asset names tried in order; a 404 moves on to the next one. */
+    /** Prefer the multithreaded static-runtime shared build without TTS; fall back to the MD build. */
     val ASSET_SUFFIXES: List<String> = listOf(
-        "win-x64-shared.tar.bz2",
-        "win-x64-shared-MD-Release.tar.bz2",
+        "win-x64-shared-MT-Release-no-tts.tar.bz2",
         "win-x64-shared-MD-Release-no-tts.tar.bz2",
+        "win-x64-shared-MT-Release.tar.bz2",
+        "win-x64-shared-MD-Release.tar.bz2",
     )
 
     const val EXE_NAME = "sherpa-onnx-offline.exe"
     const val EXE_NAME_POSIX = "sherpa-onnx-offline"
 
-    /** Smallest believable archive (the real one is about 15 MB). */
+    /** Smallest believable archive; official shared Windows archives are substantially larger. */
     const val MIN_ARCHIVE_BYTES = 1_000_000L
 
     fun candidateUrls(version: String = VERSION, base: String = RELEASE_BASE): List<String> =

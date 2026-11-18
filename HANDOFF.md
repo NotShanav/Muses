@@ -834,3 +834,56 @@ Run the owner's GitHub Actions build (V2, V3 and V4 have never been compiled) an
 - Rule for later edits: never use `+=` / `plus` with a `Path` on a collection; use `.add(...)`. Main code already does (`dirs.add(...)`, `out.add(...)`). All other `+=` in the voice files were checked: strings, ints, lists of strings, pairs.
 - Only 4 compile errors were reported and all were this one cause, so the other test files compile; the next CI step will run the tests, where assertion failures may still appear.
 - The warning `DesktopVoiceSettingsUi.kt:290 Condition is always 'true'` is `!DesktopVoiceSidecarSpec.VERIFIED` (a const false). Harmless; it goes away when the link is verified and the flag flips.
+
+## VOICE V5: broader natural phrasing, live playlist resolution, capture fixes and model-format diagnosis
+
+### Did
+- Reworked `DesktopVoiceCommandParser` so action recognition is independent of whether the playlist catalogue is populated at that exact moment. Explicit playlist requests now remain `PlayPlaylist(name)` intents; `add this to <name>` remains `AddToPlaylist(name)`. If resolution fails, the controller explains that the playlist could not be found instead of reporting `Didn't catch that`.
+- Broadened conversational play openings and action phrasing: e.g. `I'm in the mood for ...`, `I feel like ...`, `I'd love to hear ...`, `I could go for ...`, `I'm up for ...`, `How about playing ...`, `put on`, `throw on`, `queue up`, and related forms. Added `SearchAndPlay` for broad requests such as `play something upbeat`; matching results are offered for confirmation by default.
+- Added live playlist reads in `DesktopApp.kt`. The long-lived remembered controller no longer relies on the first, possibly-empty library snapshot. Voice lookup now sees local playlists and browsable playlists from the current account library. Existing add actions handle local lists and owned account playlists; playback of account playlists uses the existing browse/continuation APIs. No shared library or playback engine logic was rewritten.
+- Improved track matching: very close top song matches are treated as ambiguous and can be presented as choices rather than silently selecting the first result.
+- Corrected recording order: open the microphone first, emit the ready tick only after capture is open, then flush the capture buffer so the tick is not transcribed. Playback ducking is applied to Muses output only while recording and restored afterwards, including error/cancel cleanup.
+- Improved microphone handling: capture at a supported native input rate and resample to 16 kHz mono in memory; adaptive silence gating and longer pre/post roll reduce the risk of clipping low-level opening consonants.
+- Updated the Sherpa-ONNX Windows sidecar metadata to the official v2.0.1 Windows x64 shared Release asset naming and kept a visible link to the upstream release in Settings.
+- **Important new diagnosis about Handy:** the current Handy documentation publishes Parakeet Unified EN 0.6B as a single 731 MB Q8_0 `.gguf` file. Muses' existing Sherpa runner requires four separate `.onnx`/`.txt` files. These are different exported formats and runtimes, even though they are derived from the same upstream Parakeet model family. The owner's screenshot reports 697 MB, consistent with the published 731 MB decimal / ~697 MiB GGUF size. This is a strong format clue, not proof of the exact local file; the owner should inspect Handy's model file to confirm. Handy's current project docs also describe Silero VAD and transcribe.cpp; Muses does not yet reproduce that exact audio/inference pipeline.
+- Added detection for Handy's Parakeet GGUF file. The model finder now reports it as a known incompatible format and explains that the current Sherpa recognizer needs the Sherpa-ONNX export. Corrected folder-priority naming from the previous `handsy` spelling to `handy`.
+- Updated README limits and voice description; kept the feature marked experimental until Windows laptop testing is complete.
+
+### Files
+- Edited `desktopApp/src/main/kotlin/com/music/bitchord/desktop/DesktopVoiceCommands.kt`.
+- Edited `desktopApp/src/main/kotlin/com/music/bitchord/desktop/DesktopVoiceController.kt`.
+- Edited `desktopApp/src/main/kotlin/com/music/bitchord/desktop/DesktopVoiceRecorder.kt`.
+- Edited `desktopApp/src/main/kotlin/com/music/bitchord/desktop/DesktopVoiceModel.kt` (GGUF detection and Handy path priority).
+- Edited `desktopApp/src/main/kotlin/com/music/bitchord/desktop/DesktopVoiceDownloads.kt` (Sherpa v2.0.1 release metadata).
+- Edited `desktopApp/src/main/kotlin/com/music/bitchord/desktop/DesktopVoiceSettingsUi.kt` (always-visible upstream release link).
+- Edited `desktopApp/src/main/kotlin/com/music/bitchord/desktop/DesktopApp.kt` (live playlist adapter, account-playlist action adapters, playback ducking hook; every added section marked `// VOICE V5 hook`).
+- Edited tests: `DesktopVoiceCommandsTest.kt`, `DesktopVoiceRecorderTest.kt`, `DesktopVoiceModelTest.kt`, and `DesktopVoiceDownloadsTest.kt`.
+- Edited `README.md`; appended this section to `HANDOFF.md`.
+- No Gradle dependencies or version changes. No edits to `sharedUi`, `shared`, or `app`.
+
+### Decisions
+- Keep the ASR model/runtime and the command interpreter separate. Do not use an LLM or network service for command interpretation in this version; all action execution remains typed and deterministic. The expanded phrasing layer improves coverage but is not a general-purpose conversational model.
+- The current Muses recognizer remains Sherpa-ONNX with the four-file Parakeet export. Handy's GGUF file is not passed to the Sherpa executable. The finder explains the mismatch rather than attempting to run an incompatible file.
+- Do not add Handy's Silero VAD model or transcribe.cpp runtime in this cycle. Handy's VAD is a separate model/pipeline component, not a setting that can simply be enabled on Sherpa's CLI. First compare raw recordings and recognised text on the owner's Windows machine; consider a GGUF/transcribe.cpp backend or a VAD stage only after that comparison.
+- Long-audio chunking is deferred: the Muses interaction is push-to-talk with a 12-second cap and the Sherpa Parakeet Unified export is explicitly non-streaming. Chunking short utterances without an evidence-based need would add complexity and may split song/artist names.
+- Playlist intent is no longer rejected just because the initial library snapshot is empty. The controller resolves against live state at execution time. Unresolved playlists are not played or edited. Playlist-specific interactive candidate selection is deferred; ambiguous names currently fail safely rather than selecting arbitrarily.
+- Broad mood/search requests use Muses' existing song search and candidate-confirmation flow; they do not invent unsupported playback actions.
+- The 22% duck level is a starting point; tune it only after owner testing with speakers/headphones. Only the Muses playback engine's own output level is affected; Windows master volume and persisted user volume are not changed.
+
+### Verified
+- Parser standalone Kotlin harness: **20/20 targeted cases passed**, including `Play my workout playlist`, `I'm in the mood for my workout playlist`, `add this to jazz`, title/artist splitting, and broad discovery intent.
+- Recorder standalone Kotlin harness: passed adaptive pre-roll, 48 kHz to 16 kHz resampling, capture-ready/tick/flush ordering, line close, and record-length checks.
+- Controller standalone Kotlin harness with fake recorder/recognizer/actions: passed missing-snapshot playlist intent dispatch, action result, and duck/restore sequence.
+- The project model locator and full desktop application were **NOT Gradle compiled**. The actual Windows audio device, Handy-vs-Muses same-audio comparison, account-library playlist playback, hotkey/overlay, and sidecar download have **NOT** been tested on the owner's laptop.
+- Full Gradle build could not be run in this environment: the wrapper attempted to download Gradle 8.11.1 and failed DNS resolution for `services.gradle.org`. No claim of a successful app build is made.
+
+### Deferred
+- Inspect the actual Handy model file on the owner's machine. The screenshot's 697 MB display strongly suggests the single Q8_0 GGUF export, but only the file extension/name can confirm it.
+- Compare one identical Muses-recorded WAV in Handy and Muses. This isolates capture/preprocessing from runtime/export differences.
+- Consider an optional GGUF/transcribe.cpp recognizer backend (or align Muses to Handy's exact backend) only after proving the current Sherpa pipeline is the accuracy bottleneck. This would be a deliberate backend decision, not a drop-in model-file swap.
+- Consider Silero VAD after the identical-audio comparison. Handy's documentation describes Silero VAD; Muses currently uses adaptive silence trimming, not that model.
+- No multi-turn conversational entity memory yet (`play X` then `add it to ...`); no playlist selection carousel; no configurable duck percentage; no offline intent model; no speaker/noise-specific calibration.
+- End-to-end Windows testing remains outstanding. The README correctly keeps the feature experimental.
+
+### Exact next step
+Run the GitHub Actions Windows desktop build on this zip and fix any compile failures. Then, on the laptop, open Handy's model folder and check whether the selected model is `parakeet-unified-en-0.6b-Q8_0.gguf` (or another `.gguf`) or the four Sherpa files. Next test `Play my workout playlist`, `I'm in the mood for my workout playlist`, `add this to workout`, and `play bad guy by billie eilish`; check capture starts before the tick, first words are present, music ducks/restores, and no temp files remain. Finally compare one identical WAV in both apps before deciding whether to change the ASR backend.

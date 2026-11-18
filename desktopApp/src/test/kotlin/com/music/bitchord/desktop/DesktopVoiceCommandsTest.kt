@@ -131,9 +131,9 @@ class DesktopVoiceCommandsTest {
     }
 
     @Test
-    fun addToUnknownPlaylistDoesNothing() {
-        assertEquals(VoiceCommand.Unknown, p("add this to jazz"))
-        assertEquals(VoiceCommand.Unknown, p("add this to anything", emptyList()))
+    fun addToUnknownPlaylistStillRecognisesTheIntent() {
+        assertEquals(VoiceCommand.AddToPlaylist("jazz"), p("add this to jazz"))
+        assertEquals(VoiceCommand.AddToPlaylist("anything"), p("add this to anything", emptyList()))
     }
 
     // ---- play song ----
@@ -195,21 +195,67 @@ class DesktopVoiceCommandsTest {
     }
 
     @Test
+    fun conversationalPlayPhrasingsResolveTheSamePlaylist() {
+        val expected = VoiceCommand.PlayPlaylist("Workout")
+        all(
+            expected,
+            "I'm in the mood for my workout playlist",
+            "I am in the mood for my workout playlist",
+            "I feel like listening to my workout playlist",
+            "I feel like my workout playlist",
+            "I'm feeling like listening to my workout playlist",
+            "I'd love to hear my workout playlist",
+            "I would like to listen to my workout playlist",
+            "I could go for my workout playlist",
+            "I'm up for my workout playlist",
+            "I am up for my workout playlist",
+            "I'm in the mood to listen to my workout playlist",
+            "I was thinking of playing my workout playlist",
+            "How about playing my workout playlist",
+            "Can we put on my workout playlist",
+            "Could we listen to my workout playlist",
+            "Let's listen to my workout playlist",
+            "Throw on my workout playlist",
+            "Put on the workout mix",
+        )
+    }
+
+    @Test
+    fun broadDiscoveryPhrasingsBecomeSearchRequests() {
+        assertEquals(VoiceCommand.SearchAndPlay("upbeat"), p("play something upbeat"))
+        assertEquals(VoiceCommand.SearchAndPlay("relaxing music"), p("put on some relaxing music"))
+        assertEquals(VoiceCommand.SearchAndPlay("music"), p("I'm craving something"))
+    }
+
+    @Test
+    fun conversationalTransportAndVolumePhrasings() {
+        all(VoiceCommand.Pause, "hold the music", "take a break", "pause for a moment", "kill the music")
+        all(VoiceCommand.Resume, "keep it going", "start back up", "let it play", "go on")
+        all(VoiceCommand.Next, "move on", "onto the next one", "another song", "next one please")
+        all(VoiceCommand.Previous, "go to the last one", "the previous one")
+        all(VoiceCommand.VolumeUp, "a little louder", "a bit louder", "bring the volume up")
+        all(VoiceCommand.VolumeDown, "a little quieter", "a bit softer", "bring the volume down")
+    }
+
+    @Test
     fun playMyWithoutAMatchingPlaylistIsASong() {
         assertEquals(VoiceCommand.Play("my girl", null), p("play my girl"))
         assertEquals(VoiceCommand.Play("my heart will go on", "celine dion"), p("play my heart will go on by celine dion"))
     }
 
     @Test
-    fun explicitPlaylistWithoutAMatchDoesNothing() {
-        assertEquals(VoiceCommand.Unknown, p("play playlist jazz"))
-        assertEquals(VoiceCommand.Unknown, p("play my sleepy playlist", emptyList()))
+    fun explicitPlaylistIntentDoesNotDependOnACompleteLibrarySnapshot() {
+        // Parsing identifies what the user asked for. The action layer resolves the name against
+        // the live library and reports a missing playlist; it must not say it failed to hear them.
+        assertEquals(VoiceCommand.PlayPlaylist("jazz"), p("play playlist jazz"))
+        assertEquals(VoiceCommand.PlayPlaylist("sleepy"), p("play my sleepy playlist", emptyList()))
+        assertEquals(VoiceCommand.AddToPlaylist("jazz"), p("add this to my jazz playlist", emptyList()))
     }
 
     @Test
     fun ambiguousPlaylistIsNotGuessed() {
         val two = listOf("Chill Vibes", "Chill Hits")
-        assertEquals(VoiceCommand.Unknown, p("play my chill playlist", two))
+        assertEquals(VoiceCommand.PlayPlaylist("chill"), p("play my chill playlist", two))
         assertEquals(VoiceCommand.PlayPlaylist("Chill Vibes"), p("play my chill vibes playlist", two))
     }
 

@@ -71,6 +71,17 @@ class DesktopVoiceControllerTest {
     }
 
     @Test
+    fun nearEqualPlausibleResultsAreMarkedAmbiguous() {
+        val candidates = listOf(
+            song("a", "Yellow", "Coldplay"),
+            song("b", "Yellow", "Another Artist"),
+        )
+        val ranked = VoiceSongMatcher.rank(candidates, "yellow", null)
+        assertTrue(VoiceSongMatcher.isAmbiguous(ranked))
+        assertFalse(VoiceSongMatcher.isAmbiguous(listOf(ranked.first())))
+    }
+
+    @Test
     fun equalScoresKeepSearchOrder() {
         val ranked = VoiceSongMatcher.rank(
             listOf(song("first", "Bad Guy", "A"), song("second", "Bad Guy", "B")),
@@ -116,6 +127,8 @@ class DesktopVoiceControllerTest {
         val calls: MutableList<String> = Collections.synchronizedList(mutableListOf<String>())
         @Volatile var results: List<VoiceSong> = emptyList()
         @Volatile var nowPlaying: String? = "Yellow - Coldplay"
+        @Volatile var playlists: List<String> = listOf("Gym")
+        val duckStates: MutableList<Boolean> = Collections.synchronizedList(mutableListOf<Boolean>())
 
         val actions = VoiceActions(
             search = { q -> calls.add("search:$q"); results },
@@ -130,7 +143,8 @@ class DesktopVoiceControllerTest {
             addCurrentToPlaylist = { calls.add("add:$it"); it == "Gym" },
             playPlaylist = { calls.add("playlist:$it"); true },
             nowPlayingText = { nowPlaying },
-            playlistNames = { listOf("Gym") },
+            playlistNames = { playlists },
+            duckPlayback = { duckStates.add(it) },
         )
     }
 
@@ -166,8 +180,9 @@ class DesktopVoiceControllerTest {
                 sidecarExe = { null },
                 hotkey = { VoiceHotkey.DEFAULT },
             ),
-            record = { _, shouldStop ->
+            record = { _, onCaptureReady, shouldStop ->
                 recordCalls.incrementAndGet()
+                onCaptureReady()
                 if (blockRecordForever) awaitCancellation()
                 while (!shouldStop()) delay(2)
                 Result.success(ShortArray(1600) { 1000 })
@@ -238,6 +253,7 @@ class DesktopVoiceControllerTest {
             assertEquals("Paused", done.result)
             assertFalse(done.canUndo)
             assertEquals(listOf("pause"), rig.fake.calls.toList())
+            assertEquals(listOf(true, false), rig.fake.duckStates.toList())
             assertEquals(1, rig.tickCalls.get())
             awaitUntil("warm-up started") { rig.warmCalls.get() == 1 }
             awaitIdle(rig)
@@ -279,6 +295,36 @@ class DesktopVoiceControllerTest {
     }
 
     @Test
+    fun explicitPlaylistRequestIsUnderstoodEvenWhenTheInitialNameSnapshotIsEmpty() {
+        val rig = Rig("play my workout playlist")
+        try {
+            rig.fake.playlists = emptyList()
+            val done = speak(rig)
+            assertEquals("Playing workout", done.result)
+            assertEquals(listOf("playlist:workout"), rig.fake.calls.toList())
+        } finally {
+            rig.close()
+        }
+    }
+
+    @Test
+    fun similarSongCandidatesAreShownInsteadOfSilentlyChoosingOne() {
+        val rig = Rig("play yellow")
+        try {
+            rig.fake.results = listOf(
+                song("a", "Yellow", "Coldplay"),
+                song("b", "Yellow", "Another Artist"),
+            )
+            val done = speak(rig)
+            assertEquals("Did you mean...?", done.result)
+            assertEquals(listOf("a", "b"), done.choices.map { it.videoId })
+            assertTrue(rig.fake.calls.none { it.startsWith("play:") })
+        } finally {
+            rig.close()
+        }
+    }
+
+    @Test
     fun unknownSpeechDoesNothing() {
         val rig = Rig("mumble blah")
         try {
@@ -303,6 +349,35 @@ class DesktopVoiceControllerTest {
             awaitUntil("done") { rig.state is DesktopVoiceState.Done }
             assertEquals(1, rig.recordCalls.get())
             assertEquals(listOf("pause"), rig.fake.calls.toList())
+        } finally {
+            rig.close()
+        }
+    }
+
+    @Test
+    fun cancelDuringRecordingRestoresPlaybackVolume() {
+        val rig = Rig("pause", blockRecordForever = true)
+        try {
+            rig.controller.onPressed()
+            awaitUntil("microphone session") { rig.recordCalls.get() == 1 && rig.fake.duckStates.contains(true) }
+            rig.controller.cancel()
+            awaitUntil("playback restored") { rig.fake.duckStates.lastOrNull() == false }
+            assertEquals(listOf(true, false), rig.fake.duckStates.toList())
+        } finally {
+            rig.close()
+        }
+    }
+
+    @Test
+    fun broadDiscoveryRequestOffersSearchResultsInsteadOfTreatingWordsAsATitle() {
+        val rig = Rig("play something upbeat")
+        rig.fake.results = listOf(song("a", "Feel Good Inc.", "Gorillaz"), song("b", "Levitating", "Dua Lipa"))
+        try {
+            val done = speak(rig)
+            assertEquals("Here are some options", done.result)
+            assertEquals(listOf("a", "b"), done.choices.map { it.videoId })
+            assertTrue(rig.fake.calls.first() == "search:upbeat")
+            assertTrue(rig.fake.calls.none { it.startsWith("play:") })
         } finally {
             rig.close()
         }

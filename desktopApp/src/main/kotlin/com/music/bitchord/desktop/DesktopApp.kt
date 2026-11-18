@@ -658,6 +658,8 @@ fun BitChordDesktopApp() {
     }
     var playbackSpeed by remember { mutableStateOf(persistence.string("playback_speed", "1.0").toFloatOrNull() ?: 1.0f) }
     var volume by remember { mutableStateOf(persistence.string("volume", "1.0").toFloatOrNull()?.coerceIn(0.0f, 1.0f) ?: 1.0f) }
+    // Voice-only ducking is transient and never changes the saved/user-facing volume setting.
+    var voiceDucked by remember { mutableStateOf(false) }
     var crossfadeSeconds by remember { mutableStateOf(persistence.string("crossfade_seconds", "0").toIntOrNull()?.coerceIn(0, 12) ?: 0) }
     var downloadQuality by remember { mutableStateOf(persistence.string("download_quality", "LOSSLESS")) }
     var trayIconEnabled by remember { mutableStateOf(persistence.boolean("tray_icon", true)) }
@@ -722,6 +724,21 @@ fun BitChordDesktopApp() {
             ?.filter { it.browseId != null }
             .orEmpty()
     }
+
+    // VOICE V5 hook: resolve library entities from live state, not the controller's first composition.
+    // Read through libraryState when a voice action runs. The controller is remembered for the
+    // window's lifetime, so capturing the derived accountPlaylists vals would freeze the first
+    // (often still-loading) library snapshot.
+    fun currentVoicePlaylistShelf() = (libraryState as? UiState.Success)?.data?.shelves
+        ?.firstOrNull { it.title == PLAYLISTS_SHELF }
+        ?.items
+        .orEmpty()
+
+    fun currentVoiceUserPlaylists() = currentVoicePlaylistShelf().let(DesktopSearchClient::userPlaylists)
+
+    // The controller is remembered across recompositions. Read local playlists at action time too;
+    // capturing `playlists` directly would freeze the initial (often empty) snapshot.
+    fun currentVoiceLocalPlaylists() = playlists
 
     fun reloadLibrary() {
         libraryState = UiState.Loading
@@ -1623,7 +1640,9 @@ fun BitChordDesktopApp() {
     }
 
     LaunchedEffect(playbackSpeed) { playbackEngine.setPlaybackSpeed(playbackSpeed) }
-    LaunchedEffect(volume) { playbackEngine.setVolume(volume) }
+    LaunchedEffect(volume, voiceDucked) {
+        playbackEngine.setVolume(volume * if (voiceDucked) 0.22f else 1f)
+    }
     LaunchedEffect(audioQuality) { playbackEngine.setAudioQuality(audioQuality.name) }
     LaunchedEffect(automixPerformance) {
         playbackEngine.setAutomixPerformance(automixPerformance)
@@ -2832,28 +2851,94 @@ fun BitChordDesktopApp() {
                         true
                     }
                 },
+                // VOICE V5 hook: resolve both local and signed-in account playlists at action time.
                 addCurrentToPlaylist = { name ->
                     val current = selectedSong
-                    val target = playlists.firstOrNull { it.title.equals(name, ignoreCase = true) }
-                    if (current == null || target == null) {
+                    val localItems = currentVoiceLocalPlaylists()
+                    val accountItems = currentVoiceUserPlaylists()
+                    val canonicalName = DesktopVoiceCommandParser.matchPlaylist(
+                        name, localItems.map { it.title } + accountItems.map { it.title },
+                    )
+                    if (canonicalName == null || current == null) {
                         false
                     } else {
-                        playlistTarget = current
-                        addToPlaylist(target)
-                        true
+                        val localTarget = localItems.firstOrNull { it.title.equals(canonicalName, ignoreCase = true) }
+                        val accountTarget = accountItems.firstOrNull { it.title.equals(canonicalName, ignoreCase = true) }
+                        when {
+                            localTarget != null -> {
+                                playlistTarget = current
+                                addToPlaylist(localTarget)
+                                true
+                            }
+                            accountTarget != null -> {
+                                val added = withContext(Dispatchers.IO) {
+                                    DesktopSearchClient.addToPlaylist(accountTarget.playlistId, listOf(current.videoId)).isSuccess
+                                }
+                                if (added) libraryStale = true
+                                added
+                            }
+                            else -> false
+                        }
                     }
                 },
+                // VOICE V5 hook: local playlists play directly; account playlists use the existing browse API.
                 playPlaylist = { name ->
-                    val target = playlists.firstOrNull { it.title.equals(name, ignoreCase = true) }
-                    if (target == null || target.songs.isEmpty()) {
+                    val localItems = currentVoiceLocalPlaylists()
+                    val shelfItems = currentVoicePlaylistShelf().filter { it.browseId != null }
+                    val canonicalName = DesktopVoiceCommandParser.matchPlaylist(
+                        name, localItems.map { it.title } + shelfItems.map { it.title },
+                    )
+                    if (canonicalName == null) {
                         false
                     } else {
-                        playSongs(target.songs)
-                        true
+                        val localTarget = localItems.firstOrNull { it.title.equals(canonicalName, ignoreCase = true) }
+                        if (localTarget != null) {
+                            if (localTarget.songs.isEmpty()) false else {
+                                playSongs(localTarget.songs)
+                                true
+                            }
+                        } else {
+                            val accountTarget = shelfItems.firstOrNull {
+                                it.title.equals(canonicalName, ignoreCase = true)
+                            }
+                            val browseId = accountTarget?.browseId
+                            if (browseId == null) {
+                                false
+                            } else {
+                                val firstPage = withContext(Dispatchers.IO) {
+                                    DesktopSearchClient.browse(browseId)
+                                }.getOrNull()
+                                if (firstPage == null) {
+                                    false
+                                } else {
+                                    val songs = firstPage.songs.toMutableList()
+                                    var continuation = firstPage.continuation
+                                    var pageCount = 0
+                                    val seenContinuations = HashSet<String>()
+                                    while (continuation != null && pageCount < 30 && seenContinuations.add(continuation)) {
+                                        val nextPage = withContext(Dispatchers.IO) {
+                                            DesktopSearchClient.moreCollectionSongs(continuation)
+                                        }.getOrNull() ?: break
+                                        songs.addAll(nextPage.first)
+                                        continuation = nextPage.second
+                                        pageCount++
+                                    }
+                                    if (songs.isEmpty()) false else {
+                                        playSongs(songs.distinctBy(Song::videoId))
+                                        true
+                                    }
+                                }
+                            }
+                        }
                     }
                 },
                 nowPlayingText = { selectedSong?.let { it.title + " - " + it.artist } },
-                playlistNames = { playlists.map { it.title } },
+                // VOICE V5 hook: the parser sees a live combined catalogue, not a stale remembered snapshot.
+                playlistNames = {
+                    (currentVoiceLocalPlaylists().map { it.title } + currentVoicePlaylistShelf().filter { it.browseId != null }.map { it.title })
+                        .distinctBy { it.trim().lowercase() }
+                },
+                duckPlayback = { enabled -> voiceDucked = enabled },
             ),
         )
     }

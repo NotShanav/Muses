@@ -1,14 +1,19 @@
 package com.music.bitchord.desktop
 
 /*
- * Voice commands, part V1: turning recognised words into a command. Pure functions, no I/O, no
- * logging. The text passed in is never stored by this file. Rule based on purpose (no AI chat):
- * anything not understood becomes [VoiceCommand.Unknown] and the caller does nothing.
+ * Voice commands: offline natural-language interpretation.
+ *
+ * This is deliberately not a whitelist of complete utterances. It recognises action families,
+ * conversational lead-ins, references to the current track, and entities grounded against the
+ * user's actual playlist names. The final command remains a typed, deterministic action; no text is
+ * evaluated as code and no transcript is persisted here.
  */
 
 internal sealed interface VoiceCommand {
-    /** [title] and [artist] are lower-case, punctuation stripped (the search is case-insensitive). */
+    /** [title] and [artist] are normalised; search is case-insensitive. */
     data class Play(val title: String, val artist: String? = null) : VoiceCommand
+    /** A broad discovery request such as "play something upbeat"; candidates are confirmed in UI. */
+    data class SearchAndPlay(val query: String) : VoiceCommand
     object Pause : VoiceCommand
     object Resume : VoiceCommand
     object Next : VoiceCommand
@@ -17,8 +22,6 @@ internal sealed interface VoiceCommand {
     object VolumeDown : VoiceCommand
     data class Shuffle(val on: Boolean) : VoiceCommand
     object Like : VoiceCommand
-
-    /** [name] is the playlist's real name from the list passed to the parser. */
     data class AddToPlaylist(val name: String) : VoiceCommand
     data class PlayPlaylist(val name: String) : VoiceCommand
     object WhatsPlaying : VoiceCommand
@@ -29,8 +32,6 @@ internal object DesktopVoiceCommandParser {
 
     /** Minimum playlist score (0..1) to accept a match. */
     const val PLAYLIST_THRESHOLD = 0.72
-
-    /** Two playlists closer than this at the top are an ambiguous match, which is rejected. */
     private const val AMBIGUOUS_GAP = 0.05
 
     private val LEADING_FILLER: List<List<String>> = listOf(
@@ -39,26 +40,58 @@ internal object DesktopVoiceCommandParser {
         listOf("could", "you", "please"), listOf("can", "you", "please"),
         listOf("would", "you", "please"), listOf("will", "you", "please"),
         listOf("could", "you"), listOf("can", "you"), listOf("would", "you"), listOf("will", "you"),
+        listOf("could", "we"), listOf("can", "we"), listOf("would", "we"), listOf("may", "we"),
         listOf("i", "would", "like", "you", "to"), listOf("i", "want", "you", "to"),
         listOf("i", "would", "like", "to"), listOf("i'd", "like", "to"), listOf("i", "want", "to"),
-        listOf("go", "ahead", "and"), listOf("lets"), listOf("let's"),
-        listOf("please"), listOf("just"),
+        listOf("i", "wanna"), listOf("would", "you", "mind"),
+        listOf("i", "was", "wondering", "if", "you", "could"),
+        listOf("go", "ahead", "and"), listOf("let's"), listOf("lets"),
+        listOf("actually"), listOf("maybe"), listOf("please"), listOf("just"),
+    ).sortedByDescending { it.size }
+
+    /** These conversational openings imply a play request even without a literal play verb. */
+    private val PLAY_PRELUDES: List<List<String>> = listOf(
+        listOf("i'm", "in", "the", "mood", "for"), listOf("i", "am", "in", "the", "mood", "for"),
+        listOf("im", "in", "the", "mood", "for"), listOf("i'm", "in", "the", "mood", "to"),
+        listOf("i", "am", "in", "the", "mood", "to"),
+        listOf("i'm", "in", "the", "mood", "to", "listen", "to"),
+        listOf("i", "am", "in", "the", "mood", "to", "listen", "to"),
+        listOf("i", "feel", "like", "listening", "to"), listOf("i", "feel", "like", "hearing"),
+        listOf("i", "feel", "like", "playing"), listOf("i", "feel", "like"),
+        listOf("i'm", "feeling", "like", "listening", "to"), listOf("i", "am", "feeling", "like", "listening", "to"),
+        listOf("i'm", "feeling", "like"), listOf("i", "am", "feeling", "like"),
+        listOf("i'd", "love", "to", "listen", "to"), listOf("i", "would", "love", "to", "listen", "to"),
+        listOf("i'd", "love", "to", "hear"), listOf("i", "would", "love", "to", "hear"),
+        listOf("i'd", "like", "to", "hear"), listOf("i", "would", "like", "to", "hear"),
+        listOf("i'd", "like", "to", "listen", "to"), listOf("i", "would", "like", "to", "listen", "to"),
+        listOf("i", "want", "to", "listen", "to"), listOf("i", "want", "to", "hear"),
+        listOf("i", "wanna", "listen", "to"), listOf("i", "wanna", "hear"),
+        listOf("i", "could", "listen", "to"), listOf("i", "could", "hear"),
+        listOf("i'm", "up", "for"), listOf("i", "am", "up", "for"),
+        listOf("i", "would", "be", "up", "for"), listOf("i'd", "be", "up", "for"),
+        listOf("i'm", "after"), listOf("i", "am", "after"),
+        listOf("i'm", "thinking", "of", "playing"), listOf("i", "am", "thinking", "of", "playing"),
+        listOf("i'm", "thinking", "of", "listening", "to"),
+        listOf("i", "am", "thinking", "of", "listening", "to"),
+        listOf("i'm", "craving"), listOf("i", "am", "craving"), listOf("i", "could", "go", "for"),
+        listOf("i", "fancy", "listening", "to"), listOf("i", "fancy"),
+        listOf("i'm", "looking", "for"), listOf("i", "am", "looking", "for"),
+        listOf("how", "about", "playing"), listOf("what", "about", "playing"),
+        listOf("let's", "hear"), listOf("lets", "hear"),
+        listOf("i'm", "into"), listOf("i", "am", "into"),
     ).sortedByDescending { it.size }
 
     private val TRAILING_FILLER: List<List<String>> = listOf(
         listOf("thank", "you"), listOf("thanks"), listOf("please"), listOf("for", "me"),
     ).sortedByDescending { it.size }
 
-    /** Mishearings of the FIRST word only (a title is never touched). */
+    /** Only common ASR confusions of command words are corrected, never arbitrary title words. */
     private val HEAD_FIXES: Map<String, String> = mapOf(
-        "plays" to "play", "played" to "play",
-        "paws" to "pause", "paused" to "pause", "pours" to "pause",
-        "necks" to "next", "nex" to "next",
-        "previews" to "previous", "skipped" to "skip",
-        "shuffles" to "shuffle", "volum" to "volume",
+        "plays" to "play", "played" to "play", "paws" to "pause", "paused" to "pause",
+        "pours" to "pause", "necks" to "next", "nex" to "next", "previews" to "previous",
+        "skipped" to "skip", "shuffles" to "shuffle", "volum" to "volume",
     )
 
-    /** Words that cannot be an artist ("Stand by me" must not become title "stand", artist "me"). */
     private val NOT_AN_ARTIST: Set<String> = setOf(
         "me", "you", "him", "her", "us", "them", "it", "myself", "yourself", "this", "that",
         "the", "a", "an", "my", "your", "now", "tomorrow", "today",
@@ -69,85 +102,82 @@ internal object DesktopVoiceCommandParser {
         "six" to "6", "seven" to "7", "eight" to "8", "nine" to "9", "ten" to "10",
     )
 
-    private val PLAYLIST_NOISE: Set<String> = setOf("my", "the", "playlist", "playlists", "a")
-
-    // ---- regular expressions (all run on normalized text) -----------------------------------
+    private val PLAYLIST_NOISE: Set<String> = setOf(
+        "my", "the", "playlist", "playlists", "a", "called", "named",
+    )
+    private val PREPOSITIONS = setOf("to", "into", "in", "on", "onto", "under")
 
     private val WHATS_PLAYING = Regex(
-        "^(?:" +
-            "what(?:'?s| is) (?:currently |now )?playing(?: now| right now)?|" +
+        "^(?:what(?:'?s| is) (?:currently |now )?playing(?: now| right now)?|" +
             "what(?:'?s| is) (?:this|that|the current) (?:song|track|one)|" +
-            "what(?:'?s| is) this|" +
-            "what (?:song|track) is (?:this|playing|on)|" +
-            "which (?:song|track) is (?:this|playing)|" +
-            "what am i listening to|what are we listening to|" +
+            "what(?:'?s| is) this|what (?:song|track) is (?:this|playing|on)|" +
+            "which (?:song|track) is (?:this|playing)|what am i listening to|what are we listening to|" +
             "who (?:sings|is singing|is playing) this(?: song)?|who is this|" +
-            "now playing|what(?:'?s| is) on" +
-            ")$",
+            "now playing|what(?:'?s| is) on|what track is on|what is the current track)$",
     )
 
     private val LIKE = Regex(
         "^(?:i )?(?:like|love|heart|favou?rite)(?: (?:this|it|that|the current|the playing|the))?" +
-            "(?: (?:song|track|one))?$|^thumbs up$",
+            "(?: (?:song|track|one))?$|^thumbs up$|^(?:save|keep) (?:this|it|that)(?: (?:song|track|one))?$",
     )
-
     private val LIKE_TARGETS = setOf(
         "favorites", "favourites", "favorite songs", "favourite songs", "liked songs", "liked",
-        "likes", "my likes", "favorite", "favourite", "liked music", "liked tracks",
+        "likes", "my likes", "favorite", "favourite", "liked music", "liked tracks", "liked playlist",
     )
 
     private val ADD_TO = Regex(
-        "^(?:add|put|save|throw|drop) " +
+        "^(?:add|put|save|throw|drop|stick|keep|toss|send) " +
             "(?:(?:this|it|that)(?: (?:song|track|one))? |" +
-            "(?:the )?(?:current|playing) (?:song|track) |" +
-            "(?:the )?(?:song|track) )?" +
-            "(?:to|into|in|on) (.+)$",
+            "(?:the )?(?:current|playing) (?:song|track|one) |" +
+            "(?:this|that) one |(?:the )?song (?:that's )?playing )?" +
+            "(?:to|into|in|on|onto|under) (.+)$",
     )
 
     private val PAUSE = Regex(
-        "^(?:pause(?: (?:the )?(?:music|song|track|playback|playing|it|this))?|" +
-            "stop(?: (?:the )?(?:music|song|track|playback|playing))?|hold on|be quiet)$",
+        "^(?:pause(?: (?:the )?(?:music|song|track|playback|playing|it|this))?" +
+            "(?: for (?:a )?(?:second|moment|bit|while))?|" +
+            "stop(?: (?:the )?(?:music|song|track|playback|playing|it))?|" +
+            "hold on|hold the music|take a break|be quiet|quiet the music|kill the music)$",
     )
 
     private val RESUME = Regex(
         "^(?:resume(?: (?:the )?(?:music|song|track|playback|playing|it))?|" +
-            "continue(?: (?:playing|playback|the music|the song))?|unpause|un pause|keep playing|carry on|" +
+            "continue(?: (?:playing|playback|the music|the song|where you left off))?|" +
+            "unpause|un pause|keep playing|keep it going|carry on|start back up|" +
             "play(?: (?:the |some )?(?:music|song|track|playback)| it| again)?|" +
-            "start(?: (?:the )?(?:music|playing|playback))?)$",
+            "start(?: (?:the )?(?:music|playing|playback))?|let it play|go on)$",
     )
 
     private val NEXT = Regex(
-        "^(?:next(?: (?:song|track|one))?|skip(?: (?:this |the )?(?:song|track|one))?|skip forward|" +
-            "(?:play|go to|go on to) (?:the )?next(?: (?:song|track|one))?)$",
+        "^(?:next(?: (?:song|track|one))?|skip(?: (?:this |the )?(?:song|track|one))?|" +
+            "skip forward|move on|onto the next(?: (?:one|song|track))?|" +
+            "(?:play|go to|go on to|move to) (?:the )?next(?: (?:song|track|one))?|another song|next one please)$",
     )
 
     private val PREVIOUS = Regex(
-        "^(?:previous(?: (?:song|track|one))?|prev|go back|back|(?:the )?last (?:song|track)|" +
+        "^(?:previous(?: (?:song|track|one))?|prev|go back|back|go to the last one|" +
+            "(?:the )?last (?:song|track|one)|" +
             "(?:play|go to|go back to) (?:the )?(?:previous|last)(?: (?:song|track|one))?)$",
     )
 
-    private val PLAY_HEAD = Regex("^(?:play(?: me)?|start playing|put on|listen to|hear) (.+)$")
+    private val PLAY_HEAD = Regex(
+        "^(?:play(?: me)?|start playing|put on|throw on|queue up|listen to|hear|" +
+            "let me hear|give me|switch to|turn on) (.+)$",
+    )
 
     private val VOLUME_HEADS = setOf(
         "volume", "turn", "make", "raise", "lower", "increase", "decrease", "reduce", "louder",
-        "quieter", "softer", "bump", "crank", "drop", "set",
+        "quieter", "softer", "bump", "crank", "drop", "set", "bring",
     )
     private val VOLUME_UP = setOf("up", "louder", "higher", "increase", "raise", "more", "crank", "bump")
     private val VOLUME_DOWN = setOf("down", "quieter", "lower", "softer", "decrease", "reduce", "less", "drop", "quiet")
 
     private val SHUFFLE_WORDS = setOf(
         "shuffle", "shuffling", "shuffled", "unshuffle", "on", "off", "turn", "the", "mode", "enable",
-        "disable", "stop", "start", "no", "it", "music", "songs", "queue", "set", "to", "and", "dont",
-        "don't",
+        "disable", "stop", "start", "no", "it", "music", "songs", "queue", "set", "to", "and", "dont", "don't",
     )
     private val SHUFFLE_OFF = setOf("off", "disable", "stop", "no", "unshuffle", "dont", "don't")
 
-    // ---- public API -------------------------------------------------------------------------
-
-    /**
-     * Lower-case, punctuation to spaces (apostrophes inside words are kept), single spaces.
-     * "Play Bad Guy, by Billie Eilish." -> "play bad guy by billie eilish".
-     */
     fun normalize(text: String): String {
         val sb = StringBuilder(text.length)
         for (ch in text.lowercase()) {
@@ -157,62 +187,78 @@ internal object DesktopVoiceCommandParser {
                 else -> sb.append(' ')
             }
         }
-        return sb.toString().split(' ')
-            .map { it.trim('\'') }
-            .filter { it.isNotEmpty() }
-            .joinToString(" ")
+        return sb.toString().split(' ').map { it.trim('\'') }.filter { it.isNotEmpty() }.joinToString(" ")
     }
 
+    // VOICE V5 hook: intent recognition is independent of library availability; entity resolution
+    // is retried against the live library by the action adapter.
     fun parse(text: String, playlistNames: List<String>): VoiceCommand {
-        val tokens = stripFiller(normalize(text).split(' ').filter { it.isNotEmpty() }).toMutableList()
+        var tokens = normalize(text).split(' ').filter { it.isNotEmpty() }
         if (tokens.isEmpty()) return VoiceCommand.Unknown
-        HEAD_FIXES[tokens[0]]?.let { tokens[0] = it }
+
+        var impliedPlay = false
+        var changed = true
+        while (changed && tokens.isNotEmpty()) {
+            changed = false
+            val mood = PLAY_PRELUDES.firstOrNull { tokens.startsWith(it) }
+            if (mood != null) {
+                tokens = tokens.drop(mood.size)
+                impliedPlay = true
+                changed = true
+                continue
+            }
+            val filler = LEADING_FILLER.firstOrNull { tokens.startsWith(it) }
+            if (filler != null) {
+                tokens = tokens.drop(filler.size)
+                changed = true
+                continue
+            }
+            val trailing = TRAILING_FILLER.firstOrNull { tokens.size > it.size && tokens.endsWith(it) }
+            if (trailing != null) {
+                tokens = tokens.dropLast(trailing.size)
+                changed = true
+            }
+        }
+        if (tokens.isEmpty()) return VoiceCommand.Unknown
+        tokens = tokens.toMutableList().also { list -> HEAD_FIXES[list[0]]?.let { list[0] = it } }
         val s = tokens.joinToString(" ")
 
         if (WHATS_PLAYING.matches(s)) return VoiceCommand.WhatsPlaying
         if (LIKE.matches(s)) return VoiceCommand.Like
 
-        // "put on <song>" is a play request, not an add-to-playlist request.
-        // ADD_TO also accepts "put ... on ...", so let PLAY_HEAD handle this phrase.
-        if (!s.startsWith("put on ")) ADD_TO.matchEntire(s)?.let { m ->
-            val rest = m.groupValues[1].removePrefix("playlist ").trim()
-            val plain = rest.split(' ').filter { it !in setOf("my", "the", "playlist") }.joinToString(" ")
-            if (plain in LIKE_TARGETS) return VoiceCommand.Like
-            val name = matchPlaylist(rest, playlistNames) ?: return VoiceCommand.Unknown
-            return VoiceCommand.AddToPlaylist(name)
+        // "Put on" and "throw on" introduce playback; they are not playlist-add operations.
+        if (!s.startsWith("put on ") && !s.startsWith("throw on ")) ADD_TO.matchEntire(s)?.let { match ->
+            val rest = match.groupValues[1].trim()
+            val plain = playlistTokens(rest).joinToString(" ")
+            if (plain in LIKE_TARGETS || plain in setOf("favorites", "favourites", "liked songs")) return VoiceCommand.Like
+            val name = matchPlaylist(rest, playlistNames) ?: playlistReference(rest)
+            return if (name.isBlank()) VoiceCommand.Unknown else VoiceCommand.AddToPlaylist(name)
         }
 
         parseShuffle(tokens)?.let { return it }
         parseVolume(tokens)?.let { return it }
-
         if (PAUSE.matches(s)) return VoiceCommand.Pause
         if (RESUME.matches(s)) return VoiceCommand.Resume
         if (NEXT.matches(s)) return VoiceCommand.Next
         if (PREVIOUS.matches(s)) return VoiceCommand.Previous
 
-        val play = PLAY_HEAD.matchEntire(s) ?: return VoiceCommand.Unknown
-        return parsePlay(play.groupValues[1].trim(), playlistNames)
+        val play = PLAY_HEAD.matchEntire(s)
+        if (play != null) return parsePlay(play.groupValues[1].trim(), playlistNames, impliedPlay)
+        if (impliedPlay) return parsePlay(s, playlistNames, true)
+        return VoiceCommand.Unknown
     }
 
-    /**
-     * The playlist in [names] that best matches [query], or null. Case-insensitive, ignores "my",
-     * "the", "playlist". Below [PLAYLIST_THRESHOLD], or when two different playlists tie, null:
-     * it never guesses.
-     */
     fun matchPlaylist(query: String, names: List<String>): String? {
         if (names.isEmpty()) return null
         val scored = names.map { it to playlistScore(query, it) }.sortedByDescending { it.second }
         val best = scored.first()
         if (best.second < PLAYLIST_THRESHOLD) return null
         val rival = scored.firstOrNull { (name, score) ->
-            score >= PLAYLIST_THRESHOLD &&
-                best.second - score < AMBIGUOUS_GAP &&
-                playlistKey(name) != playlistKey(best.first)
+            score >= PLAYLIST_THRESHOLD && best.second - score < AMBIGUOUS_GAP && playlistKey(name) != playlistKey(best.first)
         }
         return if (rival != null) null else best.first
     }
 
-    /** 0..1: 1 means the same words (after dropping "my", "the", "playlist"), typos cost a little. */
     fun playlistScore(query: String, candidate: String): Double {
         val q = playlistTokens(query)
         val c = playlistTokens(candidate)
@@ -224,83 +270,94 @@ internal object DesktopVoiceCommandParser {
         return maxOf(tokenScore, whole)
     }
 
-    // ---- helpers ----------------------------------------------------------------------------
+    private fun parsePlay(
+        rest: String,
+        playlistNames: List<String>,
+        preferPlaylist: Boolean = false,
+    ): VoiceCommand {
+        var body = rest.trim()
+        if (body.isBlank()) return VoiceCommand.Unknown
 
-    private fun stripFiller(input: List<String>): List<String> {
-        var t = input
-        var changed = true
-        while (changed && t.isNotEmpty()) {
-            changed = false
-            for (p in LEADING_FILLER) {
-                if (t.size >= p.size && t.subList(0, p.size) == p) {
-                    t = t.subList(p.size, t.size)
-                    changed = true
-                    break
-                }
-            }
-            if (changed) continue
-            for (p in TRAILING_FILLER) {
-                if (t.size > p.size && t.subList(t.size - p.size, t.size) == p) {
-                    t = t.subList(0, t.size - p.size)
-                    changed = true
-                    break
-                }
+        // Natural speech often calls the same playlist a "mix", "collection", or simply "my X".
+        val explicitPlaylist = Regex("\\b(?:playlist|playlists|collection|mix|mixtape)\\b").containsMatchIn(body)
+        if (explicitPlaylist) {
+            // Understanding the request must not depend on the library snapshot being available.
+            // Resolve against current library names at action time; retain the spoken name when no
+            // catalogue match is available so a missing playlist is reported as such, not as ASR failure.
+            val name = matchPlaylist(body, playlistNames) ?: playlistReference(body)
+            return if (name.isBlank()) VoiceCommand.Unknown else VoiceCommand.PlayPlaylist(name)
+        }
+        if (body.startsWith("my ") || preferPlaylist) {
+            matchPlaylist(body, playlistNames)?.let { return VoiceCommand.PlayPlaylist(it) }
+        }
+
+        val tokens = body.split(' ').filter { it.isNotEmpty() }
+        if (tokens.isEmpty()) return VoiceCommand.Unknown
+        if (tokens.size > 2 && tokens[0] == "the" && (tokens[1] == "song" || tokens[1] == "track")) {
+            body = tokens.drop(2).joinToString(" ")
+        } else if (tokens.size > 2 && tokens[0] == "song" && tokens[1] in setOf("called", "named", "titled")) {
+            body = tokens.drop(2).joinToString(" ")
+        }
+
+        val generic = listOf("something", "anything", "some", "a song", "a track", "some tunes")
+            .firstOrNull { body == it || body.startsWith("$it ") }
+        if (generic != null) {
+            val query = body.removePrefix(generic).trim().removePrefix("that is ").removePrefix("that's ").trim()
+            return if (query.isBlank()) VoiceCommand.SearchAndPlay("music") else VoiceCommand.SearchAndPlay(query)
+        }
+        if (body in setOf("music", "the music", "some music", "songs", "some songs", "the songs")) {
+            return VoiceCommand.Resume
+        }
+
+        // Split on the LAST "by", preserving titles such as "Stand by Me".
+        val words = body.split(' ').filter { it.isNotEmpty() }
+        val byAt = words.lastIndexOf("by")
+        if (byAt > 0 && byAt < words.size - 1) {
+            val title = words.subList(0, byAt).joinToString(" ")
+            val artistWords = words.subList(byAt + 1, words.size)
+            if (!(artistWords.size == 1 && artistWords[0] in NOT_AN_ARTIST)) {
+                return VoiceCommand.Play(title, artistWords.joinToString(" "))
             }
         }
-        return t
+        return VoiceCommand.Play(body, null)
     }
 
     private fun parseShuffle(tokens: List<String>): VoiceCommand.Shuffle? {
-        if (tokens.size > 6) return null
+        if (tokens.size > 8) return null
         if (tokens.none { it == "shuffle" || it == "shuffling" || it == "shuffled" || it == "unshuffle" }) return null
         if (tokens.any { it !in SHUFFLE_WORDS }) return null
         return VoiceCommand.Shuffle(on = tokens.none { it in SHUFFLE_OFF })
     }
 
     private fun parseVolume(tokens: List<String>): VoiceCommand? {
-        if (tokens.size > 8 || tokens[0] !in VOLUME_HEADS) return null
+        if (tokens.size > 10) return null
+        val gentleLead = tokens.size >= 2 && tokens[0] == "a" && tokens[1] in setOf("bit", "little")
+        if (tokens[0] !in VOLUME_HEADS && !gentleLead) return null
         val up = tokens.any { it in VOLUME_UP }
         val down = tokens.any { it in VOLUME_DOWN }
         if (up == down) return null
         val aboutSound = tokens.size <= 2 || tokens.any {
             it == "volume" || it == "louder" || it == "quieter" || it == "softer" || it == "it" ||
-                it == "music" || it == "sound"
+                it == "music" || it == "sound" || it == "bit" || it == "little"
         }
         if (!aboutSound) return null
         return if (up) VoiceCommand.VolumeUp else VoiceCommand.VolumeDown
     }
 
-    /** [rest] is everything after the play verb, normalized. */
-    private fun parsePlay(rest: String, playlistNames: List<String>): VoiceCommand {
-        val tokens = rest.split(' ').filter { it.isNotEmpty() }
-        if (tokens.isEmpty()) return VoiceCommand.Unknown
-
-        // Playlist forms: the word "playlist" is explicit intent; "my X" is tried as a playlist first.
-        if ("playlist" in tokens || "playlists" in tokens) {
-            val name = matchPlaylist(rest, playlistNames) ?: return VoiceCommand.Unknown
-            return VoiceCommand.PlayPlaylist(name)
+    /** Removes grammatical wrappers while preserving the actual playlist title words. */
+    private fun playlistReference(text: String): String {
+        val words = normalize(text).replace("'", "").split(' ').filter { it.isNotEmpty() }.toMutableList()
+        while (words.firstOrNull() in setOf("my", "the", "a", "an")) words.removeAt(0)
+        if (words.firstOrNull() in setOf("playlist", "playlists", "mix", "mixtape", "collection")) {
+            words.removeAt(0)
+            if (words.firstOrNull() in setOf("called", "named", "titled")) words.removeAt(0)
         }
-        if (tokens[0] == "my" && tokens.size > 1) {
-            val name = matchPlaylist(rest, playlistNames)
-            if (name != null) return VoiceCommand.PlayPlaylist(name)
+        if (words.lastOrNull() in setOf("playlist", "playlists", "mix", "mixtape", "collection")) {
+            words.removeAt(words.lastIndex)
         }
-
-        // "the song X" / "the track X" is only a filler; a bare "song X" stays (Song 2 by Blur).
-        var body = tokens
-        if (body.size > 2 && body[0] == "the" && (body[1] == "song" || body[1] == "track")) body = body.drop(2)
-        if (body.isEmpty()) return VoiceCommand.Unknown
-
-        val byAt = body.lastIndexOf("by")
-        if (byAt > 0 && byAt < body.size - 1) {
-            val title = body.subList(0, byAt).joinToString(" ")
-            val artist = body.subList(byAt + 1, body.size).joinToString(" ")
-            val artistWords = body.subList(byAt + 1, body.size)
-            if (!(artistWords.size == 1 && artistWords[0] in NOT_AN_ARTIST)) {
-                return VoiceCommand.Play(title, artist)
-            }
-        }
-        // Nothing after the last "by" (or a lone "me"/"you"): the whole text is the title.
-        return VoiceCommand.Play(body.joinToString(" "), null)
+        while (words.firstOrNull() in setOf("my", "the", "a", "an")) words.removeAt(0)
+        while (words.lastOrNull() in setOf("please", "thanks", "thank", "you")) words.removeAt(words.lastIndex)
+        return words.joinToString(" ").trim()
     }
 
     private fun playlistTokens(text: String): List<String> =
@@ -310,7 +367,6 @@ internal object DesktopVoiceCommandParser {
 
     private fun playlistKey(name: String): String = playlistTokens(name).joinToString(" ")
 
-    /** Token similarity: soft (typos) only for words of 4+ letters, short words must match exactly. */
     private fun tokenSimilarity(a: String, b: String): Double {
         if (a == b) return 1.0
         if (a.length < 4 || b.length < 4) return 0.0
@@ -328,18 +384,24 @@ internal object DesktopVoiceCommandParser {
     private fun editDistance(a: String, b: String): Int {
         if (a.isEmpty()) return b.length
         if (b.isEmpty()) return a.length
-        var prev = IntArray(b.length + 1) { it }
-        var cur = IntArray(b.length + 1)
+        var previous = IntArray(b.length + 1) { it }
+        var current = IntArray(b.length + 1)
         for (i in 1..a.length) {
-            cur[0] = i
+            current[0] = i
             for (j in 1..b.length) {
                 val cost = if (a[i - 1] == b[j - 1]) 0 else 1
-                cur[j] = minOf(cur[j - 1] + 1, prev[j] + 1, prev[j - 1] + cost)
+                current[j] = minOf(current[j - 1] + 1, previous[j] + 1, previous[j - 1] + cost)
             }
-            val tmp = prev
-            prev = cur
-            cur = tmp
+            val swap = previous
+            previous = current
+            current = swap
         }
-        return prev[b.length]
+        return previous[b.length]
     }
+
+    private fun List<String>.startsWith(prefix: List<String>): Boolean =
+        size >= prefix.size && subList(0, prefix.size) == prefix
+
+    private fun List<String>.endsWith(suffix: List<String>): Boolean =
+        size >= suffix.size && subList(size - suffix.size, size) == suffix
 }

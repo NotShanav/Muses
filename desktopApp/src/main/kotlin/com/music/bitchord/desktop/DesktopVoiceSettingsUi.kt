@@ -367,7 +367,11 @@ private fun VoiceProgramBlock(rowVisible: @Composable (String, String) -> Boolea
                         }
                     },
                 ) { Text("Choose file...") }
+                // VOICE V5 hook: keep the upstream release visible even when the download asset is verified.
                 OutlinedButton(onClick = DesktopVoiceInstall::downloadProgram) { Text("Download") }
+                TextButton(onClick = { DesktopExternalLinks.open(DesktopVoiceSidecarSpec.RELEASES_PAGE) }) {
+                    Text("Sherpa-ONNX ${DesktopVoiceSidecarSpec.VERSION} release notes")
+                }
             }
             message?.let { VoiceNote(it) }
             if (!DesktopVoiceSidecarSpec.VERIFIED) {
@@ -375,9 +379,6 @@ private fun VoiceProgramBlock(rowVisible: @Composable (String, String) -> Boolea
                     "The download link for this program has not been checked yet. If Download fails, get " +
                         "sherpa-onnx-offline from the project's releases page and use Choose file.",
                 )
-                TextButton(onClick = { DesktopExternalLinks.open(DesktopVoiceSidecarSpec.RELEASES_PAGE) }) {
-                    Text("Open the releases page")
-                }
             }
         }
     }

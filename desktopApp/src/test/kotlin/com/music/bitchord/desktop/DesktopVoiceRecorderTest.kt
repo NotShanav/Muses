@@ -14,9 +14,15 @@ class DesktopVoiceRecorderTest {
     private fun tone(samples: Int, value: Short = 3000): ShortArray = ShortArray(samples) { value }
 
     /** Fake microphone: [chunks] chunks of a constant sample, then end of line. */
-    private class FakeLine(var chunks: Int, private val sample: Short) : VoiceCaptureLine {
+    private class FakeLine(
+        var chunks: Int,
+        private val sample: Short,
+        override val sampleRate: Int = VoiceAudio.SAMPLE_RATE,
+    ) : VoiceCaptureLine {
         var reads = 0
+        var flushes = 0
         var closed = false
+        override fun flushBufferedAudio() { flushes++ }
 
         override fun read(buffer: ByteArray, length: Int): Int {
             if (chunks <= 0) return -1
@@ -52,12 +58,22 @@ class DesktopVoiceRecorderTest {
 
     @Test
     fun trimKeepsSpeechPlusPadding() {
-        // 1 s silence, 200 ms tone (aligned to 20 ms windows), 1 s silence.
+        // 1 s silence, 200 ms tone, 1 s silence. Keep 250 ms either side.
         val pcm = ShortArray(16_000) + tone(3_200) + ShortArray(16_000)
         val trimmed = VoiceAudio.trimSilence(pcm)
-        // 3,200 voiced samples plus 2,400 padding on each side.
-        assertEquals(8_000, trimmed.size)
-        assertEquals(3000.toShort(), trimmed[3_000])
+        assertEquals(11_200, trimmed.size)
+        assertEquals(3000.toShort(), trimmed[4_000])
+    }
+
+    @Test
+    fun adaptiveTrimRetainsQuietOpeningAudioBeforeLouderSpeech() {
+        val quietOpening = tone(1_600, 60)
+        val louderSpeech = tone(4_800, 1_000)
+        val pcm = ShortArray(8_000) + quietOpening + louderSpeech + ShortArray(8_000)
+        val trimmed = VoiceAudio.trimSilence(pcm)
+        // The 60-level opening is below the detected gate, but the pre-roll preserves it.
+        assertTrue(trimmed.size > quietOpening.size + louderSpeech.size)
+        assertTrue(trimmed.any { it.toInt() == 60 })
     }
 
     @Test
@@ -95,6 +111,46 @@ class DesktopVoiceRecorderTest {
     fun gainOfSilenceIsUnchanged() {
         val silent = ShortArray(5)
         assertTrue(VoiceAudio.normalizeGain(silent) === silent)
+    }
+
+
+    @Test
+    fun native48KhzAudioIsDownsampledTo16KhzWithoutLosingSpeechBand() {
+        val sourceRate = 48_000
+        val source = ShortArray(sourceRate / 10) { i ->
+            (kotlin.math.sin(2.0 * Math.PI * 1_000.0 * i / sourceRate) * 10_000).toInt().toShort()
+        }
+        val result = VoiceAudio.resampleTo16k(source, sourceRate)
+        assertEquals(1_600, result.size)
+        assertTrue(VoiceAudio.rms(result, 0, result.size) > 6_000.0)
+    }
+
+    @Test
+    fun recorderSignalsReadyAfterOpeningAndFlushesBeforeReading() {
+        val line = FakeLine(chunks = 5, sample = 3000)
+        var ready = false
+        val result = runBlocking {
+            DesktopVoiceRecorder { line }.record(
+                maxMillis = 500,
+                onCaptureReady = { ready = true },
+                shouldStop = { line.reads >= 3 },
+            )
+        }
+        assertTrue(result.isSuccess)
+        assertTrue(ready)
+        assertEquals(1, line.flushes)
+        assertEquals(3, line.reads)
+    }
+
+    @Test
+    fun recorderResamplesNative48KhzCapture() {
+        val line = FakeLine(chunks = 5, sample = 3000, sampleRate = 48_000)
+        val result = runBlocking {
+            DesktopVoiceRecorder { line }.record(maxMillis = 500, shouldStop = { false })
+        }
+        val pcm = assertNotNull(result.getOrNull())
+        assertEquals(8_000, pcm.size)
+        assertEquals(12_000.toShort(), pcm[0])
     }
 
     @Test

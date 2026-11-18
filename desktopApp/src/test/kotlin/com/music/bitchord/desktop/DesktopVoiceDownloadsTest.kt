@@ -59,12 +59,12 @@ class DesktopVoiceDownloadsTest {
     fun candidateUrlsFollowTheConstantsObject() {
         val urls = DesktopVoiceSidecarSpec.candidateUrls()
         assertEquals(
-            "https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.12.21/sherpa-onnx-v1.12.21-win-x64-shared.tar.bz2",
+            "https://github.com/k2-fsa/sherpa-onnx/releases/download/v2.0.1/sherpa-onnx-v2.0.1-win-x64-shared-MT-Release-no-tts.tar.bz2",
             urls.first(),
         )
         assertEquals(DesktopVoiceSidecarSpec.ASSET_SUFFIXES.size, urls.size)
-        assertEquals("https://x.test/v9.9.9/sherpa-onnx-v9.9.9-win-x64-shared.tar.bz2", DesktopVoiceSidecarSpec.candidateUrls("9.9.9", "https://x.test").first())
-        assertFalse(DesktopVoiceSidecarSpec.VERIFIED)
+        assertEquals("https://x.test/v9.9.9/sherpa-onnx-v9.9.9-win-x64-shared-MT-Release-no-tts.tar.bz2", DesktopVoiceSidecarSpec.candidateUrls("9.9.9", "https://x.test").first())
+        assertTrue(DesktopVoiceSidecarSpec.VERIFIED)
     }
 
     @Test

@@ -51,10 +51,12 @@ internal class VoiceActions(
     val setShuffle: (on: Boolean) -> Unit,
     /** True when the current song is now liked (or already was); false when nothing is playing. */
     val likeCurrent: () -> Boolean,
-    val addCurrentToPlaylist: (name: String) -> Boolean,
-    val playPlaylist: (name: String) -> Boolean,
+    val addCurrentToPlaylist: suspend (name: String) -> Boolean,
+    val playPlaylist: suspend (name: String) -> Boolean,
     val nowPlayingText: () -> String?,
     val playlistNames: () -> List<String>,
+    /** Temporarily lower only Muses playback while the microphone is recording. */
+    val duckPlayback: (enabled: Boolean) -> Unit = {},
 )
 
 /** Settings, read at the moment of use (V4 drives them from `DesktopVoiceSettings`). */
@@ -102,6 +104,8 @@ internal object VoiceSongMatcher {
 
     /** Below this the best hit is "unsure". */
     const val WEAK = 0.75
+    /** Near-equal results are ambiguous even when both match the words well. */
+    const val AMBIGUOUS_GAP = 0.08
 
     private val BRACKETS = Regex("""\([^)]*\)|\[[^]]*]""")
 
@@ -140,7 +144,14 @@ internal object VoiceSongMatcher {
 
     /** Best first. Equal scores keep the search order. */
     fun rank(candidates: List<VoiceSong>, wantTitle: String, wantArtist: String?): List<Pair<VoiceSong, Double>> =
-        candidates.map { it to score(it, wantTitle, wantArtist) }.sortedByDescending { it.second }
+        candidates.distinctBy { it.videoId }.map { it to score(it, wantTitle, wantArtist) }.sortedByDescending { it.second }
+
+    /** True if two different results are both plausible and too close to choose safely. */
+    fun isAmbiguous(ranked: List<Pair<VoiceSong, Double>>): Boolean {
+        val first = ranked.getOrNull(0) ?: return false
+        val second = ranked.getOrNull(1) ?: return false
+        return second.second >= WEAK && first.second - second.second < AMBIGUOUS_GAP
+    }
 
     private fun editDistance(a: String, b: String): Int {
         if (a.isEmpty()) return b.length
@@ -243,8 +254,11 @@ internal class DesktopVoiceController(
     private val scope: CoroutineScope,
     private val actions: VoiceActions,
     private val config: VoiceControllerConfig = DesktopVoiceRuntime.config(),
-    private val record: suspend (maxMillis: Int, shouldStop: () -> Boolean) -> Result<ShortArray> =
-        { ms, stop -> DesktopVoiceRecorder().record(ms, stop) },
+    private val record: suspend (
+        maxMillis: Int,
+        onCaptureReady: () -> Unit,
+        shouldStop: () -> Boolean,
+    ) -> Result<ShortArray> = { ms, ready, stop -> DesktopVoiceRecorder().record(ms, ready, stop) },
     private val recognizerFactory: (exe: Path, model: VoiceModelFiles) -> VoiceRecognizer =
         { exe, model -> SherpaSidecarRecognizer(exe, model) },
     private val findProgram: (chosen: String?) -> Path? = { chosen -> DesktopVoiceSidecar.findExisting(chosen = chosen) },
@@ -409,8 +423,10 @@ internal class DesktopVoiceController(
 
     // ── The session ──────────────────────────────────────────────────────────────────────────────
 
+    // VOICE V5 hook: capture readiness/ducking and intent/entity resolution remain separate stages.
     private suspend fun runSession() {
         var warmJob: Job? = null
+        var playbackDucked = false
         try {
             val program = withContext(Dispatchers.IO) { findProgram(config.sidecarExe()) }
             val model = withContext(Dispatchers.IO) { findModel(config.modelDir()) }
@@ -423,9 +439,15 @@ internal class DesktopVoiceController(
                 runCatching { warm(model.encoder) { isActive } }
             }
             warmJob = warming
-            withContext(Dispatchers.IO) { runCatching { tick() } }
 
-            val recorded = record(MAX_RECORD_MILLIS) { !held || cancelled }
+            // Duck before opening the microphone. The ready tick is emitted only after the capture
+            // line is open; the recorder then flushes that tick from its input buffer before speech
+            // samples are collected, so the user does not lose the first word.
+            runCatching { actions.duckPlayback(true) }
+            playbackDucked = true
+            val recorded = record(MAX_RECORD_MILLIS, { runCatching { tick() } }) { !held || cancelled }
+            runCatching { actions.duckPlayback(false) }
+            playbackDucked = false
             if (cancelled) return
             val pcm = recorded.getOrElse { return fail(codeOf(it)) }
 
@@ -442,6 +464,7 @@ internal class DesktopVoiceController(
         } catch (t: Throwable) {
             fail("unexpected")
         } finally {
+            if (playbackDucked) runCatching { actions.duckPlayback(false) }
             warmJob?.cancel()
         }
     }
@@ -452,6 +475,7 @@ internal class DesktopVoiceController(
 
     private suspend fun execute(command: VoiceCommand): Outcome = when (command) {
         is VoiceCommand.Play -> play(command)
+        is VoiceCommand.SearchAndPlay -> searchAndPlay(command)
         VoiceCommand.Pause -> Outcome("Paused").also { actions.pause() }
         VoiceCommand.Resume -> Outcome("Playing").also { actions.resume() }
         VoiceCommand.Next -> Outcome("Next").also { actions.next() }
@@ -466,12 +490,30 @@ internal class DesktopVoiceController(
             if (actions.addCurrentToPlaylist(command.name)) {
                 Outcome("Added to " + command.name)
             } else {
-                Outcome("Couldn't add that")
+                Outcome("Couldn't find an editable playlist called " + command.name)
             }
         is VoiceCommand.PlayPlaylist ->
-            if (actions.playPlaylist(command.name)) Outcome("Playing " + command.name) else Outcome("Couldn't play that")
+            if (actions.playPlaylist(command.name)) Outcome("Playing " + command.name)
+            else Outcome("Couldn't find a playable playlist called " + command.name)
         VoiceCommand.WhatsPlaying -> Outcome(actions.nowPlayingText() ?: "Nothing is playing")
         VoiceCommand.Unknown -> Outcome("Didn't catch that")
+    }
+
+    /** Broad discovery requests deliberately use search ranking; the default is to ask the owner. */
+    private suspend fun searchAndPlay(command: VoiceCommand.SearchAndPlay): Outcome {
+        val found = try {
+            actions.search(command.query)
+        } catch (c: CancellationException) {
+            throw c
+        } catch (_: Throwable) {
+            emptyList()
+        }
+        val choices = found.distinctBy { it.videoId }.take(3)
+        if (choices.isEmpty()) return Outcome("Couldn't find anything for that")
+        if (config.confirmBeforePlay()) return Outcome("Here are some options", choices = choices)
+        val selected = choices.first()
+        actions.playSong(selected)
+        return Outcome("Playing " + label(selected), undo = { actions.previous() })
     }
 
     private suspend fun play(command: VoiceCommand.Play): Outcome {
@@ -485,7 +527,9 @@ internal class DesktopVoiceController(
         }
         val ranked = VoiceSongMatcher.rank(found.take(MAX_CANDIDATES), command.title, command.artist)
         val best = ranked.firstOrNull() ?: return Outcome("Couldn't find that")
-        if (best.second < VoiceSongMatcher.WEAK && config.confirmBeforePlay()) {
+        if (config.confirmBeforePlay() &&
+            (best.second < VoiceSongMatcher.WEAK || VoiceSongMatcher.isAmbiguous(ranked))
+        ) {
             return Outcome("Did you mean...?", choices = ranked.take(3).map { it.first })
         }
         actions.playSong(best.first)

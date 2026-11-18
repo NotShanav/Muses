@@ -122,14 +122,16 @@ Honest limits:
 
 
 ### Voice commands (experimental, desktop)
-Under **Settings → Advanced → Experimental** you can turn on hands-free voice commands. It is **off by default**; nothing is loaded, recorded or downloaded until you switch it on. Hold the hotkey (default `Ctrl+Alt+Space`, changeable; it works while Muses is hidden in the tray), say a command, let go: *play bad guy by billie eilish*, *pause*, *resume*, *next*, *previous*, *volume up/down*, *shuffle on/off*, *like this*, *add this to <playlist>*, *play my <playlist>*, *what's playing*.
+Under **Settings → Advanced → Experimental** you can turn on hands-free voice commands. It is **off by default**; nothing is loaded, recorded or downloaded until you switch it on. Hold the hotkey (default `Ctrl+Alt+Space`, changeable; it works while Muses is hidden in the tray), speak naturally, and release to run the command.
 
-Recognition runs **offline on the CPU** with the NVIDIA Parakeet unified English 0.6B model (int8, about 660 MB, NVIDIA Open Model License) through the sherpa-onnx offline program. Neither is bundled with Muses: the settings page can find an existing copy, let you choose a folder or file, or download them when you press the button.
+The offline command interpreter recognises a broader range of ways to express the supported actions, rather than requiring one exact sentence. For example, playlist playback can be requested with *play my workout playlist*, *put on workout*, or *I'm in the mood for my workout playlist*. It supports playback, playlist, volume, shuffle, like, and now-playing intents; broad discovery requests can show matching tracks for confirmation. Playlist lookup includes local playlists and browsable playlists from the signed-in YouTube Music library. Track names can still be misheard or ambiguous, so Muses offers candidate tracks rather than silently choosing when confidence is low. A playlist that cannot be matched confidently is not played or edited; playlist disambiguation currently reports a failed match rather than offering playlist candidates.
 
-Privacy: the model is loaded only while a command is processed and then unloaded. Audio stays in memory (one short temporary WAV is overwritten and deleted straight afterwards), and no audio, transcript or recognised text is saved to a file, the settings or the log. The only network use is the one-time downloads you start yourself.
+Recognition runs **offline on the CPU** with the NVIDIA Parakeet unified English 0.6B model (int8, about 660 MB, NVIDIA Open Model License) through the sherpa-onnx offline program. Neither is bundled with Muses: the settings page can find an existing copy, let you choose a folder or file, or download them when you press the button. The recognizer process is started for a command and exits afterwards; no resident recognition service is kept running. Playback is ducked while the microphone is recording and restored afterwards.
+
+Privacy: audio stays in memory except for one short temporary WAV used by the recognizer; that file is overwritten and deleted in cleanup. No audio, transcript or recognised text is saved to history, settings or logs. Speech recognition and command interpretation run offline. Voice-triggered song search, streaming, and account-playlist browsing still use Muses' existing music-service connections when those actions require them; model and program downloads happen only when you start them.
 
 Honest limits:
-- English only; song, artist and playlist names can be misheard (the overlay offers the top matches when it is unsure).
-- About 1 GB of RAM is used while a command is processed; with under 1.8 GB free it refuses. The first command after a while can take a few seconds because the model is read from disk each time.
+- English speech recognition; song, artist and playlist names may be misheard, and the command interpreter does not understand arbitrary open-ended requests. It supports a defined set of music actions with varied natural phrasing.
+- About 1 GB of RAM is used while a command is processed; with under 1.8 GB free it refuses. The model is loaded per command and then unloaded, so a cold start can take a few seconds.
 - The global hotkey is Windows-only. Windows must allow desktop apps to use the microphone (Settings → Privacy → Microphone).
-- The recognizer download link could not be verified when this was written; "Choose file..." always works.
+- The Sherpa-ONNX Windows program is downloaded from the project's official v2.0.1 release; it is not bundled with Muses.

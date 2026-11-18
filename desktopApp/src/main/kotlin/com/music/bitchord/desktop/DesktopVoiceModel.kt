@@ -5,6 +5,7 @@ import java.nio.file.Files
 import java.nio.file.LinkOption
 import java.nio.file.Path
 import java.nio.file.Paths
+import java.util.ArrayDeque
 import java.security.MessageDigest
 
 /*
@@ -130,12 +131,17 @@ internal fun looksLikeOnnxAsrLayout(names: Set<String>): Boolean {
     return hasEncoder && hasVocab
 }
 
+// VOICE V5 hook: identify Handy's single-file GGUF export; it is incompatible with the Sherpa-ONNX runner.
+/** Handy's Parakeet Unified export is a single GGUF file, not the four-file sherpa-onnx layout. */
+internal fun looksLikeParakeetGgufLayout(names: Set<String>): Boolean =
+    names.any { it.lowercase().contains("parakeet") && it.lowercase().endsWith(".gguf") }
+
 internal object DesktopVoiceModelLocator {
 
     /** Directories visited per root before the walk gives up. */
     const val MAX_DIRS_PER_ROOT = 200
 
-    private val PREFERRED_HINTS = listOf("handsy", "parakeet", "sherpa")
+    private val PREFERRED_HINTS = listOf("handy", "parakeet", "sherpa")
 
     /**
      * Looks at one folder. [sizeTolerance] is a fraction of the expected size; tests pass
@@ -188,6 +194,15 @@ internal object DesktopVoiceModelLocator {
             )
         }
 
+        if (looksLikeParakeetGgufLayout(names)) {
+            return VoiceModelScan.WrongFormat(
+                dir,
+                "Found a Parakeet GGUF model (the format used by Handy). Muses' current recognizer uses " +
+                    "sherpa-onnx and needs encoder.int8.onnx, decoder.int8.onnx, joiner.int8.onnx and tokens.txt. " +
+                    "Download the sherpa-onnx version; this GGUF file cannot be run by the current recognizer.",
+            )
+        }
+
         val hasEncoderOnnx = names.any { it.endsWith(".onnx") && it.contains("encoder") }
         if (hasEncoderOnnx) {
             val missing = required.filter { it !in names }
@@ -206,7 +221,7 @@ internal object DesktopVoiceModelLocator {
     /**
      * Walks [roots] breadth first (folders whose name hints at the model first) down to [maxDepth],
      * never leaving a root through a link, skipping unreadable folders, at most
-     * [MAX_DIRS_PER_ROOT] folders per root. Results with a path containing "handsy", "parakeet" or
+     * [MAX_DIRS_PER_ROOT] folders per root. Results with a path containing "handy", "parakeet" or
      * "sherpa" come first, then complete models before wrong-format ones. Run it off the UI thread.
      */
     fun findExisting(

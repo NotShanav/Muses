@@ -54,6 +54,15 @@ class DesktopVoiceModelTest {
         assertFalse(looksLikeOnnxAsrLayout(emptySet()))
     }
 
+
+    @Test
+    fun handyParakeetGgufLayoutIsRecognised() {
+        assertTrue(looksLikeParakeetGgufLayout(setOf("parakeet-unified-en-0.6b-Q8_0.gguf")))
+        assertTrue(looksLikeParakeetGgufLayout(setOf("PARAKEET-UNIFIED-EN-0.6B-Q8_0.GGUF")))
+        assertFalse(looksLikeParakeetGgufLayout(sherpaNames.toSet()))
+        assertFalse(looksLikeParakeetGgufLayout(setOf("some-other-model.gguf")))
+    }
+
     // ---- check ----
 
     @Test
@@ -109,6 +118,15 @@ class DesktopVoiceModelTest {
         assertTrue(wrong.detail.contains("different format"))
     }
 
+
+    @Test
+    fun checkReportsHandyParakeetGgufAsWrongFormat() = withTemp { root ->
+        touch(root, "parakeet-unified-en-0.6b-Q8_0.gguf")
+        val wrong = DesktopVoiceModelLocator.check(root, sizeTolerance = anySize) as VoiceModelScan.WrongFormat
+        assertTrue(wrong.detail.contains("GGUF"))
+        assertTrue(wrong.detail.contains("sherpa-onnx"))
+    }
+
     @Test
     fun checkReportsOtherNamesAndMissingFilesAsWrongFormat() = withTemp { root ->
         val other = root.resolve("other")
@@ -136,12 +154,12 @@ class DesktopVoiceModelTest {
     fun findExistingPrefersHintedFoldersThenReadyOnes() = withTemp { root ->
         touch(root.resolve("zz").resolve("plain"), *sherpaNames.toTypedArray())
         touch(root.resolve("aa").resolve("old"), "encoder.onnx", "decoder_joint.onnx", "vocab.txt")
-        touch(root.resolve("apps").resolve("Handsy").resolve("models"), "encoder-model.onnx", "decoder_joint-model.onnx", "vocab.txt")
+        touch(root.resolve("apps").resolve("Handy").resolve("models"), "encoder-model.onnx", "decoder_joint-model.onnx", "vocab.txt")
         val found = DesktopVoiceModelLocator.findExisting(listOf(root), maxDepth = 5, sizeTolerance = anySize)
         assertEquals(3, found.size)
         // Hinted path first (it is a wrong-format copy), then the complete model, then the other wrong one.
         val first = found[0] as VoiceModelScan.WrongFormat
-        assertTrue(first.dir.toString().lowercase().contains("handsy"))
+        assertTrue(first.dir.toString().lowercase().contains("handy"))
         assertTrue(found[1] is VoiceModelScan.Ready)
         assertTrue(found[2] is VoiceModelScan.WrongFormat)
     }
