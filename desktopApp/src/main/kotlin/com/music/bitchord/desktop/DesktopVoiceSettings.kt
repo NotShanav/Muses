@@ -198,8 +198,8 @@ internal object VoiceSettingsLogic {
     ): VoiceModelStatus {
         val dirs = ArrayList<Path>(2)
         val chosenPath = chosen?.takeIf { it.isNotBlank() }?.let { runCatching { Paths.get(it) }.getOrNull() }
-        if (chosenPath != null) dirs += chosenPath
-        if (chosenPath == null || !sameFolder(chosenPath, managed)) dirs += managed
+        if (chosenPath != null) dirs.add(chosenPath)
+        if (chosenPath == null || !sameFolder(chosenPath, managed)) dirs.add(managed)
         var wrong: VoiceModelStatus? = null
         for (dir in dirs) {
             when (val scan = check(dir)) {

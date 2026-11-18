@@ -268,7 +268,7 @@ internal object DesktopVoiceModelLocator {
         fun add(base: String?, vararg more: String) {
             if (base.isNullOrBlank()) return
             try {
-                out += Paths.get(base, *more)
+                out.add(Paths.get(base, *more))
             } catch (e: Exception) {
                 // An unusable path simply is not a root.
             }
