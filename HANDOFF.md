@@ -887,3 +887,110 @@ Run the owner's GitHub Actions build (V2, V3 and V4 have never been compiled) an
 
 ### Exact next step
 Run the GitHub Actions Windows desktop build on this zip and fix any compile failures. Then, on the laptop, open Handy's model folder and check whether the selected model is `parakeet-unified-en-0.6b-Q8_0.gguf` (or another `.gguf`) or the four Sherpa files. Next test `Play my workout playlist`, `I'm in the mood for my workout playlist`, `add this to workout`, and `play bad guy by billie eilish`; check capture starts before the tick, first words are present, music ducks/restores, and no temp files remain. Finally compare one identical WAV in both apps before deciding whether to change the ASR backend.
+
+## VOICE FIX X1: reasoned results for add/play playlist, honest messages, safer library edits (NOT compiled)
+
+### Did
+- **Result type** `VoicePlaylistResult` (new `DesktopVoiceLibraryOps.kt`): `Done(playlist, source, song, alreadyThere, undo)`, `NotFound`, `NotEditable(name)`, `Ambiguous(options)`, `NothingPlaying`, `LibraryNotLoaded`, `ApiFailed(code)`. `VoiceActions.addCurrentToPlaylist` and `playPlaylist` now return it (no `Boolean` left for these two; `likeCurrent` and the others are unchanged).
+- **Controller** (`// VOICE FIX X1 hook`): `execute` calls one private `playlistOutcome(action, name)`; `VoicePlaylistMessages.forResult` maps each result to the overlay sentence ("X isn't one of your editable playlists", "Nothing is playing", "Your library is still loading. Try again in a moment", "Added <song> to <playlist>", "<song> is already in <playlist>", "That playlist is empty", ...). The old `playlistMiss` and the controller's own `nowPlayingText() == null` check are gone (the adapter decides).
+- **Adapter fix** (`DesktopApp.kt`, `// VOICE FIX X1 hook`, helpers just before the V3 hook, because local funs cannot see `addToPlaylist` earlier): `voiceListCandidates()` builds ONE candidate set for both actions: local lists (editable), shelf lists with a `browseId` tagged `USER` + editable when `DesktopSearchClient.userPlaylists` contains them, otherwise `SHELF` + playable only. `addCurrentToPlaylist` looks in that whole set but edits only an editable match; a playable-but-not-editable match returns `NotEditable(name)`.
+- **Library wait:** if there is no match AND the library is not `Success`, or is stale, or (signed in) the shelf is empty, the adapter calls the app's own `reloadLibrary()` (guarded: never while already `Loading`) and waits up to 4 s (`VoiceLibraryWait`, 100 ms polls); still not there gives `LibraryNotLoaded`, otherwise it resolves once more.
+- **Current song:** `selectedSong`, the same value the player sheet's own add and like buttons use (`val current = selectedSong` in the player sheet, `playlistTarget = it` for the dialog). `null` gives `NothingPlaying`.
+- **Safer edits:** `VoiceConfidence` (one place): `PLAY_MIN 0.72`, `PLAY_MARGIN 0.05`, `EDIT_MIN 0.85`, `EDIT_MARGIN 0.10`, wait 4 s, 3 options max. For an edit, a match under 0.85 is never acted on or named: the owner gets `Ambiguous([editable options])` or `NotFound`. A runner-up within the margin always gives `Ambiguous` (also when the winner is not editable and the rival is), never a silent pick. Two lists with the same title are shown as "Gym (on this computer)" / "Gym (your account)".
+- **Undo:** account playlist add keeps the `setVideoId` YouTube returns and Undo calls the existing `DesktopSearchClient.removeFromPlaylist(playlistId, listOf(setVideoId to videoId))`. **No Undo** for a local playlist (no existing remove action was found for local lists) and none when YouTube returns no `setVideoId` (Innertube says that can happen). Nothing new was written for removal.
+- Matching names: both sides go through the parser's existing `playlistScore` (it already drops emoji and punctuation, number words to digits) after a tiny `"&" -> " and "` step (`VoiceListResolver.spokenForm`; X2 replaces it). "work out" vs "Workout" scores 0.875, above `EDIT_MIN`.
+- **Privacy unchanged:** logs only `voice: playlist action=add|play result=<kind> source=local|user|shelf|none` (`VoiceListLog`, tested to contain no names). The names exist only in the result shown by the overlay. Nothing is stored.
+
+### Files
+New: `desktopApp/src/main/kotlin/com/music/bitchord/desktop/DesktopVoiceLibraryOps.kt`; `desktopApp/src/test/kotlin/com/music/bitchord/desktop/DesktopVoiceLibraryOpsTest.kt`.
+Edited: `DesktopVoiceController.kt` (VoiceActions two signatures, `execute`, new `playlistOutcome`, removed `playlistMiss`), `DesktopApp.kt` (one helper block, the two adapter lambdas replaced; found with grep, never opened whole), `DesktopVoiceControllerTest.kt` (fake returns results; 5 new tests), `HANDOFF.md`, `MUSES_VOICE_FIX_PLAN.md` copied into the repo root. No Gradle change, no dependency, `sharedUi` / `shared` / `app` untouched.
+
+### Decisions (no questions allowed)
+- **`MUSES_VOICE_NOTES.md` was NOT in the zip** (only `MUSES_VOICE_FIX_PLAN.md` was attached). I worked from the plan, the last three HANDOFF sections and the code. If the notes list a failure case not covered here, it is not done.
+- Refresh only when there is no match and the library may be out of date (not on every command), so our own edits (`libraryStale = true` after an add) do not make the next command wait 4 s.
+- `ApiFailed` codes are fixed words (`api`, `browse`, `empty`, `track`), never server text. "`empty`" is reused for a playlist with no songs; "`track`" for a non-YouTube track aimed at an account list (the player dialog's `canUseAccount` rule).
+- Already-in-list (local only) returns `Done(alreadyThere = true)`: honest message, nothing changed, no Undo.
+- Shelf lists are never edited by voice, even if they might be editable on YouTube: only the parser's own `userPlaylists` set counts, same as the player's dialog.
+- Contract change for X2: `VoiceActions.addCurrentToPlaylist/playPlaylist` return `VoicePlaylistResult`; `VoiceListResolver.resolve(query, candidates, forEdit, score)` is the seam where X2's matcher plugs in (inject its scorer).
+
+### Verified
+**NOT compiled. Tests NOT run** (no Kotlin compiler here). Hand-checked: brace/paren balance by script on every touched file; no duplicate top-level names (grep over the repo); no remaining `Boolean` in the two actions; `when` over the sealed results is exhaustive; smart casts only on local `val`s; no `+=` on `Path`; every new test hand-traced (scores for "work out", emoji, "&", margins, the fake clock).
+Compile watch-list if the build complains: callable references to local funs (`::voiceLibraryReady`, `::voiceRefreshLibrary`) in `resolveVoiceList`; the parenthesised lambda assigned to `val undo: (() -> Unit)?`; `when (val pick = ...)` with a `null ->` first branch then `toResult(pick)` (takes `VoiceListPick?`); `mapTo(HashSet()) { it.playlistId }`; `assertIs<T>()` return value used inline in tests; test functions written as `= runBlocking { ... }` ending in an assertion (must return Unit).
+
+### Deferred
+- Playlist choice by voice ("the first one") is X2 (`VoiceSession`); `Ambiguous` currently only names the options.
+- No Undo for local playlists or when YouTube omits the entry id (see above).
+- Live-device checks not done: adding to an owned playlist, a saved-only playlist (expect "isn't one of your editable playlists"), a cold library, mis-heard names.
+
+### Exact next step
+Build in GitHub Actions and fix compile errors from the watch-list, then run X2 on this zip (it starts with `heldout_phrases.tsv`).
+
+
+## VOICE FIX X2 PART A: normaliser, phonetic key, index, matcher, session, held-out phrases (NOT compiled)
+
+### Did
+Half of X2, the pure-logic half, so another agent can wire it (Part B instructions: `MUSES_VOICE_X2_PART_B_CODEX.md`, repo root).
+- **Held-out phrases FIRST (plan item 1):** `desktopApp/src/test/resources/voice/heldout_phrases.tsv`, 179 phrases (phrase, expected action, arguments): every command in several phrasings, filler, mishearings ("work out", "billy eilish essentials"), numbers ("volume to forty"), self-repair, follow-ups ("the first one", "no the other one", "add it to that one") and 23 phrases that must be `Unknown`. `DesktopVoiceEvalTest` runs the REAL parser over it and prints pass / MISS / WRONG-ACTION rates, asserts wrong-action <= 3 percent, and prints every failing phrase. Written before reading the parser's regexes in detail, then checked against them only to avoid impossible expectations.
+- **Normaliser + phonetic key + alias table** (`DesktopVoiceText.kt`): lower case, accents off, emoji and punctuation dropped, `&` is "and", number words to digits ("twenty one" is 21), ignore the/my/playlist/song, aliases as data (`VoiceAliasTable`: "work out"="workout", "billy"="billie", ...). `VoicePhonetic.key` is a compact Metaphone-style key in pure Kotlin (not Soundex); I ported it to Python and checked the keys used in tests (billie/billy = BL, eilish/ilish = ALX, night/knight = NT, workout = WRKT).
+- **Library index** (`DesktopVoiceIndex.kt`): `VoiceIndexBuilder.build` precomputes tokens, phonetic keys and compact keys once. `VoiceIndexHolder` rebuilds only when the version changes (`get(version){...}`) or when the content signature changes (`getFor(inputs)`); `current()` never builds; `clear()` for voice-off. Same kind+id appears once.
+- **Matcher** (`DesktopVoiceMatcher.kt`): token overlap + edit distance + phonetic similarity (capped at 0.93 so an equal text match wins), artist blended in for "X by Y" (30 percent), ranked candidates, margin over the runner-up. Execute only when top >= HIGH and margin >= MARGIN, otherwise up to 3 candidates, below LOW nothing. All numbers in `VoiceMatchThresholds` (LOW 0.62, play 0.80/0.08, edit 0.90/0.15, cross-kind 0.74/0.12). Type priors: explicit words win, "my X" leans playlist (+0.05), "X by Y" is a song, destination of add-to-playlist is searched as PLAYLIST only (caller passes `kinds`), a bare "play X" close to both a playlist and a song is `Candidates`.
+- **Session** (`DesktopVoiceSession.kt`): `VoiceSession` in memory, 2 minute TTL, injectable clock, last played / candidates / playlist, `choose`, `other`, `clear`; `toString` redacted everywhere. Plus pure helpers: `VoiceChoicePhrases` ("the first one", "number two", "no the other one", "that one"), `VoiceSelfRepair` (drop um/uh and conservative "like"; keep the text after actually / i mean / scratch that, and after no / wait / sorry only when a command or "the/my" follows, so "No Scrubs", "Sorry", "Wait for it", "Like a Prayer" survive), `VoiceNumbers.volumePercent`.
+- **Unit tests** (fake clock, fake index): `DesktopVoiceMatchingTest.kt`, `DesktopVoiceSessionTest.kt`. All values hand-traced.
+
+### Files
+New: `DesktopVoiceText.kt`, `DesktopVoiceIndex.kt`, `DesktopVoiceMatcher.kt`, `DesktopVoiceSession.kt` (main); `DesktopVoiceEvalTest.kt`, `DesktopVoiceMatchingTest.kt`, `DesktopVoiceSessionTest.kt`, `src/test/resources/voice/heldout_phrases.tsv`; `MUSES_VOICE_X2_PART_B_CODEX.md` (root). Existing files NOT touched in Part A (no parser, controller, adapter or X1 change yet), so no `// VOICE FIX X2 hook` marks exist yet.
+
+### Decisions (no questions allowed)
+- `MUSES_VOICE_NOTES.md` is still absent from the zip; worked from the plan only.
+- `Ambiguous(options)` as a `VoiceCommand` is NOT needed: ambiguity is an outcome (`VoiceMatchOutcome.Candidates`, X1's `VoicePlaylistResult.Ambiguous`). New commands for Part B: `SetVolume(percent)`, `Choose(number)` (1-based), `ChooseOther`, `AddToLastPlaylist`.
+- Playlists keep X1's `VoiceConfidence` (it has a margin and tests); `VoiceMatchThresholds` is used for songs and artists. Part B feeds `VoiceMatcher.scoreText` into the resolver's `score` seam as `maxOf(old, new)`.
+- The eval never lowers the bar for itself: `describe` falls back to the class name for objects; Part B must add `SetVolume` and `Choose` arguments to it.
+- Tough phrases on purpose: `turn on the lights`, `the first one hundred songs`, `no scrubs`, `play sorry by justin bieber`, `no shuffle`.
+
+### Verified
+**NOT compiled. Tests NOT run** (no Kotlin compiler here). Done: brace/paren balance by script on all 7 new files; no duplicate top-level names (grep); the phonetic keys by a Python port; every test value hand-traced (scores for "work out", "billy eilish", "bily eylish" = 0.93, wrong artist stays below HIGH, margins, session TTL boundary at exactly 120000 ms, self-repair cases).
+Compile watch-list: `VoiceSession.fresh<T>` over private `Stamped<T>`; smart cast on `hint.kind`; `assertIs` return values; `sumOf` on `Double`; `when` statements with `if` branches and no `else`.
+
+### Deferred (all of Part B)
+Parser front door (self-repair, choose, volume, add-to-last-playlist), new `VoiceCommand` cases, controller session wiring, `VoiceActions.setVolume` / `libraryIndex`, matcher in the controller's song search, index fill in `DesktopApp.kt`, resolver scorer change, controller tests, the eval iteration to <= 3 percent wrong-action. Exact steps: `MUSES_VOICE_X2_PART_B_CODEX.md`.
+
+### Exact next step
+Hand `Muses.zip` and `MUSES_VOICE_X2_PART_B_CODEX.md` to Codex: start at B0, then B1 (baseline eval), then B2 onward.
+
+## VOICE FIX X2 PART B
+
+<!-- // VOICE FIX X2 hook -->
+
+### Did
+- Wired the Part A normalizer and self-repair into the parser before its existing pipeline. Added `SetVolume(percent)`, `Choose(number)` (1-based), `ChooseOther`, and `AddToLastPlaylist`. The eval now compares arguments for the two data commands.
+- Added the controller-owned, two-minute `VoiceSession`; it remembers successful songs/playlists and the songs or playlists offered as candidates. Voice-off and controller disposal clear it. `DesktopApp` clears the in-memory library index on voice-off and exit.
+- Added absolute volume through the existing player volume state, and used the matcher for transient song search results and the loaded library index. The index is filled on `Dispatchers.Default` from playlists and the songs/credited artists already present in `LibraryPage`; command-time code only reads `current()`.
+- Changed the playlist resolver's default scorer to `maxOf(old parser score, VoiceMatcher.scoreText(...))`, preserving the former score as a floor. Kept `VoiceConfidence` and `VoiceMatchThresholds` separate.
+- Tightened `turn on` and `switch to` so unrelated text such as “turn on the lights” returns `Unknown`. Moved the existing “play some music” resume case ahead of the generic “some” search wrapper.
+- Added controller tests for absolute volume, choosing the first/other song, add-to-last-playlist, and clearing session on voice-off. The held-out phrase file was not edited and no existing expectation was changed.
+
+### Files
+- Edited only under `desktopApp`: `DesktopApp.kt`, `DesktopVoiceCommands.kt`, `DesktopVoiceController.kt`, `DesktopVoiceLibraryOps.kt`, `DesktopVoiceControllerTest.kt`, and `DesktopVoiceEvalTest.kt`.
+- Appended this handoff section as required. No Gradle file, dependency, version, `sharedUi`, `shared`, or `app` file was edited.
+
+### Decisions
+- `Ambiguous(options)` is an outcome, not a `VoiceCommand`; plan item 7 listed `Ambiguous(options)` as a command, but X1 already has `VoicePlaylistResult.Ambiguous` and Part A has `VoiceMatchOutcome.Candidates`.
+- For `turn on` / `switch to`, accept only when the rest begins with `my`, `the`, or `some` and includes `playlist`, `mix`, `mixtape`, `collection`, `music`, or `radio`, or when the request already has the playlist preference. Everything else is `Unknown`.
+- The new `VoiceActions.setVolume` and `VoiceActions.libraryIndex` parameters are last and defaulted. The resolver's default scorer is the maximum of the previous parser score and the matcher score. `VoiceSession` is also a last, defaulted controller constructor parameter for fake-clock tests.
+- `LibraryPage` already contains `likedSongs`, `librarySongs`, and song artist credits, so those available songs and credited artists are indexed along with playlists. No broader catalog is fetched or built during a command.
+- The stretch for choosing between same-title playlists by exact ID was skipped. Duplicate playlist choices can be spoken, but the existing adapter actions accept names, so an exact source/ID selection is not yet wired.
+
+### Verified
+- Baseline eval: **could not run**. The requested Gradle wrapper test process produced no output and stalled; it was stopped. Final eval: **could not run** for the same reason. Baseline and final metrics are unavailable.
+- **NOT compiled. Tests NOT run.**
+- Hand-reviewed the Part A files and all touched Kotlin files for imports, nullability, exhaustive `when` branches, duplicate command names, and private types in internal signatures. `VoiceCommand.execute` handles every case; the eval's `else` handles the new object commands and has explicit data-command branches. The protected held-out phrases remain unchanged.
+- The required disk-API grep over `DesktopVoiceText.kt`, `DesktopVoiceIndex.kt`, `DesktopVoiceMatcher.kt`, and `DesktopVoiceSession.kt` found no `File`, `Files.`, `readText`, or `writeText` references.
+
+### Deferred
+- Run the held-out eval and iterate until wrong-action is at most 3%, or record every remaining failure. No baseline/final rate can be claimed without that run.
+- Compile and run `./gradlew :desktopApp:test --tests '*Voice*'` in an environment with a working JDK/Gradle wrapper; address compiler/test failures.
+- Playlist ambiguity selection by exact ID/source (Part B8).
+- The index covers loaded liked/library songs and their credited artists, not the full YouTube catalog or every artist/album shelf item.
+
+### Exact next step
+Run `./gradlew :desktopApp:test --tests '*Voice*'` with a working JDK, then inspect all `[WRONG]` lines before `[MISS ]` lines from `DesktopVoiceEvalTest`; fix code and rerun until wrong-action is at most 3%. Check the duplicate-playlist choice path before claiming Part B8.

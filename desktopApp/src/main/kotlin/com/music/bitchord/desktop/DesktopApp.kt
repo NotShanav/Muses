@@ -2814,6 +2814,215 @@ fun BitChordDesktopApp() {
         }
     }
 
+    // VOICE FIX X1 hook: library actions by voice. One candidate set for BOTH "play playlist" and
+    // "add to playlist" (local lists, the account's own lists, every other shelf list with a browse
+    // id), tagged with whether an edit can be aimed at it. The decisions (match, margin, editable or
+    // not, messages) live in DesktopVoiceLibraryOps.kt and are unit-tested; this block only gathers
+    // live state and performs the existing edit. Nothing here logs a name: only result kinds and
+    // source codes (local, user, shelf).
+    fun voiceListCandidates(): List<VoiceListCandidate> {
+        val ownedIds = currentVoiceUserPlaylists().mapTo(HashSet()) { it.playlistId }
+        val local = currentVoiceLocalPlaylists().map {
+            VoiceListCandidate(it.title, VoiceListSource.LOCAL, editable = true, id = it.id)
+        }
+        val shelf = currentVoicePlaylistShelf().mapNotNull { item ->
+            val browseId = item.browseId ?: return@mapNotNull null
+            val owned = browseId.removePrefix("VL") in ownedIds
+            VoiceListCandidate(
+                item.title,
+                if (owned) VoiceListSource.USER else VoiceListSource.SHELF,
+                editable = owned,
+                id = browseId,
+            )
+        }
+        return local + shelf
+    }
+
+    // VOICE FIX X2 hook: build the memory-only library index when playlists/library state changes.
+    val voiceIndexHolder = remember { VoiceIndexHolder() }
+    val voiceEnabled by DesktopVoiceSettings.enabled.collectAsState()
+    LaunchedEffect(libraryState, playlists, voiceEnabled) {
+        if (!voiceEnabled) {
+            voiceIndexHolder.clear()
+            return@LaunchedEffect
+        }
+        val inputs = voiceListCandidates().map { candidate ->
+            VoiceIndexInput(
+                kind = VoiceEntityKind.PLAYLIST,
+                title = candidate.title,
+                id = candidate.id,
+                source = candidate.source,
+                editable = candidate.editable,
+            )
+        }.toMutableList()
+        // VOICE FIX X2 hook: liked/library tracks and their credited artists are already in LibraryPage.
+        val page = (libraryState as? UiState.Success)?.data
+        val librarySongs = (page?.likedSongs.orEmpty() + page?.librarySongs.orEmpty()).distinctBy { it.videoId }
+        inputs += librarySongs.map { song ->
+            VoiceIndexInput(VoiceEntityKind.SONG, song.title, song.videoId, artist = song.artist)
+        }
+        val libraryArtists = librarySongs.flatMap { song ->
+            if (song.artists.isEmpty()) listOf(song.artist to (song.artistId ?: ""))
+            else song.artists.map { artist -> artist.name to (artist.browseId ?: "") }
+        }.distinctBy { (name, id) -> id.ifBlank { name } }
+        inputs += libraryArtists.map { (name, id) ->
+            VoiceIndexInput(VoiceEntityKind.ARTIST, name, id)
+        }
+        withContext(Dispatchers.Default) { voiceIndexHolder.getFor(inputs) }
+    }
+    LaunchedEffect(voiceEnabled) {
+        if (!voiceEnabled) voiceIndexHolder.clear()
+    }
+
+    fun voiceLibraryReady() = libraryState is UiState.Success && !libraryStale
+
+    // The app's own reload (the same one the Library tab uses after an edit). A load already under
+    // way is left alone.
+    fun voiceRefreshLibrary() {
+        if (libraryState is UiState.Loading) return
+        libraryStale = false
+        reloadLibrary()
+    }
+
+    /** Null means the library did not arrive in time (-> LibraryNotLoaded). */
+    suspend fun resolveVoiceList(name: String, forEdit: Boolean): VoiceListPick? {
+        val first = VoiceListResolver.resolve(name, voiceListCandidates(), forEdit)
+        if (first !is VoiceListPick.None) return first
+        // Not found. If the library is missing, stale, or suspiciously empty for a signed-in
+        // account, refresh it and look once more before saying so.
+        val maybeOutOfDate = !voiceLibraryReady() ||
+            (youtubeSignedIn && currentVoicePlaylistShelf().isEmpty())
+        if (!maybeOutOfDate) return first
+        voiceRefreshLibrary()
+        val arrived = VoiceLibraryWait.await(isReady = ::voiceLibraryReady, refresh = ::voiceRefreshLibrary)
+        if (!arrived) return null
+        return VoiceListResolver.resolve(name, voiceListCandidates(), forEdit)
+    }
+
+    suspend fun voiceAddCurrent(name: String): VoicePlaylistResult {
+        // The same song the player's own "add to playlist" button uses: the selected song.
+        val current = selectedSong
+        var source: VoiceListSource? = null
+        val result: VoicePlaylistResult = if (current == null) {
+            VoicePlaylistResult.NothingPlaying
+        } else {
+            when (val pick = resolveVoiceList(name, forEdit = true)) {
+                null -> VoicePlaylistResult.LibraryNotLoaded
+                is VoiceListPick.Match -> {
+                    val target = pick.candidate
+                    source = target.source
+                    when (target.source) {
+                        VoiceListSource.LOCAL -> {
+                            val local = currentVoiceLocalPlaylists().firstOrNull { it.id == target.id }
+                            when {
+                                local == null -> VoicePlaylistResult.NotFound
+                                local.songs.any { it.videoId == current.videoId } ->
+                                    VoicePlaylistResult.Done(local.title, target.source, current.title, alreadyThere = true)
+                                else -> {
+                                    playlistTarget = current
+                                    addToPlaylist(local)
+                                    // No existing removal for a local playlist, so no Undo here.
+                                    VoicePlaylistResult.Done(local.title, target.source, current.title)
+                                }
+                            }
+                        }
+                        VoiceListSource.USER -> {
+                            if (!DesktopSearchClient.isVideoId(current.videoId)) {
+                                VoicePlaylistResult.ApiFailed(VoicePlaylistMessages.CODE_TRACK)
+                            } else {
+                                val playlistId = target.id.removePrefix("VL")
+                                val added = withContext(Dispatchers.IO) {
+                                    DesktopSearchClient.addToPlaylist(playlistId, listOf(current.videoId))
+                                }
+                                if (added.isFailure) {
+                                    VoicePlaylistResult.ApiFailed(VoicePlaylistMessages.CODE_API)
+                                } else {
+                                    libraryStale = true
+                                    // The entry id YouTube minted is what its own "remove" needs; when it
+                                    // did not come back there is no safe Undo.
+                                    val setVideoId = added.getOrNull()?.get(current.videoId)
+                                    val undo: (() -> Unit)? = if (setVideoId == null) {
+                                        null
+                                    } else {
+                                        ({
+                                            scope.launch {
+                                                DesktopSearchClient.removeFromPlaylist(
+                                                    playlistId,
+                                                    listOf(setVideoId to current.videoId),
+                                                ).onSuccess { libraryStale = true }
+                                            }
+                                            Unit
+                                        })
+                                    }
+                                    VoicePlaylistResult.Done(target.title, target.source, current.title, undo = undo)
+                                }
+                            }
+                        }
+                        VoiceListSource.SHELF -> VoicePlaylistResult.NotEditable(target.title)
+                    }
+                }
+                is VoiceListPick.NotEditable -> {
+                    source = pick.candidate.source
+                    VoicePlaylistResult.NotEditable(pick.candidate.title)
+                }
+                else -> VoiceListResolver.toResult(pick) ?: VoicePlaylistResult.NotFound
+            }
+        }
+        DesktopTrackLog.log(VoiceListLog.line(VoiceListAction.ADD, result, source))
+        return result
+    }
+
+    suspend fun voicePlayPlaylist(name: String): VoicePlaylistResult {
+        var source: VoiceListSource? = null
+        val result: VoicePlaylistResult = when (val pick = resolveVoiceList(name, forEdit = false)) {
+            null -> VoicePlaylistResult.LibraryNotLoaded
+            is VoiceListPick.Match -> {
+                val target = pick.candidate
+                source = target.source
+                if (target.source == VoiceListSource.LOCAL) {
+                    val local = currentVoiceLocalPlaylists().firstOrNull { it.id == target.id }
+                    when {
+                        local == null -> VoicePlaylistResult.NotFound
+                        local.songs.isEmpty() -> VoicePlaylistResult.ApiFailed(VoicePlaylistMessages.CODE_EMPTY)
+                        else -> {
+                            playSongs(local.songs)
+                            VoicePlaylistResult.Done(local.title, target.source)
+                        }
+                    }
+                } else {
+                    // Account playlists play through the existing browse and continuation calls.
+                    val firstPage = withContext(Dispatchers.IO) { DesktopSearchClient.browse(target.id) }.getOrNull()
+                    if (firstPage == null) {
+                        VoicePlaylistResult.ApiFailed(VoicePlaylistMessages.CODE_BROWSE)
+                    } else {
+                        val songs = firstPage.songs.toMutableList()
+                        var continuation = firstPage.continuation
+                        var pageCount = 0
+                        val seenContinuations = HashSet<String>()
+                        while (continuation != null && pageCount < 30 && seenContinuations.add(continuation)) {
+                            val nextPage = withContext(Dispatchers.IO) {
+                                DesktopSearchClient.moreCollectionSongs(continuation)
+                            }.getOrNull() ?: break
+                            songs.addAll(nextPage.first)
+                            continuation = nextPage.second
+                            pageCount++
+                        }
+                        if (songs.isEmpty()) {
+                            VoicePlaylistResult.ApiFailed(VoicePlaylistMessages.CODE_EMPTY)
+                        } else {
+                            playSongs(songs.distinctBy(Song::videoId))
+                            VoicePlaylistResult.Done(target.title, target.source)
+                        }
+                    }
+                }
+            }
+            is VoiceListPick.NotEditable -> VoicePlaylistResult.NotFound // never produced for playback
+            else -> VoiceListResolver.toResult(pick) ?: VoicePlaylistResult.NotFound
+        }
+        DesktopTrackLog.log(VoiceListLog.line(VoiceListAction.PLAY, result, source))
+        return result
+    }
+
     // VOICE V3 hook: hands-free voice commands (experimental, off by default; nothing runs or is
     // registered until the feature is switched on). One small adapter from the controller's action
     // lambdas to the functions above. The controller runs on this composition's scope (the UI
@@ -2841,6 +3050,8 @@ fun BitChordDesktopApp() {
                 volumeStep = { delta ->
                     DesktopPlayerHost.onVolumeChange((DesktopPlayerHost.volumeLevel.value + delta).coerceIn(0f, 1f))
                 },
+                // VOICE FIX X2 hook: set absolute volume through the same player state as volumeStep.
+                setVolume = { value -> DesktopPlayerHost.onVolumeChange(value.coerceIn(0f, 1f)) },
                 setShuffle = { on -> setShuffle(on) },
                 likeCurrent = {
                     val current = selectedSong
@@ -2851,87 +3062,9 @@ fun BitChordDesktopApp() {
                         true
                     }
                 },
-                // VOICE V5 hook: resolve both local and signed-in account playlists at action time.
-                addCurrentToPlaylist = { name ->
-                    val current = selectedSong
-                    val localItems = currentVoiceLocalPlaylists()
-                    val accountItems = currentVoiceUserPlaylists()
-                    val canonicalName = DesktopVoiceCommandParser.matchPlaylist(
-                        name, localItems.map { it.title } + accountItems.map { it.title },
-                    )
-                    if (canonicalName == null || current == null) {
-                        false
-                    } else {
-                        val localTarget = localItems.firstOrNull { it.title.equals(canonicalName, ignoreCase = true) }
-                        val accountTarget = accountItems.firstOrNull { it.title.equals(canonicalName, ignoreCase = true) }
-                        when {
-                            localTarget != null -> {
-                                playlistTarget = current
-                                addToPlaylist(localTarget)
-                                true
-                            }
-                            accountTarget != null -> {
-                                val added = withContext(Dispatchers.IO) {
-                                    DesktopSearchClient.addToPlaylist(accountTarget.playlistId, listOf(current.videoId)).isSuccess
-                                }
-                                if (added) libraryStale = true
-                                added
-                            }
-                            else -> false
-                        }
-                    }
-                },
-                // VOICE V5 hook: local playlists play directly; account playlists use the existing browse API.
-                playPlaylist = { name ->
-                    val localItems = currentVoiceLocalPlaylists()
-                    val shelfItems = currentVoicePlaylistShelf().filter { it.browseId != null }
-                    val canonicalName = DesktopVoiceCommandParser.matchPlaylist(
-                        name, localItems.map { it.title } + shelfItems.map { it.title },
-                    )
-                    if (canonicalName == null) {
-                        false
-                    } else {
-                        val localTarget = localItems.firstOrNull { it.title.equals(canonicalName, ignoreCase = true) }
-                        if (localTarget != null) {
-                            if (localTarget.songs.isEmpty()) false else {
-                                playSongs(localTarget.songs)
-                                true
-                            }
-                        } else {
-                            val accountTarget = shelfItems.firstOrNull {
-                                it.title.equals(canonicalName, ignoreCase = true)
-                            }
-                            val browseId = accountTarget?.browseId
-                            if (browseId == null) {
-                                false
-                            } else {
-                                val firstPage = withContext(Dispatchers.IO) {
-                                    DesktopSearchClient.browse(browseId)
-                                }.getOrNull()
-                                if (firstPage == null) {
-                                    false
-                                } else {
-                                    val songs = firstPage.songs.toMutableList()
-                                    var continuation = firstPage.continuation
-                                    var pageCount = 0
-                                    val seenContinuations = HashSet<String>()
-                                    while (continuation != null && pageCount < 30 && seenContinuations.add(continuation)) {
-                                        val nextPage = withContext(Dispatchers.IO) {
-                                            DesktopSearchClient.moreCollectionSongs(continuation)
-                                        }.getOrNull() ?: break
-                                        songs.addAll(nextPage.first)
-                                        continuation = nextPage.second
-                                        pageCount++
-                                    }
-                                    if (songs.isEmpty()) false else {
-                                        playSongs(songs.distinctBy(Song::videoId))
-                                        true
-                                    }
-                                }
-                            }
-                        }
-                    }
-                },
+                // VOICE FIX X1 hook: both actions answer with a VoicePlaylistResult (see the helpers above).
+                addCurrentToPlaylist = { name -> voiceAddCurrent(name) },
+                playPlaylist = { name -> voicePlayPlaylist(name) },
                 nowPlayingText = { selectedSong?.let { it.title + " - " + it.artist } },
                 // VOICE V5 hook: the parser sees a live combined catalogue, not a stale remembered snapshot.
                 playlistNames = {
@@ -2939,6 +3072,8 @@ fun BitChordDesktopApp() {
                         .distinctBy { it.trim().lowercase() }
                 },
                 duckPlayback = { enabled -> voiceDucked = enabled },
+                // VOICE FIX X2 hook: command-time matching reads only the already-built memory index.
+                libraryIndex = { voiceIndexHolder.current() },
             ),
         )
     }
@@ -2947,6 +3082,8 @@ fun BitChordDesktopApp() {
         voiceController.start()
         onDispose {
             voiceController.stop()
+            // VOICE FIX X2 hook: drop the in-memory library index on window/app exit.
+            voiceIndexHolder.clear()
             if (DesktopVoiceRuntime.controller.value === voiceController) DesktopVoiceRuntime.controller.value = null
         }
     }

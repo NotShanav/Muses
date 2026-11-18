@@ -51,12 +51,16 @@ internal class VoiceActions(
     val setShuffle: (on: Boolean) -> Unit,
     /** True when the current song is now liked (or already was); false when nothing is playing. */
     val likeCurrent: () -> Boolean,
-    val addCurrentToPlaylist: suspend (name: String) -> Boolean,
-    val playPlaylist: suspend (name: String) -> Boolean,
+    // VOICE FIX X1 hook: reasoned results instead of Boolean (see DesktopVoiceLibraryOps.kt).
+    val addCurrentToPlaylist: suspend (name: String) -> VoicePlaylistResult,
+    val playPlaylist: suspend (name: String) -> VoicePlaylistResult,
     val nowPlayingText: () -> String?,
     val playlistNames: () -> List<String>,
     /** Temporarily lower only Muses playback while the microphone is recording. */
     val duckPlayback: (enabled: Boolean) -> Unit = {},
+    // VOICE FIX X2 hook: appended defaulted actions preserve existing fakes and call sites.
+    val setVolume: (Float) -> Unit = {},
+    val libraryIndex: () -> VoiceLibraryIndex = { VoiceLibraryIndex.EMPTY },
 )
 
 /** Settings, read at the moment of use (V4 drives them from `DesktopVoiceSettings`). */
@@ -271,12 +275,15 @@ internal class DesktopVoiceController(
     private val errorMillis: Long = ERROR_MILLIS,
     private val watchdogMillis: Long = WATCHDOG_MILLIS,
     private val escPollMillis: Long = ESC_POLL_MILLIS,
+    // VOICE FIX X2 hook: transient follow-up context is owned and cleared by this controller.
+    private val session: VoiceSession = VoiceSession(),
 ) {
 
     private class Outcome(
         val message: String,
         val undo: (() -> Unit)? = null,
         val choices: List<VoiceSong> = emptyList(),
+        val candidateRefs: List<VoiceRef>? = null,
     )
 
     private val _state = MutableStateFlow<DesktopVoiceState>(DesktopVoiceState.Idle)
@@ -315,6 +322,8 @@ internal class DesktopVoiceController(
     /** Applies the current settings: registers, re-registers on a new combination, or unregisters. */
     fun refresh() {
         if (!config.enabled()) {
+            // VOICE FIX X2 hook: voice-off clears all in-memory references.
+            session.clear()
             stopHotkey()
             if (_state.value !is DesktopVoiceState.Idle) forceIdle("disabled")
             return
@@ -336,6 +345,8 @@ internal class DesktopVoiceController(
 
     /** Unregisters the hotkey and abandons whatever is running. */
     fun stop() {
+        // VOICE FIX X2 hook: disposal/exit clears all in-memory references.
+        session.clear()
         stopHotkey()
         forceIdle("stopped")
     }
@@ -416,7 +427,10 @@ internal class DesktopVoiceController(
         val picked = song ?: return
         job?.cancel()
         job = scope.launch {
-            runCatching { actions.playSong(picked) }
+            // VOICE FIX X2 hook: UI-selected songs are remembered just like voice-selected songs.
+            runCatching { actions.playSong(picked) }.onSuccess {
+                session.rememberPlayed(VoiceRef(VoiceEntityKind.SONG, picked.title, picked.videoId))
+            }
             publishDone("", Outcome("Playing " + label(picked), undo = { actions.previous() }))
         }
     }
@@ -482,31 +496,73 @@ internal class DesktopVoiceController(
         VoiceCommand.Previous -> Outcome("Previous").also { actions.previous() }
         VoiceCommand.VolumeUp -> Outcome("Volume up").also { actions.volumeStep(VOLUME_STEP) }
         VoiceCommand.VolumeDown -> Outcome("Volume down").also { actions.volumeStep(-VOLUME_STEP) }
+        // VOICE FIX X2 hook: absolute volume and choice follow-ups are kept in this exhaustive dispatch.
+        is VoiceCommand.SetVolume -> Outcome("Volume ${command.percent} percent").also {
+            actions.setVolume((command.percent / 100f).coerceIn(0f, 1f))
+        }
+        is VoiceCommand.Choose -> chooseCandidate(command.number - 1)
+        VoiceCommand.ChooseOther -> chooseOther()
+        VoiceCommand.AddToLastPlaylist -> {
+            val last = session.lastPlaylist()
+            if (last == null) Outcome("I don't know which playlist you mean")
+            else playlistOutcome(VoiceListAction.ADD, last.label)
+        }
         is VoiceCommand.Shuffle -> Outcome(if (command.on) "Shuffle on" else "Shuffle off")
             .also { actions.setShuffle(command.on) }
         VoiceCommand.Like ->
             if (actions.likeCurrent()) Outcome("Liked") else Outcome("Nothing is playing")
-        is VoiceCommand.AddToPlaylist ->
-            when {
-                actions.nowPlayingText() == null -> Outcome("Nothing is playing")
-                actions.addCurrentToPlaylist(command.name) -> Outcome("Added to " + command.name)
-                else -> playlistMiss(command.name, "an editable")
-            }
-        is VoiceCommand.PlayPlaylist ->
-            if (actions.playPlaylist(command.name)) Outcome("Playing " + command.name)
-            else playlistMiss(command.name, "a playable")
+        // VOICE FIX X1 hook: the adapter says exactly why a library action did or did not happen.
+        is VoiceCommand.AddToPlaylist -> playlistOutcome(VoiceListAction.ADD, command.name)
+        is VoiceCommand.PlayPlaylist -> playlistOutcome(VoiceListAction.PLAY, command.name)
         VoiceCommand.WhatsPlaying -> Outcome(actions.nowPlayingText() ?: "Nothing is playing")
         VoiceCommand.Unknown -> Outcome("Didn't catch that")
     }
 
-    /** A failed playlist command says why: several close matches are listed, never silently picked. */
-    private fun playlistMiss(name: String, kind: String): Outcome {
-        val tied = DesktopVoiceCommandParser.ambiguousPlaylists(name, safePlaylistNames())
-        return if (tied.size > 1) {
-            Outcome("More than one playlist matches: " + tied.take(3).joinToString(", ") + ". Say the full name.")
-        } else {
-            Outcome("Couldn't find $kind playlist called $name")
+    // VOICE FIX X1 hook: maps a [VoicePlaylistResult] to the overlay sentence. The adapter logs the
+    // result kind and source code; this function never logs or stores a name.
+    private suspend fun playlistOutcome(action: VoiceListAction, name: String): Outcome {
+        // VOICE FIX X2 hook: use a ready playlist index before asking the adapter to resolve live state.
+        var resolvedName = name
+        val index = runCatching { actions.libraryIndex() }.getOrDefault(VoiceLibraryIndex.EMPTY)
+        if (index.ofKinds(setOf(VoiceEntityKind.PLAYLIST)).isNotEmpty()) {
+            val mode = if (action == VoiceListAction.ADD) VoiceMatchMode.EDIT else VoiceMatchMode.PLAY
+            when (val match = VoiceMatcher.decide(VoiceTerms.of(name), index, mode, setOf(VoiceEntityKind.PLAYLIST))) {
+                is VoiceMatchOutcome.Confident -> resolvedName = match.match.entry.input.title
+                is VoiceMatchOutcome.Candidates -> {
+                    val candidates = match.options.distinctBy { it.entry.input.id }.take(3).mapNotNull { option ->
+                        val input = option.entry.input
+                        input.source?.let { source -> VoiceListCandidate(input.title, source, input.editable, input.id) }
+                    }
+                    val options = VoiceListResolver.labels(candidates)
+                    val refs = candidates.map { VoiceRef(VoiceEntityKind.PLAYLIST, it.title, it.id) }
+                    session.rememberCandidates(refs)
+                    return Outcome(VoicePlaylistMessages.forResult(action, VoicePlaylistResult.Ambiguous(options), name))
+                }
+                VoiceMatchOutcome.NoMatch -> Unit
+            }
         }
+        val result = try {
+            if (action == VoiceListAction.ADD) actions.addCurrentToPlaylist(resolvedName) else actions.playPlaylist(resolvedName)
+        } catch (c: CancellationException) {
+            throw c
+        } catch (_: Throwable) {
+            VoicePlaylistResult.ApiFailed(VoicePlaylistMessages.CODE_API)
+        }
+        when (result) {
+            is VoicePlaylistResult.Done -> {
+                val ref = VoiceRef(VoiceEntityKind.PLAYLIST, result.playlist, "")
+                session.rememberPlaylist(ref)
+                if (action == VoiceListAction.PLAY) session.rememberPlayed(ref)
+            }
+            is VoicePlaylistResult.Ambiguous -> session.rememberCandidates(result.options.map {
+                VoiceRef(VoiceEntityKind.PLAYLIST, it, "")
+            })
+            else -> Unit
+        }
+        return Outcome(
+            VoicePlaylistMessages.forResult(action, result, name),
+            undo = (result as? VoicePlaylistResult.Done)?.undo,
+        )
     }
 
     /** Broad discovery requests deliberately use search ranking; the default is to ask the owner. */
@@ -518,16 +574,71 @@ internal class DesktopVoiceController(
         } catch (_: Throwable) {
             emptyList()
         }
-        val choices = found.distinctBy { it.videoId }.take(3)
+        val index = VoiceIndexBuilder.build(0L, found.distinctBy { it.videoId }.map {
+            VoiceIndexInput(VoiceEntityKind.SONG, it.title, it.videoId, artist = it.artist)
+        })
+        val outcome = VoiceMatcher.decide(VoiceTerms.of(command.query), index, VoiceMatchMode.PLAY, setOf(VoiceEntityKind.SONG))
+        val choices = when (outcome) {
+            VoiceMatchOutcome.NoMatch -> return Outcome("Couldn't find anything for that")
+            is VoiceMatchOutcome.Confident -> listOfNotNull(found.firstOrNull { it.videoId == outcome.match.entry.input.id })
+            is VoiceMatchOutcome.Candidates -> outcome.options.mapNotNull { match -> found.firstOrNull { it.videoId == match.entry.input.id } }.take(3)
+        }
         if (choices.isEmpty()) return Outcome("Couldn't find anything for that")
-        if (config.confirmBeforePlay()) return Outcome("Here are some options", choices = choices)
+        if (config.confirmBeforePlay() || outcome is VoiceMatchOutcome.Candidates) {
+            return Outcome("Here are some options", choices = choices)
+        }
         val selected = choices.first()
         actions.playSong(selected)
+        session.rememberPlayed(VoiceRef(VoiceEntityKind.SONG, selected.title, selected.videoId))
         return Outcome("Playing " + label(selected), undo = { actions.previous() })
     }
 
     private suspend fun play(command: VoiceCommand.Play): Outcome {
-        val query = listOfNotNull(command.title, command.artist).joinToString(" ")
+        // VOICE FIX X2 hook: canonicalise against the in-memory index before search when available.
+        var title = command.title
+        var requestedArtist = command.artist
+        var artistOnly = false
+        val library = runCatching { actions.libraryIndex() }.getOrDefault(VoiceLibraryIndex.EMPTY)
+        val kinds = setOf(VoiceEntityKind.PLAYLIST, VoiceEntityKind.SONG, VoiceEntityKind.ARTIST)
+        if (library.entries.isNotEmpty()) {
+            val words = VoiceText.words(listOfNotNull(command.title, command.artist).joinToString(" "))
+            val hint = VoiceTypeHint.from(words, command.artist != null)
+            when (val matched = VoiceMatcher.decide(
+                VoiceTerms.of(command.title), library, VoiceMatchMode.PLAY, kinds, hint,
+                command.artist?.let { VoiceTerms.of(it) },
+            )) {
+                is VoiceMatchOutcome.Confident -> {
+                    val input = matched.match.entry.input
+                    if (input.kind == VoiceEntityKind.PLAYLIST) {
+                        return playlistOutcome(VoiceListAction.PLAY, input.title)
+                    } else if (input.kind == VoiceEntityKind.ARTIST) {
+                        requestedArtist = input.title
+                        artistOnly = true
+                    } else {
+                        title = input.title
+                    }
+                }
+                is VoiceMatchOutcome.Candidates -> {
+                    val candidates = matched.options.take(VoiceMatchThresholds.MAX_OPTIONS)
+                    val refs = candidates.map { option ->
+                        val input = option.entry.input
+                        VoiceRef(input.kind, input.title, input.id)
+                    }
+                    val labels = candidates.map { option ->
+                        val input = option.entry.input
+                        when (input.kind) {
+                            VoiceEntityKind.PLAYLIST -> "playlist " + input.title
+                            VoiceEntityKind.SONG -> "song " + input.title + if (input.artist.isBlank()) "" else " by " + input.artist
+                            VoiceEntityKind.ARTIST -> "artist " + input.title
+                            VoiceEntityKind.ALBUM -> "album " + input.title
+                        }
+                    }
+                    return Outcome("Did you mean " + labels.joinToString(", ") + "? Say the first one.", candidateRefs = refs)
+                }
+                VoiceMatchOutcome.NoMatch -> Unit
+            }
+        }
+        val query = if (artistOnly) requestedArtist.orEmpty() else listOfNotNull(title, requestedArtist).joinToString(" ")
         val found = try {
             actions.search(query)
         } catch (c: CancellationException) {
@@ -535,21 +646,67 @@ internal class DesktopVoiceController(
         } catch (t: Throwable) {
             emptyList()
         }
-        val ranked = VoiceSongMatcher.rank(found.take(MAX_CANDIDATES), command.title, command.artist)
-        val best = ranked.firstOrNull() ?: return Outcome("Couldn't find that")
-        if (config.confirmBeforePlay() &&
-            (best.second < VoiceSongMatcher.WEAK || VoiceSongMatcher.isAmbiguous(ranked))
-        ) {
-            return Outcome("Did you mean...?", choices = ranked.take(3).map { it.first })
+        val unique = found.distinctBy { it.videoId }.take(MAX_CANDIDATES)
+        val index = VoiceIndexBuilder.build(0L, unique.map {
+            VoiceIndexInput(VoiceEntityKind.SONG, if (artistOnly) it.artist else it.title, it.videoId, artist = it.artist)
+        })
+        val queryTerms = VoiceTerms.of(if (artistOnly) requestedArtist.orEmpty() else title)
+        val artistTerms = if (artistOnly) null else requestedArtist?.let { VoiceTerms.of(it) }
+        val transientMatches = VoiceMatcher.rank(queryTerms, index, setOf(VoiceEntityKind.SONG), artist = artistTerms)
+        val matchOutcome = VoiceMatcher.decideRanked(transientMatches, VoiceMatchMode.PLAY)
+        val ranked = when (matchOutcome) {
+            VoiceMatchOutcome.NoMatch -> return Outcome("Couldn't find that")
+            is VoiceMatchOutcome.Confident -> listOfNotNull(unique.firstOrNull { it.videoId == matchOutcome.match.entry.input.id })
+            is VoiceMatchOutcome.Candidates -> matchOutcome.options.mapNotNull { option ->
+                unique.firstOrNull { it.videoId == option.entry.input.id }
+            }.take(3)
         }
-        actions.playSong(best.first)
-        return Outcome("Playing " + label(best.first), undo = { actions.previous() })
+        if (ranked.isEmpty()) return Outcome("Couldn't find that")
+        if (matchOutcome is VoiceMatchOutcome.Candidates) return Outcome("Did you mean...?", choices = ranked)
+        val selected = ranked.first()
+        actions.playSong(selected)
+        session.rememberPlayed(VoiceRef(VoiceEntityKind.SONG, selected.title, selected.videoId))
+        return Outcome("Playing " + label(selected), undo = { actions.previous() })
+    }
+
+    // VOICE FIX X2 hook: follow-up selection only acts on a live remembered candidate.
+    private suspend fun chooseCandidate(zeroBased: Int): Outcome = chooseRef(session.choose(zeroBased))
+
+    private suspend fun chooseOther(): Outcome = chooseRef(session.other())
+
+    private suspend fun chooseRef(ref: VoiceRef?): Outcome {
+        if (ref == null) return Outcome("Nothing to choose from")
+        return when (ref.kind) {
+            VoiceEntityKind.SONG -> {
+                val found = try {
+                    actions.search(ref.label)
+                } catch (c: CancellationException) {
+                    throw c
+                } catch (_: Throwable) {
+                    emptyList()
+                }
+                val song = found.firstOrNull { it.videoId == ref.id }
+                if (song == null) Outcome("Couldn't find that") else {
+                    actions.playSong(song)
+                    session.rememberPlayed(ref)
+                    Outcome("Playing " + label(song), undo = { actions.previous() })
+                }
+            }
+            VoiceEntityKind.PLAYLIST -> playlistOutcome(VoiceListAction.PLAY, ref.label)
+            VoiceEntityKind.ARTIST, VoiceEntityKind.ALBUM -> Outcome("Nothing to choose from")
+        }
     }
 
     private fun label(song: VoiceSong): String =
         if (song.artist.isBlank()) song.title else song.title + " - " + song.artist
 
     private suspend fun publishDone(heard: String, outcome: Outcome) {
+        // VOICE FIX X2 hook: the same song options shown by the overlay back the spoken choices.
+        if (outcome.candidateRefs != null) {
+            session.rememberCandidates(outcome.candidateRefs)
+        } else if (outcome.choices.isNotEmpty()) {
+            session.rememberCandidates(outcome.choices.map { VoiceRef(VoiceEntityKind.SONG, it.title, it.videoId) })
+        }
         synchronized(lock) {
             undoAction = outcome.undo
             pendingChoices = outcome.choices

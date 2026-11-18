@@ -1,0 +1,187 @@
+# Held-out phrases for DesktopVoiceEvalTest. Tab separated: phrase, expected action, arguments.
+# Lines starting with # are comments. Do NOT edit a phrase to make a test pass; fix the code.
+# Change an expectation only when it was wrong, and say why in HANDOFF.md.
+# Actions: Play (title|artist), SearchAndPlay (query), PlayPlaylist (name), AddToPlaylist (name), Shuffle (on|off),
+# SetVolume (percent), Choose (1-based index), ChooseOther, AddToLastPlaylist, Pause, Resume, Next, Previous,
+# VolumeUp, VolumeDown, Like, WhatsPlaying, Unknown.
+# Playlists in the fake library are listed on the next line (tab separated).
+#playlists	Workout	Road Trip	Chill Vibes	Gym	Top 5	Study Beats	Rock & Roll Classics	🔥 Fire Hits	Late Night Drive	Throwbacks	Billie Eilish Essentials
+pause	Pause	
+pause the music	Pause	
+stop	Pause	
+hold on	Pause	
+pause it please	Pause	
+hey muses pause	Pause	
+could you pause the song	Pause	
+paws	Pause	
+stop the music	Pause	
+take a break	Pause	
+uh pause	Pause	
+resume	Resume	
+continue playing	Resume	
+unpause	Resume	
+keep playing	Resume	
+play	Resume	
+play the music	Resume	
+play some music	Resume	
+start the music	Resume	
+go on	Resume	
+next	Next	
+skip	Next	
+next song	Next	
+skip this song	Next	
+play the next track	Next	
+move on	Next	
+another song	Next	
+onto the next one	Next	
+previous	Previous	
+go back	Previous	
+previous song	Previous	
+play the last track	Previous	
+back	Previous	
+go back to the previous song	Previous	
+turn it up	VolumeUp	
+louder	VolumeUp	
+volume up	VolumeUp	
+make it louder	VolumeUp	
+raise the volume	VolumeUp	
+turn it down	VolumeDown	
+quieter	VolumeDown	
+volume down	VolumeDown	
+lower the volume	VolumeDown	
+make it softer	VolumeDown	
+volume to forty	SetVolume	40
+volume to 40	SetVolume	40
+set the volume to 40	SetVolume	40
+set volume to fifty percent	SetVolume	50
+turn the volume to thirty	SetVolume	30
+volume at seventy	SetVolume	70
+make the volume 20	SetVolume	20
+set the volume to one hundred	SetVolume	100
+volume to zero	SetVolume	0
+volume to forty actually fifty	SetVolume	50
+shuffle	Shuffle	on
+shuffle on	Shuffle	on
+turn shuffle off	Shuffle	off
+turn on shuffle	Shuffle	on
+stop shuffling	Shuffle	off
+no shuffle	Shuffle	off
+unshuffle	Shuffle	off
+like this song	Like	
+i love this	Like	
+thumbs up	Like	
+heart this	Like	
+favorite this song	Like	
+save this song	Like	
+add this to my favorites	Like	
+add this song to liked songs	Like	
+i like this	Like	
+what's playing	WhatsPlaying	
+what song is this	WhatsPlaying	
+who sings this	WhatsPlaying	
+what am i listening to	WhatsPlaying	
+now playing	WhatsPlaying	
+what's this song	WhatsPlaying	
+add this to my workout playlist	AddToPlaylist	Workout
+add this song to gym	AddToPlaylist	Gym
+put this in my road trip playlist	AddToPlaylist	Road Trip
+add it to chill vibes	AddToPlaylist	Chill Vibes
+save this to my study beats playlist	AddToPlaylist	Study Beats
+add this to my work out playlist	AddToPlaylist	Workout
+add the current song to my rock and roll classics playlist	AddToPlaylist	Rock & Roll Classics
+add this to my top five playlist	AddToPlaylist	Top 5
+add this to my fire hits playlist	AddToPlaylist	🔥 Fire Hits
+add this to the late night drive playlist	AddToPlaylist	Late Night Drive
+throw this in my throwbacks	AddToPlaylist	Throwbacks
+add this to my gym playlist please	AddToPlaylist	Gym
+could you add this to my workout playlist	AddToPlaylist	Workout
+add this song to my workouts playlist	AddToPlaylist	Workout
+add this to my sunrise playlist	AddToPlaylist	sunrise
+add this to my road trip list	AddToPlaylist	road trip list
+add this to my billy eilish essentials playlist	AddToPlaylist	Billie Eilish Essentials
+add this to my gym no i mean my workout playlist	AddToPlaylist	Workout
+add this to my gym actually the road trip playlist	AddToPlaylist	Road Trip
+add it to that one	AddToLastPlaylist	
+add this to that playlist	AddToLastPlaylist	
+add this to the same playlist	AddToLastPlaylist	
+put it in that one	AddToLastPlaylist	
+play my workout playlist	PlayPlaylist	Workout
+play my road trip playlist	PlayPlaylist	Road Trip
+play the chill vibes playlist	PlayPlaylist	Chill Vibes
+play my gym playlist	PlayPlaylist	Gym
+play my work out playlist	PlayPlaylist	Workout
+play my top five playlist	PlayPlaylist	Top 5
+play my study beats mix	PlayPlaylist	Study Beats
+play songs from my road trip playlist	PlayPlaylist	Road Trip
+start my gym playlist	PlayPlaylist	Gym
+put on my throwbacks playlist	PlayPlaylist	Throwbacks
+play my rock and roll classics playlist	PlayPlaylist	Rock & Roll Classics
+play my fire hits playlist	PlayPlaylist	🔥 Fire Hits
+play the late night drive playlist	PlayPlaylist	Late Night Drive
+play my sunrise playlist	PlayPlaylist	sunrise
+play my workout	PlayPlaylist	Workout
+play my top five	PlayPlaylist	Top 5
+i'm in the mood for my chill vibes playlist	PlayPlaylist	Chill Vibes
+hey muses play my gym playlist	PlayPlaylist	Gym
+play my billy eilish essentials playlist	PlayPlaylist	Billie Eilish Essentials
+could you please play my road trip playlist for me	PlayPlaylist	Road Trip
+play my um workout actually the road trip playlist	PlayPlaylist	Road Trip
+play my, um, workout, actually the road trip playlist	PlayPlaylist	Road Trip
+play um the chill vibes playlist	PlayPlaylist	Chill Vibes
+play yellow by coldplay	Play	yellow|coldplay
+play bohemian rhapsody	Play	bohemian rhapsody|
+play stand by me	Play	stand by me|
+play blinding lights by the weeknd	Play	blinding lights|the weeknd
+play the song levitating	Play	levitating|
+could you play shape of you by ed sheeran	Play	shape of you|ed sheeran
+i want to hear hotel california	Play	hotel california|
+put on thunderstruck	Play	thunderstruck|
+play song called creep	Play	creep|
+throw on dreams by fleetwood mac	Play	dreams|fleetwood mac
+play no scrubs	Play	no scrubs|
+play sorry by justin bieber	Play	sorry|justin bieber
+play like a prayer	Play	like a prayer|
+play yellow sorry play clocks by coldplay	Play	clocks|coldplay
+play uh yellow by like coldplay	Play	yellow|coldplay
+play wait for it	Play	wait for it|
+play don't stop believing by journey	Play	dont stop believing|journey
+play billy eilish	Play	billy eilish|
+play bad guy by billy eilish	Play	bad guy|billy eilish
+play something upbeat	SearchAndPlay	upbeat
+play something chill	SearchAndPlay	chill
+play some taylor swift	SearchAndPlay	taylor swift
+play anything relaxing	SearchAndPlay	relaxing
+the first one	Choose	1
+first one	Choose	1
+1st	Choose	1
+the second one	Choose	2
+number two	Choose	2
+i mean the second one	Choose	2
+the third one	Choose	3
+number three	Choose	3
+no the other one	ChooseOther	
+the other one	ChooseOther	
+not that one	ChooseOther	
+hello there	Unknown	
+what time is it	Unknown	
+tell me a joke	Unknown	
+open the pod bay doors	Unknown	
+call mom	Unknown	
+set an alarm for seven	Unknown	
+what's the weather today	Unknown	
+turn on the lights	Unknown	
+um	Unknown	
+uh huh	Unknown	
+thank you	Unknown	
+please	Unknown	
+add this	Unknown	
+volume	Unknown	
+make me a sandwich	Unknown	
+stop talking	Unknown	
+don't play that	Unknown	
+i like pizza	Unknown	
+what's the weather	Unknown	
+the first one hundred songs	Unknown	
+switch off the screen	Unknown	
+read my messages	Unknown	
+good morning	Unknown	

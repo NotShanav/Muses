@@ -129,6 +129,11 @@ class DesktopVoiceControllerTest {
         @Volatile var nowPlaying: String? = "Yellow - Coldplay"
         @Volatile var playlists: List<String> = listOf("Gym")
         val duckStates: MutableList<Boolean> = Collections.synchronizedList(mutableListOf<Boolean>())
+        // VOICE FIX X2 hook: capture absolute-volume requests from the controller.
+        val absoluteVolumes: MutableList<Float> = Collections.synchronizedList(mutableListOf<Float>())
+        // VOICE FIX X1: the two library actions answer with reasoned results.
+        @Volatile var addResult: VoicePlaylistResult = VoicePlaylistResult.Done("Gym", VoiceListSource.LOCAL, "Yellow")
+        @Volatile var playResult: VoicePlaylistResult = VoicePlaylistResult.Done("Gym", VoiceListSource.LOCAL)
 
         val actions = VoiceActions(
             search = { q -> calls.add("search:$q"); results },
@@ -140,11 +145,12 @@ class DesktopVoiceControllerTest {
             volumeStep = { calls.add("vol:$it") },
             setShuffle = { calls.add("shuffle:$it") },
             likeCurrent = { calls.add("like"); true },
-            addCurrentToPlaylist = { calls.add("add:$it"); it == "Gym" },
-            playPlaylist = { calls.add("playlist:$it"); true },
+            addCurrentToPlaylist = { calls.add("add:$it"); addResult },
+            playPlaylist = { calls.add("playlist:$it"); playResult },
             nowPlayingText = { nowPlaying },
             playlistNames = { playlists },
             duckPlayback = { duckStates.add(it) },
+            setVolume = { absoluteVolumes.add(it) },
         )
     }
 
@@ -159,6 +165,7 @@ class DesktopVoiceControllerTest {
         blockRecordForever: Boolean = false,
         watchdogMillis: Long = 30_000L,
         choiceMillis: Long = 5_000L,
+        session: VoiceSession = VoiceSession(),
     ) {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         val recordCalls = AtomicInteger(0)
@@ -203,6 +210,7 @@ class DesktopVoiceControllerTest {
             errorMillis = 80L,
             watchdogMillis = watchdogMillis,
             escPollMillis = 5L,
+            session = session,
         )
 
         val state get() = controller.state.value
@@ -548,6 +556,151 @@ class DesktopVoiceControllerTest {
             Thread.sleep(80)
             assertTrue(rig.state === DesktopVoiceState.Idle)
             assertTrue(rig.fake.calls.isEmpty())
+        } finally {
+            rig.close()
+        }
+    }
+
+    // ── VOICE FIX X1: library actions say exactly what happened ───────────────────────────────────
+
+    @Test
+    fun addToPlaylistDoneShowsTheSongAndOffersUndoWhenOneExists() {
+        val rig = Rig("add this to gym")
+        val undone = AtomicBoolean(false)
+        rig.fake.addResult = VoicePlaylistResult.Done("Gym", VoiceListSource.USER, "Yellow", undo = { undone.set(true) })
+        try {
+            val done = speak(rig)
+            assertEquals("Added Yellow to Gym", done.result)
+            assertTrue(done.canUndo)
+            rig.controller.undo()
+            awaitUntil("undo ran") { undone.get() }
+        } finally {
+            rig.close()
+        }
+    }
+
+    @Test
+    fun addToPlaylistWithoutAnInverseHasNoUndo() {
+        val rig = Rig("add this to gym")
+        rig.fake.addResult = VoicePlaylistResult.Done("Gym", VoiceListSource.LOCAL, "Yellow")
+        try {
+            val done = speak(rig)
+            assertEquals("Added Yellow to Gym", done.result)
+            assertFalse(done.canUndo)
+        } finally {
+            rig.close()
+        }
+    }
+
+    @Test
+    fun addToPlaylistNotEditableSaysSo() {
+        val rig = Rig("add this to gym")
+        rig.fake.addResult = VoicePlaylistResult.NotEditable("Gym")
+        try {
+            val done = speak(rig)
+            assertEquals("Gym isn't one of your editable playlists", done.result)
+            assertFalse(done.canUndo)
+        } finally {
+            rig.close()
+        }
+    }
+
+    @Test
+    fun addToPlaylistNothingPlayingAndLibraryNotLoadedHaveTheirOwnMessages() {
+        val rig = Rig("add this to gym")
+        try {
+            rig.fake.addResult = VoicePlaylistResult.NothingPlaying
+            assertEquals("Nothing is playing", speak(rig).result)
+            awaitIdle(rig)
+            rig.fake.addResult = VoicePlaylistResult.LibraryNotLoaded
+            assertTrue(speak(rig).result.startsWith("Your library is still loading"))
+        } finally {
+            rig.close()
+        }
+    }
+
+    @Test
+    fun playPlaylistResultsMapToMessages() {
+        val rig = Rig("play my gym playlist")
+        try {
+            assertEquals("Playing Gym", speak(rig).result)
+            awaitIdle(rig)
+            rig.fake.playResult = VoicePlaylistResult.NotFound
+            assertEquals("Couldn't find a playlist called Gym", speak(rig).result)
+        } finally {
+            rig.close()
+        }
+    }
+
+    // VOICE FIX X2 hook: follow-up commands use the in-memory session and absolute volume adapter.
+    @Test
+    fun setVolumeUsesAbsolutePercent() {
+        val rig = Rig("volume to forty")
+        try {
+            assertEquals("Volume 40 percent", speak(rig).result)
+            assertEquals(listOf(0.4f), rig.fake.absoluteVolumes.toList())
+        } finally {
+            rig.close()
+        }
+    }
+
+    @Test
+    fun chooseAndChooseOtherPlayTheRememberedSong() {
+        val first = VoiceRef(VoiceEntityKind.SONG, "Yellow", "yellow-id")
+        val second = VoiceRef(VoiceEntityKind.SONG, "Clocks", "clocks-id")
+        val session = VoiceSession(now = { 0L }).apply {
+            rememberCandidates(listOf(first, second))
+            rememberPlayed(first)
+        }
+        val rig = Rig("no, the other one", session = session).apply {
+            fake.results = listOf(VoiceSong("clocks-id", "Clocks", "Coldplay"))
+        }
+        try {
+            assertEquals("Playing Clocks - Coldplay", speak(rig).result)
+            assertTrue(rig.fake.calls.contains("play:clocks-id"))
+        } finally {
+            rig.close()
+        }
+    }
+
+    @Test
+    fun chooseFirstUsesTheRememberedSong() {
+        val session = VoiceSession(now = { 0L }).apply {
+            rememberCandidates(listOf(VoiceRef(VoiceEntityKind.SONG, "Yellow", "yellow-id")))
+        }
+        val rig = Rig("the first one", session = session).apply {
+            fake.results = listOf(VoiceSong("yellow-id", "Yellow", "Coldplay"))
+        }
+        try {
+            assertEquals("Playing Yellow - Coldplay", speak(rig).result)
+        } finally {
+            rig.close()
+        }
+    }
+
+    @Test
+    fun addToLastPlaylistUsesRememberedDestination() {
+        val session = VoiceSession(now = { 0L }).apply {
+            rememberPlaylist(VoiceRef(VoiceEntityKind.PLAYLIST, "Gym", "gym-id"))
+        }
+        val rig = Rig("add it to that one", session = session)
+        try {
+            assertEquals("Added Yellow to Gym", speak(rig).result)
+            assertTrue(rig.fake.calls.contains("add:Gym"))
+        } finally {
+            rig.close()
+        }
+    }
+
+    @Test
+    fun disablingVoiceClearsTheSession() {
+        val session = VoiceSession(now = { 0L }).apply {
+            rememberPlayed(VoiceRef(VoiceEntityKind.SONG, "Secret", "id"))
+        }
+        val rig = Rig("pause", enabled = false, session = session)
+        try {
+            rig.controller.refresh()
+            assertTrue(session.isEmpty())
         } finally {
             rig.close()
         }

@@ -24,6 +24,11 @@ internal sealed interface VoiceCommand {
     object Like : VoiceCommand
     data class AddToPlaylist(val name: String) : VoiceCommand
     data class PlayPlaylist(val name: String) : VoiceCommand
+    // VOICE FIX X2 hook: absolute volume and follow-up choices are parser results, not new intents.
+    data class SetVolume(val percent: Int) : VoiceCommand
+    data class Choose(val number: Int) : VoiceCommand
+    object ChooseOther : VoiceCommand
+    object AddToLastPlaylist : VoiceCommand
     object WhatsPlaying : VoiceCommand
     object Unknown : VoiceCommand
 }
@@ -193,7 +198,16 @@ internal object DesktopVoiceCommandParser {
     // VOICE V5 hook: intent recognition is independent of library availability; entity resolution
     // is retried against the live library by the action adapter.
     fun parse(text: String, playlistNames: List<String>): VoiceCommand {
-        var tokens = normalize(text).split(' ').filter { it.isNotEmpty() }
+        // VOICE FIX X2 hook: repair ASR corrections and resolve short follow-ups before the old parser.
+        val words = VoiceSelfRepair.apply(VoiceText.words(text))
+        if (words.isEmpty()) return VoiceCommand.Unknown
+        when (val choice = VoiceChoicePhrases.parse(words)) {
+            is VoiceChoice.Index -> return VoiceCommand.Choose(choice.zeroBased + 1)
+            VoiceChoice.Other -> return VoiceCommand.ChooseOther
+            null -> Unit
+        }
+        VoiceNumbers.volumePercent(words)?.let { return VoiceCommand.SetVolume(it) }
+        var tokens = normalize(words.joinToString(" ")).split(' ').filter { it.isNotEmpty() }
         if (tokens.isEmpty()) return VoiceCommand.Unknown
 
         var impliedPlay = false
@@ -229,6 +243,8 @@ internal object DesktopVoiceCommandParser {
         // "Put on" and "throw on" introduce playback; they are not playlist-add operations.
         if (!s.startsWith("put on ") && !s.startsWith("throw on ")) ADD_TO.matchEntire(s)?.let { match ->
             val rest = match.groupValues[1].trim()
+            // VOICE FIX X2 hook: resolve conversational references from the in-memory session.
+            if (VoiceChoicePhrases.isLastPlaylistReference(VoiceText.words(rest))) return VoiceCommand.AddToLastPlaylist
             val plain = playlistTokens(rest).joinToString(" ")
             if (plain in LIKE_TARGETS || plain in setOf("favorites", "favourites", "liked songs")) return VoiceCommand.Like
             val name = matchPlaylist(rest, playlistNames) ?: playlistReference(rest)
@@ -243,7 +259,16 @@ internal object DesktopVoiceCommandParser {
         if (PREVIOUS.matches(s)) return VoiceCommand.Previous
 
         val play = PLAY_HEAD.matchEntire(s)
-        if (play != null) return parsePlay(play.groupValues[1].trim(), playlistNames, impliedPlay)
+        if (play != null) {
+            // VOICE FIX X2 hook: "turn on" and "switch to" only introduce grounded playlist/music requests.
+            val rest = play.groupValues[1].trim()
+            val looseHead = s.startsWith("turn on ") || s.startsWith("switch to ")
+            val groundedPlaylist = impliedPlay ||
+                ((rest.startsWith("my ") || rest.startsWith("the ") || rest.startsWith("some ")) &&
+                    Regex("\\b(?:playlist|mix|mixtape|collection|music|radio)\\b").containsMatchIn(rest))
+            if (looseHead && !groundedPlaylist) return VoiceCommand.Unknown
+            return parsePlay(rest, playlistNames, impliedPlay || (looseHead && groundedPlaylist))
+        }
         if (impliedPlay) return parsePlay(s, playlistNames, true)
         return VoiceCommand.Unknown
     }
@@ -309,6 +334,10 @@ internal object DesktopVoiceCommandParser {
             body = tokens.drop(2).joinToString(" ")
         }
 
+        // VOICE FIX X2 hook: keep the established resume meaning ahead of the broad "some" search wrapper.
+        if (body in setOf("music", "the music", "some music", "songs", "some songs", "the songs")) {
+            return VoiceCommand.Resume
+        }
         val generic = listOf("something", "anything", "some", "a song", "a track", "some tunes")
             .firstOrNull { body == it || body.startsWith("$it ") }
         if (generic != null) {
