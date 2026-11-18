@@ -270,8 +270,11 @@ internal object DesktopVoiceCommandParser {
 
     /** [rest] is everything after the play verb, normalized. */
     private fun parsePlay(rest: String, playlistNames: List<String>): VoiceCommand {
-        val tokens = rest.split(' ').filter { it.isNotEmpty() }
+        var tokens = rest.split(' ').filter { it.isNotEmpty() }
         if (tokens.isEmpty()) return VoiceCommand.Unknown
+
+        // Natural phrasing: "put on X" means play X, not a title beginning with "on".
+        if (tokens.size > 1 && tokens[0] == "on") tokens = tokens.drop(1)
 
         // Playlist forms: the word "playlist" is explicit intent; "my X" is tried as a playlist first.
         if ("playlist" in tokens || "playlists" in tokens) {
