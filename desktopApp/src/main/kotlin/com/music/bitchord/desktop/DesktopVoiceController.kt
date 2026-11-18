@@ -487,16 +487,26 @@ internal class DesktopVoiceController(
         VoiceCommand.Like ->
             if (actions.likeCurrent()) Outcome("Liked") else Outcome("Nothing is playing")
         is VoiceCommand.AddToPlaylist ->
-            if (actions.addCurrentToPlaylist(command.name)) {
-                Outcome("Added to " + command.name)
-            } else {
-                Outcome("Couldn't find an editable playlist called " + command.name)
+            when {
+                actions.nowPlayingText() == null -> Outcome("Nothing is playing")
+                actions.addCurrentToPlaylist(command.name) -> Outcome("Added to " + command.name)
+                else -> playlistMiss(command.name, "an editable")
             }
         is VoiceCommand.PlayPlaylist ->
             if (actions.playPlaylist(command.name)) Outcome("Playing " + command.name)
-            else Outcome("Couldn't find a playable playlist called " + command.name)
+            else playlistMiss(command.name, "a playable")
         VoiceCommand.WhatsPlaying -> Outcome(actions.nowPlayingText() ?: "Nothing is playing")
         VoiceCommand.Unknown -> Outcome("Didn't catch that")
+    }
+
+    /** A failed playlist command says why: several close matches are listed, never silently picked. */
+    private fun playlistMiss(name: String, kind: String): Outcome {
+        val tied = DesktopVoiceCommandParser.ambiguousPlaylists(name, safePlaylistNames())
+        return if (tied.size > 1) {
+            Outcome("More than one playlist matches: " + tied.take(3).joinToString(", ") + ". Say the full name.")
+        } else {
+            Outcome("Couldn't find $kind playlist called $name")
+        }
     }
 
     /** Broad discovery requests deliberately use search ranking; the default is to ask the owner. */

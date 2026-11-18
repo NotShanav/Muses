@@ -299,4 +299,79 @@ class DesktopVoiceCommandsTest {
         val two = listOf("Chill", "Chill Vibes")
         assertEquals("Chill", DesktopVoiceCommandParser.matchPlaylist("chill", two))
     }
+
+    // ---- playlist phrasing variations ----
+
+    @Test
+    fun playPreludeWorksForAnySubjectAndTense() {
+        val expected = VoiceCommand.PlayPlaylist("Workout")
+        all(
+            expected,
+            "I was thinking of playing my workout playlist",
+            "I was thinking about my workout playlist",
+            "we're in the mood for my workout playlist",
+            "I'd be up for my workout playlist",
+            "What about playing my workout playlist",
+            "I'd love to play my workout playlist",
+            "I could listen to my workout playlist",
+            "I was really in the mood for my workout playlist",
+        )
+    }
+
+    @Test
+    fun desireWithoutAListeningVerbIsNotAPlayRequest() {
+        assertEquals(VoiceCommand.Like, p("i like this song"))
+        assertEquals(VoiceCommand.Like, p("i love this song"))
+        assertEquals(VoiceCommand.Unknown, p("i could use some quiet"))
+        assertEquals(VoiceCommand.Unknown, p("i'm into playlists"))
+    }
+
+    @Test
+    fun playFromMyPlaylistPhrasings() {
+        val expected = VoiceCommand.PlayPlaylist("Workout")
+        all(
+            expected,
+            "play songs from my workout playlist",
+            "play some music from my workout playlist",
+            "play music off my workout playlist",
+            "play from my workout playlist",
+            "play songs from my workout",
+            "start my workout playlist",
+            "start playing my workout",
+        )
+        assertEquals(VoiceCommand.PlayPlaylist("Road Trip"), p("start the road trip playlist"))
+    }
+
+    @Test
+    fun fromPhrasesWithoutAPlaylistStayAsSongs() {
+        assertEquals(VoiceCommand.Play("music from the 80s", null), p("play music from the 80s"))
+        assertEquals(VoiceCommand.Play("come from away", null), p("play come from away"))
+        assertEquals(VoiceCommand.Play("songs from my chemical romance", null), p("play songs from my chemical romance"))
+        assertEquals(VoiceCommand.Play("from the inside", "linkin park"), p("play from the inside by linkin park"))
+        assertEquals(VoiceCommand.Unknown, p("start over"))
+        assertEquals(VoiceCommand.Resume, p("start the music"))
+    }
+
+    @Test
+    fun addCurrentSongAcceptsAnyWayOfSayingTheCurrentTrack() {
+        val expected = VoiceCommand.AddToPlaylist("Workout")
+        all(
+            expected,
+            "add the song to my workout playlist",
+            "add song to my workout playlist",
+            "add the current song to workout",
+            "add currently playing song to workout",
+            "add this song to my work out playlist",
+            "put the song in my workout playlist",
+        )
+    }
+
+    @Test
+    fun ambiguousPlaylistsListsTheTiedCandidates() {
+        val two = listOf("Chill Vibes", "Chill Hits", "Workout")
+        assertEquals(listOf("Chill Vibes", "Chill Hits"), DesktopVoiceCommandParser.ambiguousPlaylists("chill", two))
+        assertEquals(emptyList<String>(), DesktopVoiceCommandParser.ambiguousPlaylists("workout", two))
+        assertEquals(emptyList<String>(), DesktopVoiceCommandParser.ambiguousPlaylists("jazz", two))
+        assertEquals(emptyList<String>(), DesktopVoiceCommandParser.ambiguousPlaylists("road trip", listOf("Road Trip", "road trip")))
+    }
 }

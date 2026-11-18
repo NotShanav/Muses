@@ -49,37 +49,31 @@ internal object DesktopVoiceCommandParser {
         listOf("actually"), listOf("maybe"), listOf("please"), listOf("just"),
     ).sortedByDescending { it.size }
 
-    /** These conversational openings imply a play request even without a literal play verb. */
-    private val PLAY_PRELUDES: List<List<String>> = listOf(
-        listOf("i'm", "in", "the", "mood", "for"), listOf("i", "am", "in", "the", "mood", "for"),
-        listOf("im", "in", "the", "mood", "for"), listOf("i'm", "in", "the", "mood", "to"),
-        listOf("i", "am", "in", "the", "mood", "to"),
-        listOf("i'm", "in", "the", "mood", "to", "listen", "to"),
-        listOf("i", "am", "in", "the", "mood", "to", "listen", "to"),
-        listOf("i", "feel", "like", "listening", "to"), listOf("i", "feel", "like", "hearing"),
-        listOf("i", "feel", "like", "playing"), listOf("i", "feel", "like"),
-        listOf("i'm", "feeling", "like", "listening", "to"), listOf("i", "am", "feeling", "like", "listening", "to"),
-        listOf("i'm", "feeling", "like"), listOf("i", "am", "feeling", "like"),
-        listOf("i'd", "love", "to", "listen", "to"), listOf("i", "would", "love", "to", "listen", "to"),
-        listOf("i'd", "love", "to", "hear"), listOf("i", "would", "love", "to", "hear"),
-        listOf("i'd", "like", "to", "hear"), listOf("i", "would", "like", "to", "hear"),
-        listOf("i'd", "like", "to", "listen", "to"), listOf("i", "would", "like", "to", "listen", "to"),
-        listOf("i", "want", "to", "listen", "to"), listOf("i", "want", "to", "hear"),
-        listOf("i", "wanna", "listen", "to"), listOf("i", "wanna", "hear"),
-        listOf("i", "could", "listen", "to"), listOf("i", "could", "hear"),
-        listOf("i'm", "up", "for"), listOf("i", "am", "up", "for"),
-        listOf("i", "would", "be", "up", "for"), listOf("i'd", "be", "up", "for"),
-        listOf("i'm", "after"), listOf("i", "am", "after"),
-        listOf("i'm", "thinking", "of", "playing"), listOf("i", "am", "thinking", "of", "playing"),
-        listOf("i'm", "thinking", "of", "listening", "to"),
-        listOf("i", "am", "thinking", "of", "listening", "to"),
-        listOf("i'm", "craving"), listOf("i", "am", "craving"), listOf("i", "could", "go", "for"),
-        listOf("i", "fancy", "listening", "to"), listOf("i", "fancy"),
-        listOf("i'm", "looking", "for"), listOf("i", "am", "looking", "for"),
-        listOf("how", "about", "playing"), listOf("what", "about", "playing"),
-        listOf("let's", "hear"), listOf("lets", "hear"),
-        listOf("i'm", "into"), listOf("i", "am", "into"),
-    ).sortedByDescending { it.size }
+    /**
+     * Conversational openings that imply a play request without a literal play verb ("I'm in the mood
+     * for…", "I was thinking of playing…"). Built from parts (subject + state + optional listening verb)
+     * rather than enumerated, so a new subject or tense ("I was", "we're") does not need its own entry.
+     */
+    private const val LISTEN_VERB = "(?:listening to|listen to|hearing|hear|playing|play)"
+    private val PLAY_PRELUDE_STATE = Regex(
+        "^(?:" +
+            "(?:i'm|im|i am|i was|we're|we are)(?: (?:really|just|kind of))? " +
+            "(?:in the mood(?: for| to)?|feeling like|thinking (?:of|about)|up for|craving|after|into|looking for)" +
+            "|(?:i|we)(?: (?:really|just))? (?:feel like|fancy|crave|could go for)" +
+            "|(?:i'd|i would|we'd|we would) be up for" +
+            "|(?:how|what) about" +
+            ")(?= |$)(?: $LISTEN_VERB(?= |$))?",
+    )
+    /** "I'd love to hear…", "I could listen to…": these only count as a play request with a listening verb. */
+    private val PLAY_PRELUDE_DESIRE = Regex(
+        "^(?:i|we)(?:'d| would)?(?: (?:really|just))? (?:love to|like to|want to|wanna|could) $LISTEN_VERB(?= |$)",
+    )
+
+    private fun playPreludeWords(tokens: List<String>): Int {
+        val text = tokens.joinToString(" ")
+        val hit = PLAY_PRELUDE_STATE.find(text) ?: PLAY_PRELUDE_DESIRE.find(text) ?: return 0
+        return hit.value.split(' ').size
+    }
 
     private val TRAILING_FILLER: List<List<String>> = listOf(
         listOf("thank", "you"), listOf("thanks"), listOf("please"), listOf("for", "me"),
@@ -125,11 +119,10 @@ internal object DesktopVoiceCommandParser {
         "likes", "my likes", "favorite", "favourite", "liked music", "liked tracks", "liked playlist",
     )
 
+    /** "add [this song | the song | the current song | it] to [my X playlist]". */
     private val ADD_TO = Regex(
         "^(?:add|put|save|throw|drop|stick|keep|toss|send) " +
-            "(?:(?:this|it|that)(?: (?:song|track|one))? |" +
-            "(?:the )?(?:current|playing) (?:song|track|one) |" +
-            "(?:this|that) one |(?:the )?song (?:that's )?playing )?" +
+            "(?:(?:this|that|that's|it|the|current|currently|now|playing|song|track|one) )*" +
             "(?:to|into|in|on|onto|under) (.+)$",
     )
 
@@ -155,13 +148,20 @@ internal object DesktopVoiceCommandParser {
     )
 
     private val PREVIOUS = Regex(
-        "^(?:previous(?: (?:song|track|one))?|prev|go back|back|go to the last one|" +
+        "^(?:(?:the )?previous(?: (?:song|track|one))?|prev|go back|back|" +
             "(?:the )?last (?:song|track|one)|" +
             "(?:play|go to|go back to) (?:the )?(?:previous|last)(?: (?:song|track|one))?)$",
     )
 
+    /** Leading "songs from" / "some music off" wrapper around a playlist reference. */
+    private val SOURCE_PREFIX = Regex(
+        "^(?:(?:some|any|a few) )?(?:(?:songs|music|tracks|tunes|stuff|something) )?" +
+            "(?:from|off|out of|in) (?=my |the |our )",
+    )
+
     private val PLAY_HEAD = Regex(
-        "^(?:play(?: me)?|start playing|put on|throw on|queue up|listen to|hear|" +
+        "^(?:play(?: me)?|start playing|start(?= my | .*\\b(?:playlist|mix|mixtape|collection)$)|put on|throw on|" +
+            "queue up|listen to|hear|" +
             "let me hear|give me|switch to|turn on) (.+)$",
     )
 
@@ -200,9 +200,9 @@ internal object DesktopVoiceCommandParser {
         var changed = true
         while (changed && tokens.isNotEmpty()) {
             changed = false
-            val mood = PLAY_PRELUDES.firstOrNull { tokens.startsWith(it) }
-            if (mood != null) {
-                tokens = tokens.drop(mood.size)
+            val moodWords = playPreludeWords(tokens)
+            if (moodWords > 0) {
+                tokens = tokens.drop(moodWords)
                 impliedPlay = true
                 changed = true
                 continue
@@ -250,13 +250,20 @@ internal object DesktopVoiceCommandParser {
 
     fun matchPlaylist(query: String, names: List<String>): String? {
         if (names.isEmpty()) return null
-        val scored = names.map { it to playlistScore(query, it) }.sortedByDescending { it.second }
-        val best = scored.first()
+        val best = names.map { it to playlistScore(query, it) }.maxByOrNull { it.second } ?: return null
         if (best.second < PLAYLIST_THRESHOLD) return null
-        val rival = scored.firstOrNull { (name, score) ->
-            score >= PLAYLIST_THRESHOLD && best.second - score < AMBIGUOUS_GAP && playlistKey(name) != playlistKey(best.first)
-        }
-        return if (rival != null) null else best.first
+        return if (ambiguousPlaylists(query, names).isNotEmpty()) null else best.first
+    }
+
+    /**
+     * Distinct playlists that match [query] about equally well. More than one entry means the request is
+     * ambiguous: the caller should offer these rather than guess. Empty when there is a clear winner or no match.
+     */
+    fun ambiguousPlaylists(query: String, names: List<String>): List<String> {
+        val scored = names.map { it to playlistScore(query, it) }.filter { it.second >= PLAYLIST_THRESHOLD }
+        val top = scored.maxOfOrNull { it.second } ?: return emptyList()
+        val tied = scored.filter { top - it.second < AMBIGUOUS_GAP }.distinctBy { playlistKey(it.first) }.map { it.first }
+        return if (tied.size > 1) tied else emptyList()
     }
 
     fun playlistScore(query: String, candidate: String): Double {
@@ -278,17 +285,20 @@ internal object DesktopVoiceCommandParser {
         var body = rest.trim()
         if (body.isBlank()) return VoiceCommand.Unknown
 
+        // "play songs from my workout playlist" names the same playlist as "play my workout playlist".
+        val unwrapped = SOURCE_PREFIX.replaceFirst(body, "")
+
         // Natural speech often calls the same playlist a "mix", "collection", or simply "my X".
-        val explicitPlaylist = Regex("\\b(?:playlist|playlists|collection|mix|mixtape)\\b").containsMatchIn(body)
+        val explicitPlaylist = Regex("\\b(?:playlist|playlists|collection|mix|mixtape)\\b").containsMatchIn(unwrapped)
         if (explicitPlaylist) {
             // Understanding the request must not depend on the library snapshot being available.
             // Resolve against current library names at action time; retain the spoken name when no
             // catalogue match is available so a missing playlist is reported as such, not as ASR failure.
-            val name = matchPlaylist(body, playlistNames) ?: playlistReference(body)
+            val name = matchPlaylist(unwrapped, playlistNames) ?: playlistReference(unwrapped)
             return if (name.isBlank()) VoiceCommand.Unknown else VoiceCommand.PlayPlaylist(name)
         }
-        if (body.startsWith("my ") || preferPlaylist) {
-            matchPlaylist(body, playlistNames)?.let { return VoiceCommand.PlayPlaylist(it) }
+        if (unwrapped.startsWith("my ") || preferPlaylist) {
+            matchPlaylist(unwrapped, playlistNames)?.let { return VoiceCommand.PlayPlaylist(it) }
         }
 
         val tokens = body.split(' ').filter { it.isNotEmpty() }
