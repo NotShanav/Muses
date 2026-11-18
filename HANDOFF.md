@@ -828,3 +828,9 @@ Run the owner's GitHub Actions build (V2, V3 and V4 have never been compiled) an
 6. Test: press "Record 4 seconds", say "play bad guy by billie eilish": the words show on the page; leave the page and come back: they are gone.
 7. Hide Muses to the tray, hold the hotkey, say "play bad guy by billie eilish", release: the overlay shows, the song plays, the overlay disappears. Check `%TEMP%` for leftover voice folders (there must be none) and the log for recognised words (there must be none).
 8. Switch off: the hotkey no longer does anything. Restart the app with the switch on: the hotkey works at once.
+
+### VOICE V4 CI fix 1 (NOT compiled)
+- CI error in `DesktopVoiceSettingsTest.kt` lines 78 and 88: `seen += it` where `seen` is `ArrayList<Path>` and `it` is a `Path`. A `java.nio.file.Path` is itself an `Iterable<Path>`, so Kotlin read `+=` as `seen = seen + it` ("val cannot be reassigned", "List<Path> but ArrayList<Path> expected"). Fixed with `seen.add(it)`. Same style change in `DesktopVoiceRecognizerTest.kt` (`seen.add(command)`), not needed but safe.
+- Rule for later edits: never use `+=` / `plus` with a `Path` on a collection; use `.add(...)`. Main code already does (`dirs.add(...)`, `out.add(...)`). All other `+=` in the voice files were checked: strings, ints, lists of strings, pairs.
+- Only 4 compile errors were reported and all were this one cause, so the other test files compile; the next CI step will run the tests, where assertion failures may still appear.
+- The warning `DesktopVoiceSettingsUi.kt:290 Condition is always 'true'` is `!DesktopVoiceSidecarSpec.VERIFIED` (a const false). Harmless; it goes away when the link is verified and the flag flips.
