@@ -172,7 +172,9 @@ internal object DesktopVoiceCommandParser {
         if (WHATS_PLAYING.matches(s)) return VoiceCommand.WhatsPlaying
         if (LIKE.matches(s)) return VoiceCommand.Like
 
-        ADD_TO.matchEntire(s)?.let { m ->
+        // "put on <song>" is a play request, not an add-to-playlist request.
+        // ADD_TO also accepts "put ... on ...", so let PLAY_HEAD handle this phrase.
+        if (!s.startsWith("put on ")) ADD_TO.matchEntire(s)?.let { m ->
             val rest = m.groupValues[1].removePrefix("playlist ").trim()
             val plain = rest.split(' ').filter { it !in setOf("my", "the", "playlist") }.joinToString(" ")
             if (plain in LIKE_TARGETS) return VoiceCommand.Like
@@ -270,11 +272,8 @@ internal object DesktopVoiceCommandParser {
 
     /** [rest] is everything after the play verb, normalized. */
     private fun parsePlay(rest: String, playlistNames: List<String>): VoiceCommand {
-        var tokens = rest.split(' ').filter { it.isNotEmpty() }
+        val tokens = rest.split(' ').filter { it.isNotEmpty() }
         if (tokens.isEmpty()) return VoiceCommand.Unknown
-
-        // Natural phrasing: "put on X" means play X, not a title beginning with "on".
-        if (tokens.size > 1 && tokens[0] == "on") tokens = tokens.drop(1)
 
         // Playlist forms: the word "playlist" is explicit intent; "my X" is tried as a playlist first.
         if ("playlist" in tokens || "playlists" in tokens) {

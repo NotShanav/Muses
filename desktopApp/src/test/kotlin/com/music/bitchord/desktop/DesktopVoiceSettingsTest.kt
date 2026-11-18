@@ -75,7 +75,7 @@ class DesktopVoiceSettingsTest {
     fun withoutAChosenFolderOnlyTheManagedOneIsChecked() {
         val seen = ArrayList<Path>()
         VoiceSettingsLogic.modelStatus(null, Paths.get("managed-dir")) {
-            seen.add(it)
+            seen += it
             VoiceModelScan.NotFound
         }
         assertEquals(1, seen.size)
@@ -85,7 +85,7 @@ class DesktopVoiceSettingsTest {
     fun theSameFolderIsCheckedOnlyOnce() {
         val seen = ArrayList<Path>()
         VoiceSettingsLogic.modelStatus("managed-dir", Paths.get("managed-dir")) {
-            seen.add(it)
+            seen += it
             VoiceModelScan.NotFound
         }
         assertEquals(1, seen.size)
