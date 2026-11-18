@@ -1,0 +1,480 @@
+package com.music.bitchord.desktop
+
+import java.nio.file.Files
+import java.nio.file.Path
+import java.util.Collections
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertTrue
+import kotlin.test.fail
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
+
+/**
+ * Voice V3: the scoring function, the tone, the warm-up read and the controller's state machine with
+ * fakes. No microphone, no window, no model file, no network, no hotkey.
+ */
+class DesktopVoiceControllerTest {
+
+    // ── Scoring ──────────────────────────────────────────────────────────────────────────────────
+
+    private fun song(id: String, title: String, artist: String) = VoiceSong(id, title, artist)
+
+    @Test
+    fun tokensDropBracketsAndPunctuation() {
+        assertEquals(listOf("bad", "guy"), VoiceSongMatcher.tokens("Bad Guy (feat. Justin Bieber)"))
+        assertEquals(listOf("bad", "guy"), VoiceSongMatcher.tokens("  BAD, guy! [Official Video]"))
+        assertTrue(VoiceSongMatcher.tokens("()").isEmpty())
+    }
+
+    @Test
+    fun exactTitleAndArtistScoresOne() {
+        val score = VoiceSongMatcher.score(song("1", "Bad Guy", "Billie Eilish"), "bad guy", "billie eilish")
+        assertTrue(score > 0.99, "score=$score")
+    }
+
+    @Test
+    fun rightArtistBeatsWrongArtistAndWrongArtistIsWeak() {
+        val right = song("a", "Bad Guy", "Billie Eilish")
+        val wrong = song("b", "Bad Guy", "Someone Else")
+        val ranked = VoiceSongMatcher.rank(listOf(wrong, right), "bad guy", "billie eilish")
+        assertEquals("a", ranked.first().first.videoId)
+        assertTrue(ranked.last().second < VoiceSongMatcher.WEAK, "wrong artist should be weak")
+    }
+
+    @Test
+    fun extraWordsCostALittle() {
+        val exact = song("a", "Bad Guy", "Billie Eilish")
+        val long = song("b", "Bad Guy Live At Wembley", "Billie Eilish")
+        val ranked = VoiceSongMatcher.rank(listOf(long, exact), "bad guy", null)
+        assertEquals("a", ranked.first().first.videoId)
+        assertTrue(ranked.last().second in 0.75..0.99, "score=${ranked.last().second}")
+    }
+
+    @Test
+    fun oneLetterTypoStillScoresAboveWeak() {
+        val score = VoiceSongMatcher.score(song("1", "Thriller", "Michael Jackson"), "thriler", null)
+        assertTrue(score >= VoiceSongMatcher.WEAK && score < 1.0, "score=$score")
+    }
+
+    @Test
+    fun unrelatedAndEmptyScoreLow() {
+        assertTrue(VoiceSongMatcher.score(song("1", "Yellow", "Coldplay"), "bad guy", null) < 0.2)
+        assertEquals(0.0, VoiceSongMatcher.score(song("1", "Yellow", "Coldplay"), "", null))
+    }
+
+    @Test
+    fun equalScoresKeepSearchOrder() {
+        val ranked = VoiceSongMatcher.rank(
+            listOf(song("first", "Bad Guy", "A"), song("second", "Bad Guy", "B")),
+            "bad guy",
+            null,
+        )
+        assertEquals(listOf("first", "second"), ranked.map { it.first.videoId })
+    }
+
+    // ── Tone, warm-up, messages ──────────────────────────────────────────────────────────────────
+
+    @Test
+    fun toneIsAShortSoftGeneratedClip() {
+        val pcm = VoiceTone.samples()
+        assertEquals(1600, pcm.size)
+        assertEquals(0, pcm.first().toInt())
+        assertTrue(pcm.any { it.toInt() != 0 })
+        assertTrue(pcm.all { kotlin.math.abs(it.toInt()) <= (0.18 * Short.MAX_VALUE).toInt() + 1 })
+    }
+
+    @Test
+    fun warmupReadsTheWholeFileOrStopsWhenTold() {
+        val file: Path = Files.createTempFile("muses-warm", ".bin")
+        try {
+            Files.write(file, ByteArray(3000))
+            assertEquals(3000L, VoiceWarmup.read(file, { true }, chunk = 1024))
+            assertEquals(0L, VoiceWarmup.read(file, { false }, chunk = 1024))
+        } finally {
+            Files.deleteIfExists(file)
+        }
+    }
+
+    @Test
+    fun microphoneMessageCarriesThePrivacyHint() {
+        assertTrue(VoiceMessages.forCode(VoiceErrors.NO_MICROPHONE).contains("Privacy > Microphone"))
+        assertTrue(VoiceMessages.forCode(VoiceErrors.MIC_SILENT).contains("Privacy > Microphone"))
+        assertFalse(VoiceMessages.forCode("anything_else").isBlank())
+    }
+
+    // ── State machine ────────────────────────────────────────────────────────────────────────────
+
+    private class FakeActions {
+        val calls: MutableList<String> = Collections.synchronizedList(mutableListOf<String>())
+        @Volatile var results: List<VoiceSong> = emptyList()
+        @Volatile var nowPlaying: String? = "Yellow - Coldplay"
+
+        val actions = VoiceActions(
+            search = { q -> calls.add("search:$q"); results },
+            playSong = { calls.add("play:" + it.videoId) },
+            pause = { calls.add("pause") },
+            resume = { calls.add("resume") },
+            next = { calls.add("next") },
+            previous = { calls.add("previous") },
+            volumeStep = { calls.add("vol:$it") },
+            setShuffle = { calls.add("shuffle:$it") },
+            likeCurrent = { calls.add("like"); true },
+            addCurrentToPlaylist = { calls.add("add:$it"); it == "Gym" },
+            playPlaylist = { calls.add("playlist:$it"); true },
+            nowPlayingText = { nowPlaying },
+            playlistNames = { listOf("Gym") },
+        )
+    }
+
+    private class Rig(
+        val heard: String,
+        val fake: FakeActions = FakeActions(),
+        enabled: Boolean = true,
+        confirm: Boolean = true,
+        modelOk: Boolean = true,
+        programOk: Boolean = true,
+        recognizerFailure: Throwable? = null,
+        blockRecordForever: Boolean = false,
+        watchdogMillis: Long = 30_000L,
+        choiceMillis: Long = 5_000L,
+    ) {
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        val recordCalls = AtomicInteger(0)
+        val tickCalls = AtomicInteger(0)
+        val warmCalls = AtomicInteger(0)
+        val escape = AtomicBoolean(false)
+
+        private val files = VoiceModelFiles(
+            Path.of("model"), Path.of("model/e"), Path.of("model/d"), Path.of("model/j"), Path.of("model/t"),
+        )
+
+        val controller = DesktopVoiceController(
+            scope = scope,
+            actions = fake.actions,
+            config = VoiceControllerConfig(
+                enabled = { enabled },
+                confirmBeforePlay = { confirm },
+                modelDir = { null },
+                sidecarExe = { null },
+                hotkey = { VoiceHotkey.DEFAULT },
+            ),
+            record = { _, shouldStop ->
+                recordCalls.incrementAndGet()
+                if (blockRecordForever) awaitCancellation()
+                while (!shouldStop()) delay(2)
+                Result.success(ShortArray(1600) { 1000 })
+            },
+            recognizerFactory = { _, _ ->
+                object : VoiceRecognizer {
+                    override suspend fun transcribe(pcm16kMono: ShortArray): Result<String> =
+                        if (recognizerFailure != null) Result.failure(recognizerFailure) else Result.success(heard)
+                }
+            },
+            findProgram = { if (programOk) Path.of("sherpa-onnx-offline.exe") else null },
+            findModel = { if (modelOk) files else null },
+            warm = { _, _ -> warmCalls.incrementAndGet() },
+            tick = { tickCalls.incrementAndGet() },
+            escapeDown = { escape.get() },
+            doneMillis = 80L,
+            choiceMillis = choiceMillis,
+            errorMillis = 80L,
+            watchdogMillis = watchdogMillis,
+            escPollMillis = 5L,
+        )
+
+        val state get() = controller.state.value
+
+        fun close() = scope.cancel()
+    }
+
+    private fun awaitUntil(what: String, timeoutMillis: Long = 4_000L, condition: () -> Boolean) {
+        val end = System.nanoTime() + timeoutMillis * 1_000_000L
+        while (!condition()) {
+            if (System.nanoTime() > end) fail("timed out waiting for: $what")
+            Thread.sleep(5)
+        }
+    }
+
+    /** Press, wait until listening, release, wait for the result, return it. */
+    private fun speak(rig: Rig): DesktopVoiceState.Done {
+        rig.controller.onPressed()
+        awaitUntil("listening") { rig.state is DesktopVoiceState.Listening }
+        rig.controller.onReleased()
+        awaitUntil("done") { rig.state is DesktopVoiceState.Done }
+        return rig.state as DesktopVoiceState.Done
+    }
+
+    private fun awaitIdle(rig: Rig) = awaitUntil("idle") { rig.state === DesktopVoiceState.Idle }
+
+    @Test
+    fun offMeansNothingHappens() {
+        val rig = Rig("pause", enabled = false)
+        try {
+            rig.controller.onPressed()
+            Thread.sleep(150)
+            assertTrue(rig.state === DesktopVoiceState.Idle)
+            assertEquals(0, rig.recordCalls.get())
+            assertEquals(0, rig.tickCalls.get())
+            assertEquals(0, rig.warmCalls.get())
+            assertTrue(rig.fake.calls.isEmpty())
+        } finally {
+            rig.close()
+        }
+    }
+
+    @Test
+    fun pauseRunsTheActionShowsItAndGoesBackToIdle() {
+        val rig = Rig("pause")
+        try {
+            val done = speak(rig)
+            assertEquals("Paused", done.result)
+            assertFalse(done.canUndo)
+            assertEquals(listOf("pause"), rig.fake.calls.toList())
+            assertEquals(1, rig.tickCalls.get())
+            awaitUntil("warm-up started") { rig.warmCalls.get() == 1 }
+            awaitIdle(rig)
+        } finally {
+            rig.close()
+        }
+    }
+
+    @Test
+    fun otherSimpleCommandsCallTheirActions() {
+        val cases = listOf(
+            "next" to "next",
+            "volume up" to "vol:0.1",
+            "volume down" to "vol:-0.1",
+            "like this" to "like",
+            "resume" to "resume",
+        )
+        for ((words, call) in cases) {
+            val rig = Rig(words)
+            try {
+                speak(rig)
+                assertEquals(listOf(call), rig.fake.calls.toList(), words)
+            } finally {
+                rig.close()
+            }
+        }
+    }
+
+    @Test
+    fun whatsPlayingShowsTheTextAndNothingElseHappens() {
+        val rig = Rig("what's playing")
+        try {
+            val done = speak(rig)
+            assertEquals("Yellow - Coldplay", done.result)
+            assertTrue(rig.fake.calls.isEmpty())
+        } finally {
+            rig.close()
+        }
+    }
+
+    @Test
+    fun unknownSpeechDoesNothing() {
+        val rig = Rig("mumble blah")
+        try {
+            val done = speak(rig)
+            assertEquals("Didn't catch that", done.result)
+            assertTrue(rig.fake.calls.isEmpty())
+            awaitIdle(rig)
+        } finally {
+            rig.close()
+        }
+    }
+
+    @Test
+    fun aSecondPressWhileBusyIsIgnored() {
+        val rig = Rig("pause")
+        try {
+            rig.controller.onPressed()
+            awaitUntil("listening") { rig.state is DesktopVoiceState.Listening }
+            rig.controller.onPressed()
+            rig.controller.onPressed()
+            rig.controller.onReleased()
+            awaitUntil("done") { rig.state is DesktopVoiceState.Done }
+            assertEquals(1, rig.recordCalls.get())
+            assertEquals(listOf("pause"), rig.fake.calls.toList())
+        } finally {
+            rig.close()
+        }
+    }
+
+    @Test
+    fun missingModelOrProgramShowsAHintAndStops() {
+        val noModel = Rig("pause", modelOk = false)
+        try {
+            noModel.controller.onPressed()
+            awaitUntil("failed") { noModel.state is DesktopVoiceState.Failed }
+            assertEquals(VoiceErrors.MODEL_MISSING, (noModel.state as DesktopVoiceState.Failed).code)
+            assertEquals(0, noModel.recordCalls.get())
+            awaitIdle(noModel)
+        } finally {
+            noModel.close()
+        }
+        val noProgram = Rig("pause", programOk = false)
+        try {
+            noProgram.controller.onPressed()
+            awaitUntil("failed") { noProgram.state is DesktopVoiceState.Failed }
+            assertEquals(VoiceErrors.PROGRAM_MISSING, (noProgram.state as DesktopVoiceState.Failed).code)
+            awaitIdle(noProgram)
+        } finally {
+            noProgram.close()
+        }
+    }
+
+    @Test
+    fun recognizerErrorBecomesAnErrorCodeNotText() {
+        val rig = Rig("pause", recognizerFailure = VoiceException(VoiceErrors.TIMEOUT))
+        try {
+            rig.controller.onPressed()
+            awaitUntil("listening") { rig.state is DesktopVoiceState.Listening }
+            rig.controller.onReleased()
+            awaitUntil("failed") { rig.state is DesktopVoiceState.Failed }
+            assertEquals(VoiceErrors.TIMEOUT, (rig.state as DesktopVoiceState.Failed).code)
+            assertTrue(rig.fake.calls.isEmpty())
+            awaitIdle(rig)
+        } finally {
+            rig.close()
+        }
+    }
+
+    @Test
+    fun strongMatchPlaysAndUndoGoesBack() {
+        val rig = Rig("play bad guy by billie eilish")
+        rig.fake.results = listOf(song("a", "Bad Guy", "Billie Eilish"), song("b", "Bad Guy", "Cover Band"))
+        try {
+            val done = speak(rig)
+            assertTrue(done.canUndo)
+            assertTrue(done.choices.isEmpty())
+            assertTrue(rig.fake.calls.first().startsWith("search:"))
+            assertTrue("play:a" in rig.fake.calls)
+            rig.controller.undo()
+            assertEquals("previous", rig.fake.calls.last())
+            awaitUntil("undone shown") { (rig.state as? DesktopVoiceState.Done)?.result == "Undone" }
+            awaitIdle(rig)
+        } finally {
+            rig.close()
+        }
+    }
+
+    @Test
+    fun weakMatchOffersChoicesAndASecondPressPicksTheFirst() {
+        val rig = Rig("play bad guy by billie eilish", confirm = true)
+        rig.fake.results = listOf(
+            song("x", "Something Else", "Nobody"),
+            song("y", "Another One", "Someone"),
+            song("z", "Third", "Third Artist"),
+            song("w", "Fourth", "Fourth Artist"),
+        )
+        try {
+            val done = speak(rig)
+            assertEquals(3, done.choices.size)
+            assertTrue(rig.fake.calls.none { it.startsWith("play:") })
+            rig.controller.onPressed()
+            awaitUntil("played") { "play:x" in rig.fake.calls }
+            awaitUntil("done after pick") {
+                val s = rig.state
+                s is DesktopVoiceState.Done && s.choices.isEmpty()
+            }
+            awaitIdle(rig)
+        } finally {
+            rig.close()
+        }
+    }
+
+    @Test
+    fun clickingAChoicePlaysThatOne() {
+        val rig = Rig("play bad guy by billie eilish", confirm = true)
+        rig.fake.results = listOf(song("x", "Something Else", "Nobody"), song("y", "Another One", "Someone"))
+        try {
+            speak(rig)
+            rig.controller.choose(1)
+            awaitUntil("played") { "play:y" in rig.fake.calls }
+            assertFalse("play:x" in rig.fake.calls)
+        } finally {
+            rig.close()
+        }
+    }
+
+    @Test
+    fun weakMatchPlaysTheBestWhenAskingIsOff() {
+        val rig = Rig("play bad guy by billie eilish", confirm = false)
+        rig.fake.results = listOf(song("x", "Something Else", "Nobody"))
+        try {
+            val done = speak(rig)
+            assertTrue(done.choices.isEmpty())
+            assertTrue("play:x" in rig.fake.calls)
+        } finally {
+            rig.close()
+        }
+    }
+
+    @Test
+    fun noSearchResultsPlaysNothing() {
+        val rig = Rig("play bad guy by billie eilish")
+        try {
+            val done = speak(rig)
+            assertEquals("Couldn't find that", done.result)
+            assertTrue(rig.fake.calls.none { it.startsWith("play:") })
+        } finally {
+            rig.close()
+        }
+    }
+
+    @Test
+    fun escapeWhileListeningCancelsWithoutActing() {
+        val rig = Rig("pause")
+        try {
+            rig.controller.onPressed()
+            awaitUntil("listening") { rig.state is DesktopVoiceState.Listening }
+            rig.escape.set(true)
+            awaitIdle(rig)
+            Thread.sleep(60)
+            assertTrue(rig.state === DesktopVoiceState.Idle)
+            assertTrue(rig.fake.calls.isEmpty())
+        } finally {
+            rig.close()
+        }
+    }
+
+    @Test
+    fun watchdogReturnsToIdleEvenWhenTheRecorderNeverEnds() {
+        val rig = Rig("pause", blockRecordForever = true, watchdogMillis = 150L)
+        try {
+            rig.controller.onPressed()
+            awaitUntil("listening") { rig.state is DesktopVoiceState.Listening }
+            awaitIdle(rig)
+            assertTrue(rig.fake.calls.isEmpty())
+            // And a new command works afterwards.
+            assertEquals(1, rig.recordCalls.get())
+        } finally {
+            rig.close()
+        }
+    }
+
+    @Test
+    fun stopAbandonsARunningSessionAndDropsEverything() {
+        val rig = Rig("pause")
+        try {
+            rig.controller.onPressed()
+            awaitUntil("listening") { rig.state is DesktopVoiceState.Listening }
+            rig.controller.stop()
+            assertTrue(rig.state === DesktopVoiceState.Idle)
+            rig.controller.onReleased()
+            Thread.sleep(80)
+            assertTrue(rig.state === DesktopVoiceState.Idle)
+            assertTrue(rig.fake.calls.isEmpty())
+        } finally {
+            rig.close()
+        }
+    }
+}

@@ -2795,6 +2795,77 @@ fun BitChordDesktopApp() {
         }
     }
 
+    // VOICE V3 hook: hands-free voice commands (experimental, off by default; nothing runs or is
+    // registered until the feature is switched on). One small adapter from the controller's action
+    // lambdas to the functions above. The controller runs on this composition's scope (the UI
+    // thread), so every action below runs where a click would.
+    val voiceController = remember {
+        DesktopVoiceController(
+            scope = scope,
+            actions = VoiceActions(
+                search = { query ->
+                    withContext(Dispatchers.IO) {
+                        DesktopMusicSources.search(query, SearchFilter.SONGS).getOrNull().orEmpty()
+                    }.mapNotNull { row ->
+                        when (row) {
+                            is SearchResult.TopTrack -> row.song
+                            is SearchResult.Track -> row.song
+                            else -> null
+                        }
+                    }.map { found -> VoiceSong(found.videoId, found.title, found.artist, payload = found) }
+                },
+                playSong = { picked -> (picked.payload as? Song)?.let { playSong(it) } },
+                pause = { pauseFromUser() },
+                resume = { playFromUser() },
+                next = { playNext() },
+                previous = { playPrevious() },
+                volumeStep = { delta ->
+                    DesktopPlayerHost.onVolumeChange((DesktopPlayerHost.volumeLevel.value + delta).coerceIn(0f, 1f))
+                },
+                setShuffle = { on -> setShuffle(on) },
+                likeCurrent = {
+                    val current = selectedSong
+                    if (current == null) {
+                        false
+                    } else {
+                        if (current.videoId !in likedIds) rate(current, LikeStatus.LIKE)
+                        true
+                    }
+                },
+                addCurrentToPlaylist = { name ->
+                    val current = selectedSong
+                    val target = playlists.firstOrNull { it.title.equals(name, ignoreCase = true) }
+                    if (current == null || target == null) {
+                        false
+                    } else {
+                        playlistTarget = current
+                        addToPlaylist(target)
+                        true
+                    }
+                },
+                playPlaylist = { name ->
+                    val target = playlists.firstOrNull { it.title.equals(name, ignoreCase = true) }
+                    if (target == null || target.songs.isEmpty()) {
+                        false
+                    } else {
+                        playSongs(target.songs)
+                        true
+                    }
+                },
+                nowPlayingText = { selectedSong?.let { it.title + " - " + it.artist } },
+                playlistNames = { playlists.map { it.title } },
+            ),
+        )
+    }
+    DisposableEffect(voiceController) {
+        DesktopVoiceRuntime.controller.value = voiceController
+        voiceController.start()
+        onDispose {
+            voiceController.stop()
+            if (DesktopVoiceRuntime.controller.value === voiceController) DesktopVoiceRuntime.controller.value = null
+        }
+    }
+
     // The engine's measured stream, as the player's quality badge and stats line read it.
     LaunchedEffect(playback.streamFormat, playback.streamSourceId) {
         NerdStats.current.value = playback.streamFormat?.let { format ->
@@ -6667,6 +6738,13 @@ private fun DesktopSettingsScreen(
                         title = "Glass lab (experimental)",
                         subtitle = "Tune the liquid-glass material and see whether the shader works on this PC",
                         onClick = onOpenGlassLab,
+                    )
+                }
+                // VOICE V4 hook: the Experimental group (voice commands), inside the Advanced category.
+                SettingsGroup("Experimental") {
+                    DesktopVoiceSettingsRows(
+                        rowVisible = { title, subtitle -> settingsRowVisible(title, subtitle) },
+                        toggle = { title, subtitle, checked, onChange -> SettingsToggle(title, subtitle, checked, onChange) },
                     )
                 }
             }

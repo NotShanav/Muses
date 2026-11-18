@@ -219,4 +219,6 @@ private fun desktopApplication() = application {
         }
     }
     }
+    // VOICE V3 hook: the voice overlay's own small window (exists only while a command is running).
+    DesktopVoiceOverlayHost()
 }

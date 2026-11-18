@@ -669,3 +669,162 @@ Changes:
 - Spinner: neither the app pill nor the liquid pill has an isLoading spinner/placeholder (grep found none). The only one tied to the transition is the top-bar play button (DesktopApp.kt ~4285), now hidden while `DesktopArtTransition.active`. The pill thumbnail is already alpha 0 while revealing. NowPlayingScreen's loading state untouched.
 
 Risks: a grid sampled from a small thumbnail is cached under the 256 key, so that run keeps the lower detail until the cache entry is evicted. The fix for "first play after a cold start" still falls back to the old path if the download exceeds 700 ms, but now logs it and the next play is instant.
+
+## VOICE V1: model finder and command parser (NOT compiled)
+
+### Did
+- `DesktopVoiceModel.kt`: `VoiceModelFiles`, `VoiceModelScan` (Ready / WrongFormat / NotFound), `VoiceModelFileSpec`, `DesktopVoiceModelSpec` (four files with size + SHA-256, two source base URLs, `urlFor`, `sizeMatches`, streaming `sha256Hex` in 1 MB chunks), top-level `looksLikeSherpaLayout` / `looksLikeOnnxAsrLayout`, `DesktopVoiceModelLocator` (`check`, `findExisting`, `defaultRoots`).
+- `DesktopVoiceCommands.kt`: `VoiceCommand` (Play, Pause, Resume, Next, Previous, VolumeUp, VolumeDown, Shuffle(on), Like, AddToPlaylist, PlayPlaylist, WhatsPlaying, Unknown) and `DesktopVoiceCommandParser` (`parse`, plus `normalize`, `matchPlaylist`, `playlistScore`, `PLAYLIST_THRESHOLD`). Pure, no I/O, no logging; the text is never stored.
+- Tests: `DesktopVoiceModelTest`, `DesktopVoiceCommandsTest`. Only empty or tiny temp files (deleted in `finally`); no microphone, window, model, or network.
+
+### Files
+New: `desktopApp/src/main/kotlin/com/music/bitchord/desktop/DesktopVoiceModel.kt`, `DesktopVoiceCommands.kt`; `desktopApp/src/test/kotlin/com/music/bitchord/desktop/DesktopVoiceModelTest.kt`, `DesktopVoiceCommandsTest.kt`. No existing file edited (so no `// VOICE V1 hook` markers). No Gradle change.
+
+### Decisions (no questions allowed)
+- Contract names kept. Small additive, defaulted parameters: `check(dir, spec, sizeTolerance)`, `findExisting(roots, maxDepth, spec, sizeTolerance)`, `defaultRoots(env, home, windows)`. Size tolerance is a fraction (default 0.01); tests pass `Double.POSITIVE_INFINITY` so empty files count.
+- `DesktopVoiceModelSpec.sources` are BASE urls ending in "/"; append the file name with `urlFor(base, name)`. `LICENCE_URL` points at the first source's model page (not checked online).
+- `check`: Ready needs the four names (any case) and sizes within tolerance; right names but wrong size is WrongFormat ("incomplete download?"); onnx-asr layout is WrongFormat ("different format"); encoder .onnx with other or missing names is WrongFormat; anything else NotFound.
+- `findExisting` is blocking: call it off the UI thread. BFS, folders whose name has "handsy"/"parakeet"/"sherpa" visited first, 200 folders per root, links are not followed and every folder must stay under the root's real path (also stops junctions). A folder that is a model is not searched deeper. Results: hinted path first, then Ready before WrongFormat.
+- Parser output is lower-case normalized text (apostrophes inside words kept). Leading filler: hey muses, can/could/would/will you, i want to, i'd like to, let's, please, just. Trailing: please, thanks, thank you, for me. Misheard words are fixed only in the FIRST word (plays, paws, necks...), never in a title.
+- Bare "play" = Resume; "stop" = Pause. "play my X": tried as a playlist first, if no playlist matches it is a song titled "my X". Bare "play X" is ALWAYS a song, even if X equals a playlist name. The word "playlist" anywhere = explicit playlist intent: no match gives Unknown.
+- "the song X"/"the track X" loses the filler; a bare "song X" is kept (Song 2 by Blur). Side effect: a title that starts with "the song" loses those words.
+- "by" splits on the LAST " by ". Nothing after it, or a single word like me/you/it/the after it, means the whole text is the title ("stand by me"). Extends the plan's rule; list is `NOT_AN_ARTIST`.
+- Playlist matcher: tokens minus my/the/playlist/a, number words to digits, typo-tolerant only for words of 4+ letters, score = max(token overlap both ways, whole-string similarity). Threshold 0.72. Two different playlists within 0.05 at the top = ambiguous = Unknown (never guess). Returns the playlist's real name.
+- "add this to favorites/liked songs" = Like. "shuffle <anything else>" is Unknown. Volume ignores amounts ("a bit", "ten"): V3 decides the step.
+
+### Verified
+**NOT compiled. Tests NOT run** (no Kotlin compiler in this chat). Every test case was hand-traced against the code, including the edit-distance and ambiguity cases. Imports checked, no `private` type in an `internal` signature, no new names clashing with the repo (grep). Windows-only code: none in V1 (only `DesktopPlatform.isWindows` as a default argument).
+Compile watch-list if the build complains: `DesktopVoiceCommandParser::playlistScore` bound reference in a test; `sumOf`/`maxOf` Double lambdas in `playlistScore`; the symlink test returns early when links are not allowed.
+
+### Deferred
+- "shuffle my X playlist", volume amounts, "play X from the album Y", spelled-out numbers inside song titles.
+- Model download URLs, hashes and licence link are copied from the plan, not checked online.
+
+### Exact next step
+V2: add `DesktopVoiceRecorder.kt`, `DesktopVoiceRecognizer.kt`, `DesktopVoiceDownloads.kt` using `DesktopVoiceModelSpec.files` / `sources` / `urlFor` / `sizeMatches` / `sha256Hex` and `VoiceModelFiles` from V1. Build once after V2.
+
+## VOICE V2: recorder, offline recognizer, downloads (NOT compiled)
+
+### Did
+- `DesktopVoiceRecorder.kt`: `VoiceException(code)`, `VoiceErrors` (codes), pure `VoiceAudio` (rms, peak, bytesToShorts, trimSilence, normalizeGain), `VoiceCaptureLine` + `openSystemCaptureLine()` (javax.sound.sampled, 16 kHz mono 16-bit LE), `DesktopVoiceRecorder.record(maxMillis = 12000, shouldStop)`: 100 ms chunks into a ByteArrayOutputStream, line closed in `finally`, silence trimmed, gentle gain. Memory only, nothing written, nothing logged.
+- `DesktopVoiceRecognizer.kt`: `VoiceRecognizer`, `VoiceRecognizerSupport` (`wavBytes`, `parseSherpaOutput`, `buildCommand`, `enoughMemory`, `threadCount`, `wipeTempDir`), `FreeMemoryReader` + `SystemFreeMemory` (ManagementFactory, `com.sun.management.OperatingSystemMXBean.freeMemorySize`), `VoiceProcessRunner` + `ProcessBuilderVoiceRunner` (stdout/stderr on two daemon threads, 25 s timeout, destroy in `finally`), `SherpaSidecarRecognizer` (RAM guard 1.8 GiB, one temp WAV in a private temp folder, zero-fill + delete + folder delete in `finally`, runs inside `runInterruptible` so cancel kills the process). Logs only "recognizer start" / "finish in N ms" / "error=CODE".
+- `DesktopVoiceDownloads.kt`: `DesktopVoiceSidecarSpec` (the ONE constants object: version, asset names, URLs, `VERIFIED = false`), `DesktopVoicePaths` (`dataDir` = `%LOCALAPPDATA%\Muses\voice`, Linux `$XDG_DATA_HOME|~/.local/share/muses/voice`; `programDir`, `modelDir`), `VoiceDownloadMath` (fraction/overall/slice/verify), `VoiceHttp.downloadTo`, `DesktopVoiceSidecar` (`findExisting`, `findInDir`, `download`, `deleteTree`), `DesktopVoiceModelDownloader.download`.
+- Tests: `DesktopVoiceRecorderTest`, `DesktopVoiceRecognizerTest`, `DesktopVoiceDownloadsTest` (fake microphone line, fake process runner, tiny temp files; no device, no model, no network).
+
+### Files
+New only: `desktopApp/src/main/kotlin/com/music/bitchord/desktop/DesktopVoiceRecorder.kt`, `DesktopVoiceRecognizer.kt`, `DesktopVoiceDownloads.kt`; `desktopApp/src/test/kotlin/com/music/bitchord/desktop/DesktopVoiceRecorderTest.kt`, `DesktopVoiceRecognizerTest.kt`, `DesktopVoiceDownloadsTest.kt`. No existing file edited (no `// VOICE V2 hook` markers). No Gradle change, no new dependency (`java.desktop`, `java.management`, `jdk.management`, `java.net.http` are already in the jlink module list; kotlinx-serialization-json is already used).
+
+### Decisions (no questions allowed)
+- Contract names kept. Additive, defaulted parameters only: `DesktopVoiceRecorder(openLine)`, `SherpaSidecarRecognizer(exe, model, memory, runner, tempRoot, timeoutMillis, threads)`, `DesktopVoiceSidecar.findExisting(chosen, appDirs, dataDir, pathVariable, pathSeparator)` (V4 passes the owner-chosen path as `chosen`), `download(...)` as in the plan.
+- Error CODES (strings in `VoiceErrors`, also `http_<status>`, `network`, `bad_size`, `bad_hash`, `extract_failed`, `extract_timeout`, `program_not_in_archive`, `unsupported_platform`, `download_failed`, `model_not_ready`): V3/V4 map them to messages. `no_microphone` and `mic_silent` both get the Windows privacy hint (Settings > Privacy > Microphone).
+- Silence trimming threshold: 20 ms windows with RMS >= 300; 150 ms padding; clips under 250 ms after trimming are `too_short`; a clip whose peak is under 8 is `mic_silent`. Gain is only ever raised, max 4x, towards 60 % of full scale.
+- Recognizer: `--model-type=nemo_transducer` is tried first. If that run fails or prints no result, it is repeated ONCE without the flag; a success on the retry remembers "no flag" for the process (`SherpaSidecarRecognizer.useModelType`). The 25 s budget is shared by both runs.
+- stdout parsing: a JSON line with a `"text"` field first (newer builds), else the line after a line ending in `.wav` (older builds). No result line = `parse_failed`; recognised nothing = "" (the V1 parser then gives Unknown).
+- No console window: nothing extra is done. The JDK starts a console program without a window when the app itself has no console (the packaged app has none). Not testable here; if a black window flashes on the laptop, V3/V4 must switch to an own `CreateProcessW` with CREATE_NO_WINDOW through JNA.
+- Free RAM unknown (null) = allowed. Below 1.8 GiB (1,932,735,283 bytes) = `low_memory`.
+- Program download: tries the asset names in `DesktopVoiceSidecarSpec.ASSET_SUFFIXES` in order (a 404 moves to the next), extracts with `%SystemRoot%\System32\tar.exe` (else `tar`) into `<voice>\program`, finds `sherpa-onnx-offline(.exe)` up to 6 levels down, deletes the archive in `finally`, removes a half-extracted folder on failure. Download progress is a slow curve over an assumed 20 MB (size unknown), 0.85 = download done, 1.0 = extracted.
+- **UNVERIFIED:** program version `1.12.21`, the asset names, and whether that runtime runs the Parakeet unified model. The release page could not be read here; only older names (`sherpa-onnx-v1.9.x-win-x64-shared.tar.bz2`) were seen on a Hugging Face mirror. `VERIFIED = false` in the constants object. "Choose the program yourself" must stay a first-class path in V4.
+- Model download: files go to `<name>.part`, size must match EXACTLY and SHA-256 must match, then rename (atomic move, plain move as fallback). An already complete, verified file is kept. Each file tries both sources in order. `.part` files are deleted on failure and on cancel; good finished files are never deleted. Not resumable. Default target `DesktopVoicePaths.modelDir()`; V4's "Remove model" may delete only that folder (the files this app downloaded).
+- `findExisting` order: owner-chosen path (file, or folder holding it, 3 levels), app folders (the running executable's folder, `user.dir`; 1 level), voice data folder (5 levels), PATH. Accepts `sherpa-onnx-offline.exe` and `sherpa-onnx-offline`, any case.
+
+### Verified
+**NOT compiled. Tests NOT run** (no Kotlin compiler in this chat). Every test case was hand-traced against the code (trim arithmetic, gain, WAV header offsets, parser cases, fake-line read counts, retry path). Imports checked, braces/parentheses balanced by script, no `private` type in an `internal` signature, no duplicate top-level names (grep over the repo). Windows-only code: none uses JNA; the only platform check is `DesktopPlatform.isWindows` in `DesktopVoiceSidecar.download` and `DesktopVoicePaths.dataDir`.
+Compile watch-list if the build complains: `Result<String>` as a lambda return type in `runInterruptible`; `com.sun.management.OperatingSystemMXBean.freeMemorySize` (JDK 14+ name); `Comparator.reverseOrder<Path>()` in `deleteTree`; trailing-lambda constructor calls `DesktopVoiceRecorder { line }` in tests; SAM lambdas for `FreeMemoryReader` and `VoiceProcessRunner` in tests; `assertEquals(Float, Float, Float)` tolerance overloads.
+
+### Deferred
+- A `"text": null` JSON value would be read as the text "null" (not guarded).
+- No resume for downloads; no hash for the program archive (none is known).
+- The recorder has no input-device chooser (system default only).
+- The warm-up read of the encoder file (V3, on hotkey down) is not part of V2.
+
+### Exact next step
+V3: `DesktopVoiceHotkey.kt`, `DesktopVoiceController.kt`, `DesktopVoiceOverlay.kt` plus the `// VOICE V3 hook` adapter in `DesktopApp.kt` (grep, never open it whole). Use `DesktopVoiceRecorder.record`, `SherpaSidecarRecognizer.transcribe`, `DesktopVoiceSidecar.findExisting(chosen = <V4 setting>)`, `DesktopVoiceModelLocator.check` and `VoiceErrors` codes. Build once after V2 (the owner's GitHub Actions) before relying on it.
+
+## VOICE V3: hotkey, controller, overlay (NOT compiled)
+
+### Did
+- `DesktopVoiceHotkey.kt`: pure `VoiceHotkey(modifiers, vk)` with `describe()` ("Ctrl+Alt+Space"), `parse()`, `isValid`, `DEFAULT`; own minimal JNA `VoiceUser32` (`RegisterHotKey`, `UnregisterHotKey`, `GetMessage`, `PostThreadMessage`, `GetAsyncKeyState`; `Native.load("user32", ..., W32APIOptions.DEFAULT_OPTIONS)` like `WindowsProcessMemoryProbe`, `GetCurrentThreadId` from the already-used `Kernel32`); `DesktopVoiceKeys.isDown(vk)`; `DesktopVoiceHotkey` (own daemon thread + message loop, `MOD_NOREPEAT`, WM_HOTKEY = pressed, 20 ms `GetAsyncKeyState` poll = released, 20 s hold cap, `UnregisterHotKey` on the same thread, `WM_QUIT` posted by `stop()`; `status` ACTIVE / TAKEN / UNAVAILABLE / STOPPED). Everything off Windows reports UNAVAILABLE and does nothing.
+- `DesktopVoiceController.kt`: `VoiceSong`, `VoiceActions` (the lambdas), `VoiceControllerConfig`, `DesktopVoiceState` (Idle, Listening, Thinking, Done, Failed(code, message)), `VoiceMessages` (code to sentence, mic privacy hint included), `VoiceSongMatcher` (pure scoring, `WEAK` = 0.75), `VoiceTone` (generated 100 ms tick), `VoiceWarmup` (sequential read to warm the OS cache), `DesktopVoiceRuntime` (temporary settings holder and controller slot), `DesktopVoiceController` (`start`/`refresh`/`stop`, `onPressed`/`onReleased`, `cancel`, `undo`, `choose(i)`, `hotkeyStatus()`).
+- `DesktopVoiceOverlay.kt`: `DesktopVoiceOverlayHost()` (called from `Main.kt`) shows an undecorated, transparent, always-on-top, non-focusable `Window` only while the controller is not Idle; `DesktopVoicePill` uses the existing `fluidGlass` look.
+- Hooks: `DesktopApp.kt` (`// VOICE V3 hook`, one adapter block after the `DesktopPlayerSettings` SideEffect, ~line 2798: `remember { DesktopVoiceController(...VoiceActions(...)) }` + a `DisposableEffect` that publishes it in `DesktopVoiceRuntime.controller`, calls `start()`, and `stop()`s on dispose); `Main.kt` (`// VOICE V3 hook`, `DesktopVoiceOverlayHost()` as last statement of `desktopApplication()`).
+- Tests: `DesktopVoiceHotkeyTest`, `DesktopVoiceControllerTest` (scoring, tone, warm-up, messages, state machine with fake recorder, recognizer, program, model and actions; real coroutines with tiny delays, no mic, window, model, network or hotkey).
+
+### Files
+New: `desktopApp/src/main/kotlin/com/music/bitchord/desktop/DesktopVoiceHotkey.kt`, `DesktopVoiceController.kt`, `DesktopVoiceOverlay.kt`; `desktopApp/src/test/kotlin/com/music/bitchord/desktop/DesktopVoiceHotkeyTest.kt`, `DesktopVoiceControllerTest.kt`. Edited: `DesktopApp.kt` (one block, marked), `Main.kt` (two lines, marked). No Gradle change, no new dependency, `sharedUi`/`shared`/`app` untouched.
+
+### Decisions (no questions allowed)
+- **Contract change (minimal):** the plan's `play(title, artist?)` lambda became `search(query): List<VoiceSong>` + `playSong(VoiceSong)`, because the controller must score the results and offer the top three. `VoiceSong.payload` carries the app's own `Song` back. `likeCurrent()` returns Boolean (false = nothing playing). All other lambda names as in the plan.
+- **Settings are temporary:** `DesktopVoiceRuntime` holds `enabled` (false), `confirmBeforePlay` (true), `modelDir`, `sidecarExe`, `hotkey` (Ctrl+Alt+Space) as plain `@Volatile` fields, not persisted. V4 either drives these from `DesktopVoiceSettings` or builds the controller config from it (the hook calls the default `DesktopVoiceRuntime.config()`); after changing `enabled` or `hotkey` V4 calls `DesktopVoiceRuntime.controller.value?.refresh()`. With `enabled == false`, `start()` registers nothing and `onPressed()` returns at once.
+- **Controller lifetime:** built in `BitChordDesktopApp` with `rememberCoroutineScope()`, so it lives as long as that composition (the window may be hidden in the tray, the composition stays). A display-change window rebuild (`windowEpoch`) re-creates it and re-registers the hotkey. V4 may move ownership to an app-level scope if wanted.
+- Actions run on the UI thread (the controller's scope), exactly where a click would run them. Recording, recognising, warm-up and the tick run in `Dispatchers.IO` inside.
+- **Hold-to-talk without a hook:** hotkey thread = message loop; the release poll runs on that same thread (a second press cannot arrive meanwhile because of `MOD_NOREPEAT`). `Translate/DispatchMessage` are not bound (not needed for hotkeys).
+- **Esc:** polled with `GetAsyncKeyState(VK_ESCAPE)` every 50 ms only while a session is active (Listening, Thinking, showing a result); no global Esc registration. **Second hotkey press** while choices are shown picks the first one; during Listening/Thinking it is ignored (single-flight). **Watchdog:** 30 s per session, bound to the session id so a late watchdog cannot cut off a newer session.
+- **"Play X by Y":** query = "title artist" through the app's own `DesktopMusicSources.search(query, SearchFilter.SONGS)` (songs from `TopTrack`/`Track` rows), first 10 hits scored. Score = 0.8 recall + 0.2 precision over words (brackets removed, 1-letter typo accepted for words of 4+ letters); with an artist 0.65 title + 0.35 artist. Best < 0.75 and `confirmBeforePlay` on: the overlay offers the top three (click, or hotkey for the first; 8 s timeout). Off: plays the best anyway.
+- **Undo** exists only for a played song: it calls `previous` (restarts the song if more than 10 s in; not an exact inverse, because one-off queues keep the old queue behind the new song). Add-to-playlist, like and playlist play have no undo (no existing removal/unlike function was wrapped).
+- **Playlists:** only the local playlists (`playlists` in `DesktopApp.kt`). Add uses the existing `addToPlaylist(playlist)` by setting `playlistTarget` to the current song first. Like only ever LIKEs (`rate(song, LikeStatus.LIKE)` if not already liked), never toggles it off. Play playlist = `playSongs(playlist.songs)`.
+- Volume: step 0.1 through `DesktopPlayerHost.onVolumeChange` (same path as the slider; it persists).
+- **Privacy:** recognised words exist only in `DesktopVoiceState.Done.heard` for the display time (2.5 s; 8 s with choices; 1.2 s after undo), then the state is `Idle` and `undoAction`/`pendingChoices` are cleared. Logs: "voice command handled", "voice: error=CODE", "voice: hotkey registered", "voice: watchdog returned to idle"; never words.
+- The tick plays BEFORE recording starts (so it is not recorded); recording therefore starts about 100 ms after the press.
+- Overlay position is computed in the window's own AWT units (screen bounds and window size are in the same units), after a short delay so the window has its size.
+
+### Verified
+**NOT compiled. Tests NOT run** (no Kotlin compiler in this chat). Hand-traced against the code: hotkey parse/describe cases, the scoring examples, every state-machine test including the second-press, Esc and watchdog paths, and the parser phrases the tests rely on (read in `DesktopVoiceCommands.kt`). Brace/paren balance checked by script, imports checked, no new top-level name clashes (grep), no `private` type in an `internal` signature, `Modifier.weight` only inside `Row`, no `Modifier.align` used. Windows-only code is behind `VoiceUser32Loader.api` (null off Windows, loaded lazily).
+Compile watch-list if the build complains: `Window(... focusable = false, alwaysOnTop = true ...)` parameter names (Compose 1.10.3); `WindowState.size = DpSize(...)` setter; `Memory.close()`/`clear()`; `return` inside `runCatching { }` in `placeNearBottomCentre`; the default argument `{ chosen -> defaultFindModel(chosen) }` (companion function in a constructor default); `scope.launch(Dispatchers.IO) { runCatching { warm(model.encoder) { isActive } } }`; `Outcome(...).also { }` chains in `execute`; test lambdas typed `(Int, () -> Boolean) -> Result<ShortArray>`.
+
+### Deferred
+- The overlay `Window` is a JFrame: Windows may flash a taskbar button each time it opens. If seen on the laptop, switch to `DialogWindow` or set `WS_EX_TOOLWINDOW` through `DesktopWindowsFrame`.
+- The overlay window is created per command, so "Listening..." can appear a fraction of a second after the tick. A resident hidden window was rejected (the plan says created only when not Idle).
+- No account (online) playlists, no "undo add to playlist", no Esc while the tray is the only thing visible other than what the poll sees (it works anywhere, but nothing else cancels).
+- `hotkeyStatus()` TAKEN is only readable by polling; V4 shows it after `refresh()`.
+- Black console window flash from the recognizer program (see V2 note) still untested.
+
+### Exact next step
+V4: `DesktopVoiceSettings.kt` (persisted, same names as `DesktopVoiceRuntime` fields; setting `enabled`/`hotkey` calls `DesktopVoiceRuntime.controller.value?.refresh()`), `DesktopVoiceSettingsUi.kt` (Experimental group, model and program install flow, hotkey capture using `VoiceHotkey.parse`/`describe`, test button, privacy box), README section, owner test checklist. Feed `DesktopVoiceRuntime.enabled/modelDir/sidecarExe/hotkey/confirmBeforePlay` from the settings (or replace `DesktopVoiceRuntime.config()` in the hook). Build once (GitHub Actions) after V4; V3 and V2 have never been compiled.
+
+## VOICE V4: settings, install flow, privacy notes, integration (NOT compiled)
+
+### Did
+- `DesktopVoiceSettings.kt`: `DesktopVoiceSettings` (persisted via `DesktopPersistence`, strings/booleans only: `voice_enabled` false, `voice_hotkey` text such as "Ctrl+Alt+Space", `voice_model_dir`, `voice_sidecar_exe`, `voice_confirm_before_play` true; `StateFlow` getters, `set*` setters; `setEnabled`/`setHotkey` call `DesktopVoiceRuntime.controller.value?.refresh()`), `VoiceInstallState`, `DesktopVoiceInstall` (model and program downloads in the object's OWN scope, so leaving the page does not stop them; Cancel does; success fills in the matching setting), `VoiceModelStatus`, `VoiceSettingsLogic` (pure: `modelStatus`, status texts, `sameFolder`, `isManagedModelDir`, `removeModelFiles`, `looksLikeProgramName`, `hotkeyFrom`, `codeOf`, `testCodeOf`, `downloadErrorText`, `percent`).
+- `DesktopVoiceSettingsUi.kt`: `DesktopVoiceSettingsRows(rowVisible, toggle)` and `voiceVkFromComposeKey`. Master switch, privacy box (always shown), and, only while the switch is on: Model (status, Find on this computer, Choose folder, Download about 660 MB with progress and Cancel, Remove model / Forget this folder with a confirm dialog, licence line and link), Recognizer program (status, Find, Choose file, Download, unverified-link note and releases link), Hotkey (click-to-capture field, Reset, Esc cancels, "taken" and "Windows only" messages), "Ask before playing when unsure", Test (records 4 s, shows what was heard on the page only).
+- Hooks: `DesktopApp.kt` (`// VOICE V4 hook`, one `SettingsGroup("Experimental")` inside the existing ADVANCED section item, next to "Advanced options"); `DesktopVoiceController.kt` (`// VOICE V4 hook`: `DesktopVoiceRuntime` lost its temporary `@Volatile` fields, `config()` now reads `DesktopVoiceSettings`).
+- README: "Voice commands (experimental, desktop)" section with the honest limits.
+- Tests: `DesktopVoiceSettingsTest` (model status with a fake `check`, folder identity, `removeModelFiles` on empty temp files, program name check, hotkey building and round trip, Compose key to Windows key code, error texts and the mic privacy hint, percent, install starts idle). No microphone, window, model, network or saved settings.
+
+### Files
+New: `desktopApp/src/main/kotlin/com/music/bitchord/desktop/DesktopVoiceSettings.kt`, `DesktopVoiceSettingsUi.kt`; `desktopApp/src/test/kotlin/com/music/bitchord/desktop/DesktopVoiceSettingsTest.kt`.
+Edited: `DesktopApp.kt` (one marked block, found with grep, never opened whole), `DesktopVoiceController.kt` (the `DesktopVoiceRuntime` object and its comment), `README.md`, `HANDOFF.md`. No Gradle change, no new dependency, `sharedUi`/`shared`/`app` untouched.
+
+### Decisions (no questions allowed)
+- **Where:** a group "Experimental" inside the existing ADVANCED category (fewest edits: no new enum value, so `DesktopSettingsCategoriesTest` is unaffected). Search works: the group is a normal `SettingsGroup`, and every block asks the page's own `settingsRowVisible` (passed in as a lambda, because those helpers are `private` in `DesktopApp.kt`).
+- **Switch off = almost nothing on screen and nothing running:** only the switch and the privacy text show. The model/program/hotkey/test blocks appear only after the switch is on. Turning it on does NOT scan the disk or download anything by itself; the owner presses a button.
+- **Never run a mismatching model:** "Choose folder" only stores a folder when `check` says Ready; a wrong-format folder shows the plan's sentence and is not stored. "Find on this computer" lists Ready folders with "Use this" and wrong-format ones as text only.
+- **Remove model:** deletes the four model file names (and `.part` leftovers) only when the folder IS `DesktopVoicePaths.modelDir()` (the one this app downloads into), then the folder if empty. For a folder the owner chose it is "Forget this folder": the setting is cleared, nothing is deleted.
+- **Hotkey capture:** while capturing, the live hotkey is released with `controller.stop()` (otherwise pressing the current combination would start a recording) and re-registered with `refresh()` afterwards. A combination needs at least one of Ctrl/Alt/Shift/Win plus a key that `VoiceHotkey.keyName` knows (letters, digits, F1 to F12, Space, Enter, Tab, Backspace, arrows, Home/End/PageUp/PageDown, Insert, Delete). Esc without modifiers cancels. "Taken" is shown by polling `hotkeyStatus()` once a second while the block is on screen.
+- **Test button** uses `DesktopVoiceRecorder` and `SherpaSidecarRecognizer` directly (not the controller). The text lives in `remember` state and is cleared in `onDispose` when the page is left. Errors go through `VoiceMessages.forCode` (so the Windows microphone privacy hint appears for `no_microphone` and `mic_silent`; a static hint line is also under the button).
+- **Program path rule:** "Choose file" accepts only a file named `sherpa-onnx-offline(.exe)` (any case).
+- The Experimental group and the Linux build: the controller still does nothing off Windows; the page works but the hotkey cannot register (no message is shown for STOPPED).
+- The download link of the recognizer program is still UNVERIFIED (`DesktopVoiceSidecarSpec.VERIFIED = false`); the page says so, links the releases page and keeps "Choose file" next to it.
+
+### Verified
+**NOT compiled. Tests NOT run** (no Kotlin compiler in this chat). Hand-checked: brace/paren balance by script, imports (only `getValue`/`setValue` look unused by text and are needed for `by`), no duplicate top-level names (grep over `desktopApp/src`), no `private` type in an `internal` signature (`VoiceTestPhase` is private and only used inside private functions), `Modifier.weight` only in `Row`, no `Modifier.align`, Windows-only code none (no JNA in V4). Every test case hand-traced.
+Compile watch-list if the build complains: `produceState<VoiceModelStatus?>(null, a, b, c) { }` overload; `Key.Spacebar/MoveEnd/MoveHome/DirectionLeft/Insert/Delete/CtrlLeft/ShiftRight` constants and `isMetaPressed`; `getOrElse { return Result.failure(it) }` inside the private suspend `runVoiceTest`; trailing-lambda `check` argument of `VoiceSettingsLogic.modelStatus` in tests; `DesktopVoiceSidecar.deleteTree` used from the test; the `rowVisible` lambda literal in the `DesktopApp.kt` hook being inferred as `@Composable`; `buildMap { put(Key, Int) }` with the declared `Map<Key, Int>` type.
+
+### Deferred
+- `setEnabled`/`setHotkey` call `controller.refresh()` on the UI thread; registering the hotkey waits briefly for the message-loop thread. If a freeze is seen on toggling, move `apply()` to a background dispatcher.
+- No online (account) playlists, no undo for add/like (V3 deferrals unchanged).
+- No resume for downloads; no hash for the program archive.
+- A hidden taskbar flash of the overlay window and a possible black console flash of the recognizer program (V2/V3 notes) are still untested.
+- The controller is still built in `BitChordDesktopApp` (a window rebuild re-creates it); the page reaches it through `DesktopVoiceRuntime.controller`.
+
+### Exact next step
+Run the owner's GitHub Actions build (V2, V3 and V4 have never been compiled) and fix compile errors from the watch-lists in the V2, V3 and V4 sections. Then run the checklist below.
+
+### Owner test checklist (Windows laptop)
+1. Settings > Advanced > Experimental: the switch is off; nothing else shows except the privacy text. Search "voice" finds it. Check `%LOCALAPPDATA%\Muses\voice` does not exist yet.
+2. Turn the switch on: Model "Not installed", Recognizer program "Not found" (unless one is next to the app or on PATH). Still nothing downloaded.
+3. Model: press "Find on this computer". With the Handsy folder: a folder holding `encoder.int8.onnx`, `decoder.int8.onnx`, `joiner.int8.onnx`, `tokens.txt` gives "Use this"; a folder with `decoder_joint.onnx` gives the "different format" sentence. Or press Download (about 660 MB), watch the progress, press Cancel once and check the `.part` file is gone.
+4. Program: "Find", "Choose file..." (pick `sherpa-onnx-offline.exe`) or "Download" (link unverified).
+5. Hotkey: click the field, press `Ctrl+Alt+V`: it shows "Ctrl+Alt+V". Reset returns to Ctrl+Alt+Space. Try a combination another program owns: "taken" message.
+6. Test: press "Record 4 seconds", say "play bad guy by billie eilish": the words show on the page; leave the page and come back: they are gone.
+7. Hide Muses to the tray, hold the hotkey, say "play bad guy by billie eilish", release: the overlay shows, the song plays, the overlay disappears. Check `%TEMP%` for leftover voice folders (there must be none) and the log for recognised words (there must be none).
+8. Switch off: the hotkey no longer does anything. Restart the app with the switch on: the hotkey works at once.

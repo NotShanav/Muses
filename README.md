@@ -119,3 +119,17 @@ Honest limits:
 - The glass refracts what is inside the Muses window (the page), not the desktop behind a translucent Mica/Acrylic window; real desktop refraction is not possible with this stack.
 - It is a Skia shader: the first compile may take a moment, and very low-end GPUs may fall back to Classic. **Settings → Advanced → Glass lab (experimental)** shows whether the shader is available and why not.
 - The shader could not be run before it reached a real build, so expect one or two tuning rounds using Glass lab screenshots.
+
+
+### Voice commands (experimental, desktop)
+Under **Settings → Advanced → Experimental** you can turn on hands-free voice commands. It is **off by default**; nothing is loaded, recorded or downloaded until you switch it on. Hold the hotkey (default `Ctrl+Alt+Space`, changeable; it works while Muses is hidden in the tray), say a command, let go: *play bad guy by billie eilish*, *pause*, *resume*, *next*, *previous*, *volume up/down*, *shuffle on/off*, *like this*, *add this to <playlist>*, *play my <playlist>*, *what's playing*.
+
+Recognition runs **offline on the CPU** with the NVIDIA Parakeet unified English 0.6B model (int8, about 660 MB, NVIDIA Open Model License) through the sherpa-onnx offline program. Neither is bundled with Muses: the settings page can find an existing copy, let you choose a folder or file, or download them when you press the button.
+
+Privacy: the model is loaded only while a command is processed and then unloaded. Audio stays in memory (one short temporary WAV is overwritten and deleted straight afterwards), and no audio, transcript or recognised text is saved to a file, the settings or the log. The only network use is the one-time downloads you start yourself.
+
+Honest limits:
+- English only; song, artist and playlist names can be misheard (the overlay offers the top matches when it is unsure).
+- About 1 GB of RAM is used while a command is processed; with under 1.8 GB free it refuses. The first command after a while can take a few seconds because the model is read from disk each time.
+- The global hotkey is Windows-only. Windows must allow desktop apps to use the microphone (Settings → Privacy → Microphone).
+- The recognizer download link could not be verified when this was written; "Choose file..." always works.
