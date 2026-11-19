@@ -994,3 +994,172 @@ Hand `Muses.zip` and `MUSES_VOICE_X2_PART_B_CODEX.md` to Codex: start at B0, the
 
 ### Exact next step
 Run `./gradlew :desktopApp:test --tests '*Voice*'` with a working JDK, then inspect all `[WRONG]` lines before `[MISS ]` lines from `DesktopVoiceEvalTest`; fix code and rerun until wrong-action is at most 3%. Check the duplicate-playlist choice path before claiming Part B8.
+
+
+## BUDS B1: earbuds protocol core, pure Kotlin (NOT compiled)
+
+### Did
+- Frame builder and streaming parser (`BudsFrames`, `BudsFrameParser`): LEB128 `TotalLen` (short and long form), arbitrary chunking (split or joined), resync on `0xAA`, impossible lengths rejected (below 4 or above 2048), slice frames skipped whole, a declared payload longer than the bytes present is cut short, never throws. Payload starts at index 9 (body offset 7 after the length field).
+- Command / event / feature numbers as named constants (`BudsIds`), each traced to a PROTOCOL.md section in its comment.
+- Decoders (`BudsParsers`): product id, broadcast codes, battery (merge-friendly: unknown or zero levels become null), wearing (offset 0/1 tolerance, exact length preferred), ANC notify mask (only when bytes 1-2 are `01 01`), ANC reply mask, `decodeNoiseMask` (a mask test, never an enum), feature values (reply and `0x0503` push), game-mode push, ack status.
+- Builders: handshake, product id, broadcast query, register pushes (count first), status query, ANC query, battery, wearing, set ANC (Adaptive is four bytes `01 01 00 08`), feature switch, reply to a request from the buds.
+- `BudsSession`: init at 300 ms then 200 ms apart (handshake, product id, broadcast, register, feature status, ANC read, battery, wearing), applies pushes and replies, polls battery + feature status every 60 s (wearing never polled), `setNoiseMode` (ack 00 then ANC read-back, true only if a fresh observation matches, about 2 s bound), `setLowLatency` (ack, then up to 0.9 s for a push, then a read; about 2.3 s worst case), closed transport (`read` = -1) or failed write sets `connected = false` and stops. `delayFn` and `nowMs` are injectable (virtual time).
+- `DesktopBudsNames.isLikelyCompatible`: data-driven regex list over a normalised name.
+- `docs/third_party/BUDS_CREDITS.md` and one README line (see Decisions).
+
+### Files
+New (all under `desktopApp/src/main/kotlin/com/music/bitchord/desktop/`): `DesktopBudsProtocol.kt`, `DesktopBudsSession.kt`, `DesktopBudsNames.kt`.
+New tests (`desktopApp/src/test/kotlin/com/music/bitchord/desktop/`): `DesktopBudsProtocolTest.kt`, `DesktopBudsSessionTest.kt`, `DesktopBudsNamesTest.kt`.
+New docs: `docs/third_party/BUDS_CREDITS.md`; `MUSES_BUDS_PLAN.md` copied into the repo root (it was attached, not in the zip). Edited: `README.md` (one line), `HANDOFF.md`.
+No existing Kotlin file was touched, so there are no `// BUDS B1 hook` marks. `DesktopApp.kt` was never opened. No Gradle file, dependency or version changed; `sharedUi`, `shared`, `app` untouched. No Windows, Compose, JNA or file import in the B1 files (only `kotlinx.coroutines`, `java.util.concurrent`, `java.util.Locale`).
+
+### Decisions (no questions allowed)
+- **LEB128 follows the source, not the plan.** The plan says "for >= 128 subtract 1 ... decode adds 1 back". QuickBuds `docs/PROTOCOL.md` section 2 says that does NOT fit and gives `AA 83 01` for 131 and `AA 81 02` for 257, and `core/src/wire.rs` (6.1.1) uses standard LEB128. I implemented standard LEB128. Short frames are identical either way. Tests pin 131 -> `83 01`, 257 -> `81 02`.
+- Battery and wearing payloads are PAIRS `[part][value]`, not triples as the plan text says. A reply carries a leading status byte `00`; a push does not. Parsers try offset 0 and 1 and keep the exact-length plausible one.
+- Level `0`, or above 100 after `& 0x7F`, means "not known": that part is null and a merge keeps the old value (PROTOCOL.md section 13). A zero lid-close push clears nothing; it only sets `inEar = (false, false)`.
+- `productId` is the id the vendor lists use (the 3 bytes little endian read as hex: `00 14 54 06` -> `065414`). Not a device address.
+- `supportedNoiseModes`: empty until ANC is offered (event 03 in the broadcast codes) or a mode is observed; then OFF, NOISE_CANCELLING, TRANSPARENCY; ADAPTIVE is added only after the buds have reported it. Reason: no listed fact says which models have Adaptive. `setNoiseMode(ADAPTIVE)` is still allowed and is judged by the read-back.
+- Registered events = {battery 1, wearing 2, ANC 3, game mode 5} intersected with what the buds offer; if the offer is unknown or empty, `01 02 03`. Event 05 is subscribed only when offered.
+- Feature status asks only ids `05 06 28` (short list: a long list dropped one model's link, PROTOCOL.md section 16). Low latency id is `0x28` if listed, else `0x06` (the plan's rule).
+- Replies are matched by command only (not seq): some models answer with their own seq.
+- Our request seqs run 1..254 and wrap; `0xFF` is a push.
+- Plan extension from PROTOCOL.md section 11: the session answers the buds' own requests `0x0500` (time, `00` + unix seconds u32 LE), `0x050C` (`00 01 00`), `0x051C` (`00 00 00`), `0x051D` (`01`), because some firmwares reset the link when unanswered. Nothing else is answered. The time sent is the PC clock; it goes only to the buds.
+- `BudsState.connected` becomes true on `start()`, false on close, read -1, or a write failure.
+- `BudsSession(transport, scope, delayFn, nowMs, debugLog)`: `debugLog` stays null unless B3 passes a logger when the debug switch is on; it then gets hex of control frames only (0x0403/0x0404/0x010C/0x010D/0x0503 and ANC / game-mode pushes), never the handshake, never names or addresses.
+- The session runs under a child `SupervisorJob` of the given scope: `close()` cancels only the session and closes the transport; the caller's scope stays alive.
+- Credits file and README line were added now (the plan lists them under B3) so GPL attribution ships with the first code that uses the protocol. B3 only needs to check them. No commit hash exists (the zip has no `.git`): the file records "QuickBuds 6.1.1 zip, PROTOCOL.md dated 2026-11-12, header says 5.4.5". The addresses of OPPO-Pods-Win and DevPods are the plan's names and are marked unchecked.
+- Tests use `runBlocking` and a small virtual clock inside the test file (no `kotlinx-coroutines-test`, which is not a dependency).
+
+### Verified
+**NOT compiled. Tests NOT run** (no Kotlin compiler here). Done: brace/paren/bracket balance by script on all 6 Kotlin files; grep: no duplicate top-level names in the repo; import list checked (no Windows/Compose); expected frame hex and LEB values recomputed with an independent Python port (worked examples from the plan byte for byte); every parser and session test traced by hand, including the virtual-time schedule (init writes at 300, 500, ..., 1700 ms; polls at 61 700 and 61 900 ms).
+Compile watch-list if the build complains: `when (f.cmd)` branches written as `BudsIds.X or BudsIds.REPLY_BIT`; `private class ListAt` inside `BudsParsers` used in a private function signature; `debug?.let { list -> { s: String -> list.add(s); Unit } }` in the session test; `configure = { it.x = ... }` lambdas ending in an assignment; test functions written as `= runSession { ... }` (must return Unit); `ChannelResult.getOrNull()`; `Env` extension functions on a private nested class.
+
+### Deferred
+- **Other brands' ANC encodings.** Decoding uses the OnePlus Buds 4 report table. realme models report with their write bits (Transparency `0x02`, Light `0x04`, Deep `0x08`, ...), which this decoder would read wrongly (`0x02` as ANC). Needs a model gate or a capture; none exists.
+- **Adaptive discovery:** no protocol fact says which models offer it, so it appears only after the buds report it. A product-id table (a data entry) could list it; B3/B4 may add one.
+- **Low-latency quirks:** on Buds Pro 3 style firmware `28` acks but reads back `0` (PROTOCOL.md 21.5); the plan's "0x28 first" rule then makes `setLowLatency` return false there. Not handled.
+- Slice (multi-frame) messages are skipped; no long reply is needed by B1. A half-received frame whose rest never arrives can swallow the next frame until its declared length is consumed (cap 2048 bytes); upstream has the same weakness.
+- No handling of the Fast Pair message stream (battery-only fallback) and no model table, by plan.
+- Windows RFCOMM transport (B2), controller and settings (B3), chip and pill hooks (B4) are not started.
+
+### Exact next step
+Run **B2** on this zip (`DesktopBudsWindows.kt`: JNA ws2_32 / bthprops, `WindowsRfcommTransport` implementing `BudsTransport`: `read` returns 0 on a receive timeout, -1 when closed). Then build in GitHub Actions and fix compile errors from the watch-list above.
+
+
+## BUDS B2: Windows Bluetooth transport and device discovery (NOT compiled)
+
+### Did
+- `DesktopBudsDevices.connectedCompatible()`: lists the Bluetooth devices Windows already knows (`BluetoothFindFirstDevice` / `FindNext` / `FindDeviceClose` from `bthprops.cpl`, `fIssueInquiry = false`, never a scan), keeps those with `fConnected` true and `DesktopBudsNames.isLikelyCompatible(name)`, one entry per address. Blocking native call: callers use `Dispatchers.IO`. No cache. Empty list on non-Windows or on any failure.
+- `WindowsRfcommTransport(device, uuids) : BudsTransport` and `WindowsRfcommTransport.open(device): Result<WindowsRfcommTransport>`: for each UUID in `BudsIds.SERVICE_UUIDS` order (079A, then 1107) creates an `AF_BTH` / `SOCK_STREAM` / `BTHPROTO_RFCOMM` socket and `connect`s with `serviceClassId` = the UUID and `port = 0` (Windows resolves the channel by SDP). The connect runs on a daemon worker thread with a 6 s bound; on timeout the socket is closed, which makes the blocked connect return. First success wins.
+- `read` loops on a 500 ms receive timeout and checks coroutine cancellation each turn (so a cancelled reader stops within about 0.5 s); it returns bytes read, or -1 when the buds close or the link breaks. It never returns 0. `write` sends in a loop with a 5 s send timeout and throws `IOException` on failure (the session turns that into a disconnect). `close()` is idempotent, closes the socket (a blocked read then returns -1) and releases Winsock; the last release calls `WSACleanup` (`BudsWinsock` + pure `BudsRefCounter`).
+- Failure type: `Result.failure(BudsConnectException(code, message))`, codes `ALREADY_IN_USE`, `NOT_CONNECTED`, `TIMEOUT`, `UNKNOWN` (`BudsErrorCodes`), mapped from `WSAGetLastError` by `BudsSocketErrors.toCode`. The code reported is the one from the FIRST UUID (079A), because the second UUID times out on most models and would hide the real reason.
+- Every native call is wrapped; nothing throws to the caller. JNA is loaded lazily (`BudsNative.ws2` / `.bth` are `by lazy` and null off Windows). Off Windows: discovery is empty and `open` returns failure code `UNKNOWN` ("works on Windows only").
+
+### Files
+New: `desktopApp/src/main/kotlin/com/music/bitchord/desktop/DesktopBudsWindows.kt`; `desktopApp/src/test/kotlin/com/music/bitchord/desktop/DesktopBudsWindowsTest.kt`. Edited: `HANDOFF.md`. No existing Kotlin file touched (no `// BUDS B2 hook` marks), no Gradle change, no dependency (JNA and jna-platform were already there), `sharedUi` / `shared` / `app` untouched, `DesktopApp.kt` never opened.
+Contract note for B3: `BudsDevice(name, address)` has a redacted `toString` (short hash only); `BudsConnectException.code` is what B3 maps to messages; `BudsDevice`, `BudsConnectException`, `BudsErrorCodes` live in `DesktopBudsWindows.kt`.
+
+### Decisions (no questions allowed)
+- **Native structures are raw byte blocks, not JNA `Structure` subclasses** (the plan said Structure). `DesktopProcessMemory.kt` documents Kotlin/JNA field-reflection pitfalls and already uses raw `Memory`; I followed that. The layouts live in pure builders / parsers that are unit tested: `BudsSockaddr` (30 bytes, packed), `BudsSearchParams` (40 bytes on 64 bit, 32 on 32 bit), `BudsDeviceInfoLayout` (560 bytes), `BudsGuid`.
+- `SOCKET` is declared as a JNA `Pointer` (pointer sized, so it is right on 32 and 64 bit); `INVALID_SOCKET` is detected as all-ones (`-1`, or `0xFFFFFFFF`).
+- `BluetoothGetDeviceInfo` was not needed (the find loop already returns `fConnected`) and is not declared.
+- The WSAStartup version is 2.2; the `WSADATA` buffer is 512 bytes (larger than the real struct on both widths).
+- Winsock error mapping (see Unverified): refused / address in use / access denied / already connected give `ALREADY_IN_USE`; timed out gives `TIMEOUT`; network or host down, reset, aborted, not connected, address unavailable, address family unsupported give `NOT_CONNECTED`; anything else `UNKNOWN`.
+- Nothing is logged in this file (no names, no addresses); `BudsAddress.shortHash` exists for B3 if it wants a log tag.
+
+### Unverified (written from memory of the Win32 headers, no Windows machine here)
+- `SOCKADDR_BTH` is packed (`pshpack1`): family @0, `btAddr` @2, GUID @10, port @26, size 30.
+- `BLUETOOTH_DEVICE_SEARCH_PARAMS`: `cTimeoutMultiplier` is a `UCHAR` @24 followed by padding, `hRadio` aligned to the pointer size (32 on x64).
+- `BLUETOOTH_DEVICE_INFO` = 560 bytes: address @8, class @16, `fConnected` @20, `fRemembered` @24, `fAuthenticated` @28, two `SYSTEMTIME` @32 and @48, name @64 (`WCHAR[248]`).
+- `Native.load("bthprops.cpl", ...)` with the extension (as the plan says); if JNA cannot find it, discovery silently returns empty. If that happens, try `"bthprops"`.
+- `SO_RCVTIMEO` / `SO_SNDTIMEO` take a `DWORD` of milliseconds on Windows, and `recv` then fails with `WSAETIMEDOUT` (10060).
+- Which Winsock error an "another app holds the service" failure really gives (the plan itself marks one RFCOMM client per service as unverified). The `ALREADY_IN_USE` mapping is a best guess; real devices may report `TIMEOUT` or `NOT_CONNECTED` instead.
+- `fConnected` is true for a paired device that is currently connected at the ACL level; if some earbuds report it false while playing audio, discovery would miss them.
+
+### Verified
+**NOT compiled. Tests NOT run** (no Kotlin compiler, no Windows). Done: brace / paren / bracket balance by script on both files; no duplicate top-level names in the repo (grep); the FNV short hash recomputed in Python (the two test addresses give different values); GUID, sockaddr and device-info expectations hand-traced; every test hand-traced. The tests cover only the pure parts (MAC string to address and back, GUID byte order, native layouts, error mapping, the connected-and-compatible filter over fake lists, the reference counter, redacted `toString`, and "off Windows nothing happens"). No test needs Bluetooth, a window or the network.
+Compile watch-list: `ULong` arithmetic in `BudsAddress.shortHash`; `Memory(...).use { }` nested lambdas returning a value in `BudsNative.enumerate`; smart cast of `s` (a `val Pointer?`) inside the worker lambda in `tryService`; `Result<Unit>.map { transport }` and `Result` as a function return type; `const val AF_BTH: Short = 32`; `private fun connectBlocking()` called from the companion `open`; the `onLast = { runCatching { ... } }` lambda whose value must be ignored (`() -> Unit`).
+
+### Deferred
+- Run on a real Windows machine with earbuds: whether `bthprops.cpl` loads, whether `fConnected` is true for connected earbuds, which Winsock error a busy service gives, and whether 079A connects on the owner's model.
+- No retry or back-off here (B3 owns that); no SDP query to learn the model; no pairing (Muses never pairs).
+
+### Exact next step
+Build in GitHub Actions now (owner's route: build after B2) and fix errors from the two compile watch-lists (B1 and B2). Then run **B3** on the zip: `DesktopBudsController` (poll `DesktopBudsDevices.connectedCompatible()` on `Dispatchers.IO`, open with `WindowsRfcommTransport.open`, run `BudsSession(transport, scope, debugLog = ...)`), settings, UI group, `docs/BUDS_SYNC.md` (the credits file already exists; B3 only needs to check it).
+
+
+## BUDS B3: controller, settings, sync guide (NOT compiled)
+
+### Did
+- `DesktopBudsSettings` (persisted, `DesktopPersistence`): `enabled` (false), `autoConnect` (true), `debugFrames` (false). Setting `enabled` calls `DesktopBudsRuntime.refresh()`.
+- `DesktopBudsController(scope, ...)`: `ui: StateFlow<BudsUiState>`, `start()` (single flight), `stop()` (cancels the loop, closes session and socket, shows `Off`), `setNoiseMode`, `setLowLatency`, plus one addition `connectNow()`. Loop: every 8 s `DesktopBudsDevices.connectedCompatible()` on `Dispatchers.IO` (default lambda); 0 candidates -> `Searching`; more than one -> `Problem(MULTIPLE)` and nothing is opened; exactly one -> `Connecting` -> `WindowsRfcommTransport.open` -> `BudsSession` -> `Connected(name, state)` (state republished on every change). Open failure -> `Problem(code, message)` then back-off; session end (lid close, link drop) -> `Searching`, back-off, retry when the device is listed again. All dependencies (device list, transport opener, session factory, switches, delay, clock) are constructor parameters with real defaults, so tests use fakes. Nothing throws out of the loop; the socket is closed in a `finally`.
+- `BudsControllerLogic` (pure): `backoffMs` 8 s, 16 s, 30 s, then 60 s; `messageFor(code)`; `statusLine(ui, enabled)` (never contains the device name).
+- `DesktopBudsRuntime` (object in `DesktopBudsController.kt`): owns the one controller and its scope. It does nothing (no scan, no socket) until `refresh()` sees the switch on. `shutdown()` on app exit.
+- `DesktopBudsSettingsUi.kt`: rows inside the existing Experimental group: master switch with honest description (brands, pair in Windows first, one controlling app), status line, "Connect now" button (only when auto connect is off and a pair was found), "Auto connect", "Debug frames", credits text with an "Open QuickBuds on GitHub" button.
+- `docs/BUDS_SYNC.md` written. `docs/third_party/BUDS_CREDITS.md` and the README line (both from B1) were checked and left as they are.
+
+### Files
+New (main, `desktopApp/src/main/kotlin/com/music/bitchord/desktop/`): `DesktopBudsController.kt`, `DesktopBudsSettings.kt`, `DesktopBudsSettingsUi.kt`. New test: `DesktopBudsControllerTest.kt`. New doc: `docs/BUDS_SYNC.md`.
+Edited: `DesktopApp.kt`, two small blocks, both marked `// BUDS B3 hook` (found only by `grep -n` and `sed -n`, the file was never opened whole): the earbuds rows right after the voice rows in the "Experimental" `SettingsGroup`, and a `DisposableEffect(Unit)` right after the voice controller's one (calls `DesktopBudsRuntime.refresh()`, `shutdown()` on dispose). `HANDOFF.md`.
+No Gradle file, dependency or version changed. `sharedUi`, `shared`, `app` untouched. No B1 or B2 file touched.
+
+### Decisions (no questions allowed)
+- **Contract additions, old names kept:** `DesktopBudsController.connectNow()` and `DesktopBudsRuntime` (not in the plan). Reason: "Auto connect" off needs a way to connect, and B4 needs one place to read `ui` without creating its own controller. **B4: do NOT create a second controller; read `DesktopBudsRuntime.controller.ui` and call `DesktopBudsRuntime.controller.setNoiseMode/setLowLatency`.** The plan's "wire the controller into the app scope in DesktopApp.kt" is already done by the B3 hook.
+- Settings placement: no new `DesktopSettingsSection` or category; the rows sit in the existing Experimental group (Advanced and diagnostics), like voice.
+- More than one compatible pair connected: show `Problem(MULTIPLE)` and open nothing (the plan says "exactly one candidate").
+- Autoconnect off: state `Problem(FOUND, ...)` ("press Connect now"); `connectNow()` allows one attempt. Its flag is cleared whenever no single candidate is present, so it cannot spin the scan.
+- Back-off counting: `failures` counts consecutive failures; a link that was up at least 20 s resets it to 1 when it drops. First failure waits 8 s, then 16, 30, 60. The wait is sliced into 500 ms pieces so `connectNow()` and `stop()` act quickly.
+- Messages: `ALREADY_IN_USE` is the plan's text verbatim. `TIMEOUT` and `NOT_CONNECTED` also point at QuickBuds / HeyMelody, because B2 itself says the real Winsock code for "service busy" is unverified and the device was listed as connected (a healthy link). `UNKNOWN` and any other code: "Could not open the earbuds control channel."
+- Battery saver: the repo has no such flag (grep), so it is ignored, as the plan allows.
+- Debug frames: when the switch is on at the moment a session starts, the session gets a logger that writes `buds: <hex>` to `System.err` (control frames only, as B1 defined). A changed switch applies from the next session.
+- **BUDS_SYNC.md uses the real upstream section numbers**, not the plan's (plan: 2 frame, 3 commands, 5 ANC, 7 battery, 8 wearing, 9 features). In QuickBuds 6.1.1 `PROTOCOL.md`: 1 transport, 2 frame, 3 sequence and replies, 6 init, 8 subscriptions, 10 pushes, 11 requests from the buds, 13 battery and wearing, 14 ANC, 16 feature switches, 21 per-model rules.
+- **Optional item 5 (battery chip for other Bluetooth audio devices): skipped.** The repo has no existing code that reads the Windows device battery property (grep for `DEVPKEY`, `SetupDi`, `BatteryLevel`, `CM_Get_DevNode_Property` found nothing), so there is no safe way I can confirm.
+- The credits link opens in the system browser through the existing `DesktopExternalLinks.open`; nothing is fetched by Muses.
+
+### Verified
+**NOT compiled. Tests NOT run** (no Kotlin compiler or Gradle here; nothing Bluetooth was touched). Done: brace / paren / bracket balance by script on all Buds files; grep for duplicate top-level names (`BudsUiState`, `BudsProblemCodes`, `BudsControllerLogic`, `DesktopBudsController`, `DesktopBudsRuntime`, `DesktopBudsSettings`, `DesktopBudsSettingsRows`, `BUDS_CREDIT_URL`: each defined once); imports checked by hand against the repo's other files (`catch (_: ...)`, `DesktopExternalLinks.open`, `DesktopSecondary`, `DisposableEffect` already used there); every controller test traced by hand against the loop, including the wait totals (two failures: 8 000 + 16 000 ms = 24 000 ms exactly).
+Compile watch-list: `Result<BudsTransport>` as the return type of a function-type constructor parameter (default `WindowsRfcommTransport.open(device)` relies on `Result<out T>` covariance); `Result.failure<BudsTransport>(...)` inside a `try` expression; `return` inside `synchronized { }` in `start()`; `currentCoroutineContext().isActive`; the `if (st.connected) publish(...) else ended.complete(Unit)` statement as the last line of a `collect` lambda; test lambdas `open = { n -> if (n <= 2) Result.failure(...) else Result.success(transport) }` (type inference to `Result<BudsTransport>`); test functions written as `= runBlocking { ... }` must end in a `Unit` expression (they end with `r.scope.cancel()`).
+Tests are timing-based with 5 ms fake delays and a 5 s timeout per wait; if one is flaky on CI, raise the fake delay, not the code.
+
+### Deferred
+- Everything on real hardware: whether the controller finds the earbuds (B2 unverified items), the real error for "another app is connected", `fConnected` behaviour while audio plays.
+- No Settings search text for the "Connect now" row beyond the status block's title and subtitle.
+- Optional battery-only chip for other brands (see Decisions).
+- B4: the chip, pill hooks, Studio element, Glass lab shader fix, `DesktopApp.kt` pill wiring.
+
+### Exact next step
+Build in GitHub Actions and fix compile errors from the B1, B2 and B3 watch-lists. Then run **B4** on this zip: use `DesktopBudsRuntime.controller.ui` (and its `setNoiseMode` / `setLowLatency`) for the chip; do not create another controller.
+
+
+## BUDS B4: earbuds chip in the pill, Studio element, shader check (NOT compiled)
+
+### Did
+- **Step 0:** `DesktopGlassShader.kt` already uses `outRgb` (no second `c`). Scanned the whole SkSL `main` for repeated names: none. No edit.
+- `DesktopBudsChip.kt` (new): `DesktopBudsChip(ui, onSetNoise, onSetLowLatency, modifier)` draws nothing unless `ui is Connected`. Chip: Headphones icon (already imported in `DesktopApp.kt`), lowest bud percent (`--` if unknown), a lightning mark when that bud charges, 44 dp tall target. Tap opens a `DropdownMenu` (same style as the pill's "more"): device name, Left / Right / Case rows (missing ones hidden), a text hint from `inEar`, a segmented control of ONLY the reported modes, a Low latency switch when supported. A change shows "Setting..." until the read-back matches or 3.5 s pass, then the real state is shown. Only alpha animation, 0 ms with `reduceAnimation`.
+- `DesktopBudsPillSlot(preview, modifier)`: reads `DesktopBudsRuntime.controller.ui` (no second controller). `preview = true` shows FAKE data with no-op callbacks.
+- `BudsChipLogic` (pure): `lowestBattery`, `visibleModes`, labels, `wearHint`, pending/settled rules, `ensureElement`, `previewState`.
+- New pill element `buds`: in `PILL_ELEMENTS`, default right zone just before `more`, label "Earbuds" in the Studio list (checkbox like the others), Studio simple preview text "Buds 82%", Liquid pill (real preview uses the fake chip) and Classic pill draw the slot. `validated()` runs `BudsChipLogic.ensureElement`, so old saved or imported layouts without it gain the chip before `more`. Presets keep the layout, so they keep the chip.
+- Controller wiring: nothing new. The B3 `DisposableEffect` in `DesktopApp.kt` already calls `DesktopBudsRuntime.refresh()` / `shutdown()`.
+
+### Files
+New: `desktopApp/src/main/kotlin/com/music/bitchord/desktop/DesktopBudsChip.kt`; test `DesktopBudsChipTest.kt`.
+Edited, each marked `// BUDS B4 hook`: `DesktopPillStudio.kt` (element list, default zones, `validated()`, preview text, label), `DesktopLiquidPill.kt` (one `"buds"` branch), `DesktopApp.kt` (one `"buds"` branch in the Classic pill, found by `grep -n`, `sed -n`; never opened whole). `DesktopPillPresets.kt` needed no change. No Gradle change, no new dependency; `sharedUi`, `shared`, `app` untouched.
+
+### Decisions (no questions allowed)
+- Chip percent = lowest of the two buds (case never counts); tie prefers the charging bud; unknown = `--`.
+- Missing `buds` in a layout is re-added on every `validated()`. To hide the chip use the checkbox (`hiddenElements`), as for other elements; dragging it out of every zone is not possible.
+- Segmented control is my own row of clickable boxes (short labels Off / ANC / Transparency / Adaptive) instead of `FilterChip`, so four modes fit in a 300 dp popup.
+- Charging mark and rows use the text character U+26A1, since no Bolt icon import is confirmed in the repo.
+- With the feature off or no earbuds the slot draws nothing, so the pill looks as before (the 4 dp row spacing of an empty element is the only trace: an element that draws nothing adds no spacing in `Row`).
+
+### Verified
+**NOT compiled. Tests NOT run** (no Kotlin compiler here). Done: brace / paren balance by script on the three touched or new Kotlin files; grep: each new top-level name defined once; imports checked by hand; tests traced by hand against `ensureElement`, `validated()` and `DesktopPillPresets.import/export/apply`.
+Compile watch-list: `if (open) DismissOnDisplayChange { open = false }` inside a `Box`; `Switch` / `DropdownMenu` content lambdas using `weight` (Row/Column scope only); `animateFloatAsState` delegate; `assertNotNull(loaded)` smart cast in the new test; the `ensureElement` call returning `Map` then `.toMutableMap()`.
+
+### Deferred
+- Everything on real hardware (B2 unverified list still applies), including how the popup looks over the Liquid glass pill.
+- Pending timeout (3.5 s) is a guess; tune after a real test.
+- The Studio preview in the simple (non-liquid) renderer shows only text, not the real chip.
+
+### Exact next step
+Build in GitHub Actions and fix errors from the B1 to B4 watch-lists. Then test with real earbuds: pair in Windows, Settings > Experimental > Earbuds on, close QuickBuds / HeyMelody, check the chip and the popup.

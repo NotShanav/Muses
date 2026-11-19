@@ -3087,6 +3087,11 @@ fun BitChordDesktopApp() {
             if (DesktopVoiceRuntime.controller.value === voiceController) DesktopVoiceRuntime.controller.value = null
         }
     }
+    // BUDS B3 hook: start the earbuds controller only when the saved switch is on; release the socket on exit.
+    DisposableEffect(Unit) {
+        DesktopBudsRuntime.refresh()
+        onDispose { DesktopBudsRuntime.shutdown() }
+    }
 
     // The engine's measured stream, as the player's quality badge and stats line read it.
     LaunchedEffect(playback.streamFormat, playback.streamSourceId) {
@@ -5002,6 +5007,7 @@ internal fun DesktopFloatingMiniPlayer(
                     if (repeatMode == DesktopRepeatMode.ONE) Text("1", color = DesktopAccent, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.labelMedium)
                     else Icon(BitChordIcons.Repeat, "Repeat ${repeatMode.label()}", tint = if (repeatMode == DesktopRepeatMode.OFF) DesktopSecondary else DesktopAccent, modifier = Modifier.size(17.dp))
                 }
+                "buds" -> DesktopBudsPillSlot(preview = false) // BUDS B4 hook
                 "more" -> Box {
                     DesktopSpringButton(onClick = { moreOpen = true }, size = 34.dp) { Icon(Icons.Rounded.MoreHoriz, "More playback options", tint = DesktopSecondary) }
                     if (moreOpen) DismissOnDisplayChange { moreOpen = false }
@@ -6965,6 +6971,11 @@ private fun DesktopSettingsScreen(
                 // VOICE V4 hook: the Experimental group (voice commands), inside the Advanced category.
                 SettingsGroup("Experimental") {
                     DesktopVoiceSettingsRows(
+                        rowVisible = { title, subtitle -> settingsRowVisible(title, subtitle) },
+                        toggle = { title, subtitle, checked, onChange -> SettingsToggle(title, subtitle, checked, onChange) },
+                    )
+                    // BUDS B3 hook: earbuds (experimental) rows, same group as voice.
+                    DesktopBudsSettingsRows(
                         rowVisible = { title, subtitle -> settingsRowVisible(title, subtitle) },
                         toggle = { title, subtitle, checked, onChange -> SettingsToggle(title, subtitle, checked, onChange) },
                     )

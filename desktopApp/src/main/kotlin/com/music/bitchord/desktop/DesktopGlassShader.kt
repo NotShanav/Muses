@@ -101,8 +101,8 @@ half4 main(float2 fcIn) {
   // stays readable whatever this does). It adds the bent scene only in the rim band, plus the light.
   float ring = clamp(prof * 0.9, 0.0, 1.0) * clamp(sg.a, 0.0, 1.0);
   float a = clamp(ring + shine * (1.0 - ring), 0.0, 1.0) * cover;
-  float3 c = clamp((col * ring + float3(shine * (1.0 - ring))) * cover, 0.0, 1.0);
-  return half4(half3(c), half(a));
+  float3 outRgb = clamp((col * ring + float3(shine * (1.0 - ring))) * cover, 0.0, 1.0);
+  return half4(half3(outRgb), half(a));
 }
 """
 

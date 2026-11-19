@@ -87,6 +87,8 @@ Muses is built from source. For the Windows and Linux desktop app, see [DESKTOP.
 
 Muses is an independent third-party audio player and client. It is **not** associated with Google LLC, YouTube Music, Deezer, Telegram, or any of their parent companies.
 
+Earbuds protocol knowledge for the experimental, off-by-default "Earbuds" feature (in development) comes from [QuickBuds](https://github.com/spizganed/QuickBuds) and the projects it credits; see [docs/third_party/BUDS_CREDITS.md](docs/third_party/BUDS_CREDITS.md). OnePlus, OPPO, realme, DIZO and HeyMelody are trademarks of their owners; Muses is not affiliated with them.
+
 * **No Media Hosting:** Muses does not host, upload, or store copyrighted music files. It operates strictly as an interface to scan local device storage or stream media directly from public or user-authenticated APIs.
 * **Fair Use & API Usage:** This software is created solely for personal research, educational, and fair-use purposes. The user is entirely responsible for ensuring their usage aligns with their local copyright laws and YouTube Terms of Service.
 * **Copyleft:** Muses is free software under the GPLv3. Any distribution must come with the Corresponding Source under the same license.

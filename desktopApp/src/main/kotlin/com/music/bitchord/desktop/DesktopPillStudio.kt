@@ -103,7 +103,7 @@ internal data class DesktopPillConfig(
         val cleanZones = PILL_ZONES.associateWith { zone ->
             zones[zone].orEmpty().filter { it in allowed && claimed.add(it) }.take(12)
         }
-        val safeZones = cleanZones.toMutableMap()
+        val safeZones = BudsChipLogic.ensureElement(cleanZones).toMutableMap() // BUDS B4 hook: old configs gain the earbuds chip
         // Playback remains operable and at least one identity cue always survives malformed imports.
         if (safeZones.values.none { "play" in it }) safeZones["right"] = safeZones.getValue("right") + "play"
         val safeHidden = hiddenElements.filter { it in allowed && it != "play" }.toMutableSet()
@@ -136,12 +136,12 @@ internal data class DesktopPillConfig(
 }
 
 private val PILL_ZONES = listOf("left", "center", "right")
-private val PILL_ELEMENTS = listOf("artwork", "metadata", "previous", "play", "next", "shuffle", "repeat", "more")
+private val PILL_ELEMENTS = listOf("artwork", "metadata", "previous", "play", "next", "shuffle", "repeat", "buds", "more") // BUDS B4 hook
 private val PillPresetJson = Json { ignoreUnknownKeys = true; encodeDefaults = true }
 private fun defaultPillZones() = mapOf(
     "left" to listOf("artwork"),
     "center" to listOf("metadata"),
-    "right" to listOf("previous", "play", "next", "shuffle", "repeat", "more"),
+    "right" to listOf("previous", "play", "next", "shuffle", "repeat", "buds", "more"), // BUDS B4 hook
 )
 
 internal fun migrateLegacyPillConfig(appearance: DesktopAppearanceConfig): DesktopPillConfig = DesktopPillConfig(
@@ -530,6 +530,7 @@ private fun PillStudioPreview(config: DesktopPillConfig, songTitle: String?, art
             "shuffle" -> Text("⤨", color = DesktopSecondary)
             "repeat" -> Text("↻", color = DesktopSecondary)
             "more" -> Text("···", color = DesktopSecondary)
+            "buds" -> Text("Buds 82%", color = DesktopSecondary, style = MaterialTheme.typography.labelSmall) // BUDS B4 hook
         }
     }
     Row(
@@ -560,7 +561,7 @@ private fun PillStudioSlider(title: String, value: Float, range: ClosedFloatingP
 }
 
 private fun DesktopPillArtSize.dpSize() = when (this) { DesktopPillArtSize.SMALL -> 32.dp; DesktopPillArtSize.MEDIUM -> 44.dp; DesktopPillArtSize.LARGE -> 56.dp }
-private fun String.pillLabel() = when (this) { "artwork" -> "Album artwork"; "metadata" -> "Title and artist"; "previous" -> "Previous"; "play" -> "Play / Pause"; "next" -> "Next"; "shuffle" -> "Shuffle"; "repeat" -> "Repeat"; "more" -> "More options"; else -> this }
+private fun String.pillLabel() = when (this) { "artwork" -> "Album artwork"; "metadata" -> "Title and artist"; "previous" -> "Previous"; "play" -> "Play / Pause"; "next" -> "Next"; "shuffle" -> "Shuffle"; "repeat" -> "Repeat"; "more" -> "More options"; "buds" -> "Earbuds"; else -> this } // BUDS B4 hook
 private fun updateElement(config: DesktopPillConfig, id: String, visible: Boolean): DesktopPillConfig {
     val next = config.copy(
         hiddenElements = if (visible) config.hiddenElements - id else config.hiddenElements + id,

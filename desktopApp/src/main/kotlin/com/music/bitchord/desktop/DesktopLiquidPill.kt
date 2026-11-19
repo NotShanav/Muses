@@ -584,6 +584,7 @@ internal fun DesktopLiquidPill(
                         )
                     }
                 }
+                "buds" -> DesktopBudsPillSlot(preview = preview) // BUDS B4 hook
                 "more" -> Box {
                     DesktopSpringButton(onClick = { moreOpen = true }, size = 34.dp) {
                         Icon(Icons.Rounded.MoreHoriz, "More playback options", tint = Color.White.copy(alpha = 0.72f))
