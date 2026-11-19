@@ -48,24 +48,26 @@ internal object VoiceText {
     )
 
     /**
-     * Lower case, accents off, "&" read as "and", emoji and punctuation dropped, apostrophes removed
-     * ("don't" is "dont"). Returns every word, noise included. Numbers are NOT converted here.
+     * Lower case, accents off, "&" read as "and", emoji and punctuation dropped, apostrophes removed unless
+     * [keepApostrophes] ("don't" is "dont"). Returns every word, noise included. Numbers are NOT converted here.
      */
-    fun words(text: String): List<String> {
+    fun words(text: String, keepApostrophes: Boolean = false): List<String> {
         val folded = Normalizer.normalize(text, Normalizer.Form.NFD).replace(COMBINING_MARKS, "")
         val sb = StringBuilder(folded.length + 8)
         for (ch in folded.lowercase()) {
             if (ch == '&') {
                 sb.append(" and ")
             } else if (ch == '\'' || ch == '\u2019') {
-                // dropped: "don't" -> "dont"
+                // Dropped by default: "don't" -> "dont". The command parser keeps them ("don't",
+                // "we're", "I'd") because its patterns and song titles are written with them.
+                if (keepApostrophes) sb.append('\'')
             } else if (ch.isLetterOrDigit()) {
                 sb.append(ch)
             } else {
                 sb.append(' ')
             }
         }
-        return sb.toString().split(' ').filter { it.isNotEmpty() }
+        return sb.toString().split(' ').map { it.trim('\'') }.filter { it.isNotEmpty() }
     }
 
     /** "twenty one" -> "21", "forty" -> "40", "one hundred" -> "100". Digits pass through unchanged. */

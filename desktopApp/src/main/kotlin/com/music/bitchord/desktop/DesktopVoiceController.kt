@@ -579,7 +579,10 @@ internal class DesktopVoiceController(
         })
         val outcome = VoiceMatcher.decide(VoiceTerms.of(command.query), index, VoiceMatchMode.PLAY, setOf(VoiceEntityKind.SONG))
         val choices = when (outcome) {
-            VoiceMatchOutcome.NoMatch -> return Outcome("Couldn't find anything for that")
+            // Discovery words ("upbeat", "for studying") rarely appear in a title, so the text matcher
+            // cannot judge them. The search service already ranked the hits for this request: offer
+            // its top results in its own order rather than claiming nothing was found.
+            VoiceMatchOutcome.NoMatch -> found.distinctBy { it.videoId }.take(VoiceMatchThresholds.MAX_OPTIONS)
             is VoiceMatchOutcome.Confident -> listOfNotNull(found.firstOrNull { it.videoId == outcome.match.entry.input.id })
             is VoiceMatchOutcome.Candidates -> outcome.options.mapNotNull { match -> found.firstOrNull { it.videoId == match.entry.input.id } }.take(3)
         }
@@ -655,7 +658,19 @@ internal class DesktopVoiceController(
         val transientMatches = VoiceMatcher.rank(queryTerms, index, setOf(VoiceEntityKind.SONG), artist = artistTerms)
         val matchOutcome = VoiceMatcher.decideRanked(transientMatches, VoiceMatchMode.PLAY)
         val ranked = when (matchOutcome) {
-            VoiceMatchOutcome.NoMatch -> return Outcome("Couldn't find that")
+            // The matcher drops hits below its floor, but these came back from the search service for
+            // this very request. Keep the long-standing rule: a weak best hit is offered (top three,
+            // best first), or played anyway when "ask before playing" is off. Only an empty result
+            // list means "couldn't find that".
+            VoiceMatchOutcome.NoMatch -> {
+                if (unique.isEmpty()) return Outcome("Couldn't find that")
+                val weakQuery = if (artistOnly) requestedArtist.orEmpty() else title
+                val weakArtist = if (artistOnly) null else requestedArtist
+                val weakRanked = (if (artistOnly) unique else VoiceSongMatcher.rank(unique, weakQuery, weakArtist).map { it.first })
+                    .take(VoiceMatchThresholds.MAX_OPTIONS)
+                if (config.confirmBeforePlay()) return Outcome("Did you mean...?", choices = weakRanked)
+                weakRanked
+            }
             is VoiceMatchOutcome.Confident -> listOfNotNull(unique.firstOrNull { it.videoId == matchOutcome.match.entry.input.id })
             is VoiceMatchOutcome.Candidates -> matchOutcome.options.mapNotNull { option ->
                 unique.firstOrNull { it.videoId == option.entry.input.id }

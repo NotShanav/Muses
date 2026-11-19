@@ -199,7 +199,7 @@ internal object DesktopVoiceCommandParser {
     // is retried against the live library by the action adapter.
     fun parse(text: String, playlistNames: List<String>): VoiceCommand {
         // VOICE FIX X2 hook: repair ASR corrections and resolve short follow-ups before the old parser.
-        val words = VoiceSelfRepair.apply(VoiceText.words(text))
+        val words = VoiceSelfRepair.apply(VoiceText.words(text, keepApostrophes = true))
         if (words.isEmpty()) return VoiceCommand.Unknown
         when (val choice = VoiceChoicePhrases.parse(words)) {
             is VoiceChoice.Index -> return VoiceCommand.Choose(choice.zeroBased + 1)

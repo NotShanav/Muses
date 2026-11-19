@@ -307,6 +307,8 @@ class DesktopVoiceControllerTest {
         val rig = Rig("play my workout playlist")
         try {
             rig.fake.playlists = emptyList()
+            // The adapter resolves the spoken name against the live library and reports it back.
+            rig.fake.playResult = VoicePlaylistResult.Done("workout", VoiceListSource.LOCAL)
             val done = speak(rig)
             assertEquals("Playing workout", done.result)
             assertEquals(listOf("playlist:workout"), rig.fake.calls.toList())

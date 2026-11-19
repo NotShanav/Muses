@@ -78,7 +78,9 @@ class DesktopVoiceCommandsTest {
     fun contradictoryOrUnrelatedVolumeTalkIsUnknown() {
         assertEquals(VoiceCommand.Unknown, p("turn the volume up and down"))
         assertEquals(VoiceCommand.Unknown, p("make me a sandwich"))
-        assertEquals(VoiceCommand.Unknown, p("set the volume to ten"))
+        // Absolute volume is a real command since VOICE FIX X2 (it used to be Unknown).
+        assertEquals(VoiceCommand.SetVolume(10), p("set the volume to ten"))
+        assertEquals(VoiceCommand.Unknown, p("set the table for ten"))
     }
 
     // ---- shuffle ----
