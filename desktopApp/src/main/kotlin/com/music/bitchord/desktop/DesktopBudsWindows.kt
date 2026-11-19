@@ -305,11 +305,22 @@ internal object BudsNative {
     }
 
     val bth: BudsBth? by lazy {
-        if (!DesktopPlatform.isWindows) {
-            null
-        } else {
-            runCatching { Native.load("bthprops.cpl", BudsBth::class.java, W32APIOptions.DEFAULT_OPTIONS) }.getOrNull()
+        if (!DesktopPlatform.isWindows) null else loadBth()
+    }
+
+    /**
+     * The Bluetooth API lives in bthprops.cpl, and JNA maps a bare name on Windows to "<name>.dll" unless it ends
+     * in .dll/.drv/.ocx, so "bthprops.cpl" alone is looked up as "bthprops.cpl.dll" and never loads. An absolute
+     * path is used as given, so it goes first; the bare names are only fallbacks.
+     */
+    private fun loadBth(): BudsBth? {
+        val root = System.getenv("SystemRoot") ?: System.getenv("windir") ?: "C:\\Windows"
+        val candidates = listOf("$root\\System32\\bthprops.cpl", "bthprops.cpl", "BluetoothApis")
+        for (name in candidates) {
+            val api = runCatching { Native.load(name, BudsBth::class.java, W32APIOptions.DEFAULT_OPTIONS) }.getOrNull()
+            if (api != null) return api
         }
+        return null
     }
 
     /** INVALID_SOCKET is ~0 (all ones, pointer sized): -1 on 64 bit, 0xFFFFFFFF on 32 bit. */
@@ -321,7 +332,10 @@ internal object BudsNative {
 
     /** Bluetooth devices Windows already knows (no inquiry). Empty on any failure. */
     fun enumerate(onError: (String) -> Unit = {}): List<BudsRawDevice> {
-        val api = bth ?: return emptyList<BudsRawDevice>()
+        val api = bth ?: run {
+            onError("BluetoothApiNotLoaded")
+            return emptyList<BudsRawDevice>()
+        }
         return runCatching {
             val paramBytes = BudsSearchParams.bytes(Native.POINTER_SIZE)
             Memory(paramBytes.size.toLong()).use { params ->
