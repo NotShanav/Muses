@@ -195,6 +195,42 @@ class DesktopBudsWindowsTest {
         assertTrue(BudsDeviceFilter.connectedCompatible(emptyList()).isEmpty())
     }
 
+    // ── vendor service detection ─────────────────────────────────────────────────────────────────
+
+    @Test
+    fun guidBytesRoundTrip() {
+        for (id in BudsIds.SERVICE_UUIDS) {
+            val u = UUID.fromString(id)
+            assertEquals(u, BudsGuidRead.fromBytes(BudsGuid.toBytes(u)))
+        }
+        assertNull(BudsGuidRead.fromBytes(ByteArray(15)))
+        assertNull(BudsGuidRead.fromBytes(ByteArray(32), 17))
+    }
+
+    @Test
+    fun vendorServiceIsFoundInTheInstalledServicesList() {
+        val other = BudsGuid.toBytes(UUID.fromString("0000110B-0000-1000-8000-00805F9B34FB"))
+        val vendor = BudsGuid.toBytes(UUID.fromString("0000079A-D102-11E1-9B23-00025B00A5A5"))
+        assertTrue(BudsServices.hasVendorService(other + vendor, 2))
+        assertFalse(BudsServices.hasVendorService(other + vendor, 1))   // count says only the first entry is real
+        assertFalse(BudsServices.hasVendorService(other, 1))
+        assertFalse(BudsServices.hasVendorService(ByteArray(0), 0))
+        assertFalse(BudsServices.hasVendorService(other, 5))            // count larger than the data: no crash
+    }
+
+    @Test
+    fun filterAcceptsVendorServiceEvenWithAnUnknownNameButOnlyWhenConnected() {
+        val list = listOf(
+            BudsRawDevice("My buds", 1, true, true, true, vendorService = true),
+            BudsRawDevice("My buds", 2, false, true, true, vendorService = true),   // not connected
+            BudsRawDevice("My buds", 3, true, true, true, vendorService = false),   // unknown name, no vendor service
+            BudsRawDevice("", 4, true, true, true, vendorService = true),           // blank name still works
+        )
+        val got = BudsDeviceFilter.connectedCompatible(list)
+        assertEquals(listOf(1L, 4L), got.map { it.address })
+        assertEquals("Earbuds", got[1].name)
+    }
+
     // ── Winsock reference count ──────────────────────────────────────────────────────────────────
 
     @Test

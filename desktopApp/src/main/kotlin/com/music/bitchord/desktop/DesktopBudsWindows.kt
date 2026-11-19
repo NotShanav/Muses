@@ -53,6 +53,8 @@ internal data class BudsRawDevice(
     val connected: Boolean,
     val remembered: Boolean,
     val authenticated: Boolean,
+    /** Windows lists the vendor control service (see [BudsIds.SERVICE_UUIDS]) for it: the reliable sign of compatible earbuds. */
+    val vendorService: Boolean = false,
 ) {
     override fun toString(): String = "BudsRawDevice(#${BudsAddress.shortHash(address)})"
 }
@@ -102,6 +104,36 @@ internal object BudsGuid {
         b.putShort(6, msb.toShort())
         for (i in 0 until 8) out[8 + i] = (lsb ushr (56 - 8 * i)).toByte()
         return out
+    }
+}
+
+internal object BudsGuidRead {
+    /** Inverse of [BudsGuid.toBytes]; null when fewer than 16 bytes remain at [offset]. */
+    fun fromBytes(bytes: ByteArray, offset: Int = 0): UUID? {
+        if (offset < 0 || bytes.size < offset + 16) return null
+        val b = ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN)
+        val d1 = b.getInt(offset).toLong() and 0xFFFFFFFFL
+        val d2 = b.getShort(offset + 4).toLong() and 0xFFFFL
+        val d3 = b.getShort(offset + 6).toLong() and 0xFFFFL
+        var lsb = 0L
+        for (i in 0 until 8) lsb = (lsb shl 8) or (bytes[offset + 8 + i].toLong() and 0xFFL)
+        return UUID((d1 shl 32) or (d2 shl 16) or d3, lsb)
+    }
+}
+
+/** The services Windows set up for a device (BluetoothEnumerateInstalledServices): does it offer the vendor control service? */
+internal object BudsServices {
+    const val MAX_GUIDS = 32
+
+    /** [guidBytes] is the raw GUID array Windows filled in, [count] the number of entries it reports. */
+    fun hasVendorService(guidBytes: ByteArray, count: Int): Boolean {
+        val vendor = BudsIds.SERVICE_UUIDS.map { UUID.fromString(it) }.toSet()
+        val n = count.coerceIn(0, MAX_GUIDS)
+        for (i in 0 until n) {
+            val g = BudsGuidRead.fromBytes(guidBytes, i * 16) ?: continue
+            if (g in vendor) return true
+        }
+        return false
     }
 }
 
@@ -206,9 +238,9 @@ internal object BudsSocketErrors {
 /** Connected AND compatible, one entry per address, in Windows' order. */
 internal object BudsDeviceFilter {
     fun connectedCompatible(raw: List<BudsRawDevice>): List<BudsDevice> =
-        raw.filter { it.connected && it.name.isNotBlank() && DesktopBudsNames.isLikelyCompatible(it.name) }
+        raw.filter { it.connected && (it.vendorService || (it.name.isNotBlank() && DesktopBudsNames.isLikelyCompatible(it.name))) }
             .distinctBy { it.address }
-            .map { BudsDevice(it.name, it.address) }
+            .map { BudsDevice(it.name.ifBlank { "Earbuds" }, it.address) }
 }
 
 /** Shared start / stop of Winsock: [onFirst] on 0 to 1 (false = failed, nothing counted), [onLast] on 1 to 0. */
@@ -251,6 +283,7 @@ internal interface BudsBth : StdCallLibrary {
     fun BluetoothFindFirstDevice(params: Pointer, info: Pointer): Pointer?
     fun BluetoothFindNextDevice(find: Pointer, info: Pointer): Boolean
     fun BluetoothFindDeviceClose(find: Pointer): Boolean
+    fun BluetoothEnumerateInstalledServices(radio: Pointer?, info: Pointer, count: Pointer, guids: Pointer): Int
 }
 
 /** Lazy loaders. Both are null off Windows or when the library cannot be loaded. */
@@ -287,7 +320,7 @@ internal object BudsNative {
     }
 
     /** Bluetooth devices Windows already knows (no inquiry). Empty on any failure. */
-    fun enumerate(): List<BudsRawDevice> {
+    fun enumerate(onError: (String) -> Unit = {}): List<BudsRawDevice> {
         val api = bth ?: return emptyList<BudsRawDevice>()
         return runCatching {
             val paramBytes = BudsSearchParams.bytes(Native.POINTER_SIZE)
@@ -305,7 +338,10 @@ internal object BudsNative {
                             var more = true
                             var guard = 0
                             while (more && guard++ < 256) {
-                                BudsDeviceInfoLayout.parse(info.getByteArray(0, BudsDeviceInfoLayout.SIZE))?.let { out.add(it) }
+                                BudsDeviceInfoLayout.parse(info.getByteArray(0, BudsDeviceInfoLayout.SIZE))?.let { raw ->
+                                    // Only for connected devices; `info` still holds this device here.
+                                    out.add(if (raw.connected) raw.copy(vendorService = hasVendorService(api, info)) else raw)
+                                }
                                 info.clear()
                                 info.setInt(0, BudsDeviceInfoLayout.SIZE)
                                 more = api.BluetoothFindNextDevice(find, info)
@@ -317,8 +353,24 @@ internal object BudsNative {
                     }
                 }
             }
-        }.getOrDefault(emptyList<BudsRawDevice>())
+        }.getOrElse {
+            onError(it.javaClass.simpleName)
+            emptyList<BudsRawDevice>()
+        }
     }
+
+    /** True when Windows lists the vendor control service for the device in [info]. False on any failure. */
+    private fun hasVendorService(api: BudsBth, info: Pointer): Boolean = runCatching {
+        val bytesLen = BudsServices.MAX_GUIDS * 16
+        Memory(bytesLen.toLong()).use { guids ->
+            Memory(4).use { count ->
+                guids.clear()
+                count.setInt(0, BudsServices.MAX_GUIDS)
+                val rc = api.BluetoothEnumerateInstalledServices(null, info, count, guids)
+                rc == 0 && BudsServices.hasVendorService(guids.getByteArray(0, bytesLen), count.getInt(0))
+            }
+        }
+    }.getOrDefault(false)
 }
 
 /** Winsock start / stop shared by all open transports; the last close calls WSACleanup. */
@@ -344,7 +396,35 @@ internal object DesktopBudsDevices {
      */
     fun connectedCompatible(): List<BudsDevice> {
         if (!DesktopPlatform.isWindows) return emptyList()
-        return BudsDeviceFilter.connectedCompatible(BudsNative.enumerate())
+        var failure: String? = null
+        val raw = BudsNative.enumerate { failure = it }
+        val kept = BudsDeviceFilter.connectedCompatible(raw)
+        if (DesktopBudsSettings.debugFrames.value) logScan(raw, kept.size, failure)
+        return kept
+    }
+
+    @Volatile
+    private var lastScanLine: String? = null
+
+    /** Debug frames only. Never a name or an address: a short hash per device plus yes/no flags. Printed when it changes. */
+    private fun logScan(raw: List<BudsRawDevice>, kept: Int, failure: String?) {
+        val line = buildString {
+            append("scan: bthprops=").append(if (BudsNative.bth == null) "missing" else "ok")
+            append(" raw=").append(raw.size)
+            append(" connected=").append(raw.count { it.connected })
+            append(" kept=").append(kept)
+            if (failure != null) append(" error=").append(failure)
+            for (d in raw) {
+                append(" [#").append(BudsAddress.shortHash(d.address))
+                append(" conn=").append(if (d.connected) 1 else 0)
+                append(" vendor=").append(if (d.vendorService) 1 else 0)
+                append(" name=").append(if (DesktopBudsNames.isLikelyCompatible(d.name)) 1 else 0)
+                append(']')
+            }
+        }
+        if (line == lastScanLine) return
+        lastScanLine = line
+        System.err.println("buds: $line")
     }
 }
 
