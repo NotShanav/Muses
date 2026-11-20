@@ -45,10 +45,13 @@ internal object BudsIds {
     // Section 4/7/8/9: commands. A reply sets bit 15.
     const val CMD_HANDSHAKE = 0x0100
     const val CMD_PRODUCT_ID = 0x0103
+    const val CMD_FIRMWARE = 0x0105
     const val CMD_BATTERY = 0x0106
     const val CMD_WEARING = 0x0109
     const val CMD_ANC_QUERY = 0x010C
     const val CMD_FEATURE_STATUS = 0x010D
+    /** Current equalizer preset (section 17): reply `00 <id>`. */
+    const val CMD_QUERY_EQ = 0x010F
     const val CMD_BROADCAST_CODES = 0x0200
     const val CMD_PUSH = 0x0204
     const val CMD_REGISTER = 0x0205
@@ -56,6 +59,10 @@ internal object BudsIds {
     const val CMD_REGISTER_ONE = 0x0201
     const val CMD_FEATURE_SWITCH = 0x0403
     const val CMD_SET_ANC = 0x0404
+    /** Select a built-in equalizer preset: `0x0406 <id>`, reply `00` (section 17). */
+    const val CMD_SET_EQ = 0x0406
+    /** Push: the equalizer changed, payload `<id>` (section 10). */
+    const val CMD_EQ_CHANGED = 0x0504
     const val CMD_REQ_TIME = 0x0500
     const val CMD_REQ_APP_LIST = 0x050C
     const val CMD_REQ_CAPABILITIES = 0x051C
@@ -79,7 +86,12 @@ internal object BudsIds {
 
     // Section 16: feature switch ids.
     const val FEATURE_STATUS_UNKNOWN_FIRST = 0x05
+    const val FEATURE_WEAR = 0x04
     const val FEATURE_GAME_MODE_LEGACY = 0x06
+    const val FEATURE_DUAL = 0x11
+    const val FEATURE_HIRES = 0x18
+    const val FEATURE_SPATIAL = 0x1B
+    const val FEATURE_BASSWAVE = 0x1D
     const val FEATURE_GAME_MODE_NEW = 0x28
 
     /** Ids asked in the periodic status read. Short on purpose: a long list dropped one model's link (section 16). */
@@ -207,6 +219,17 @@ internal object BudsFrames {
         BudsNoiseMode.NOISE_CANCELLING -> bytes(0x01, 0x01, 0x02)
         BudsNoiseMode.TRANSPARENCY -> bytes(0x01, 0x01, 0x04)
         BudsNoiseMode.ADAPTIVE -> bytes(0x01, 0x01, 0x00, 0x08)
+    }
+
+    /** `01 01 <mask LE>` with one bit set: [bit] / 8 + 1 mask bytes, low byte first (section 14). */
+    fun setAncBitPayload(bit: Int): ByteArray {
+        require(bit in 0..31) { "bit out of range" }
+        val size = bit / 8 + 1
+        val out = ByteArray(2 + size)
+        out[0] = 0x01
+        out[1] = 0x01
+        out[2 + bit / 8] = (1 shl (bit % 8)).toByte()
+        return out
     }
 
     fun setAnc(seq: Int, mode: BudsNoiseMode) = build(BudsIds.CMD_SET_ANC, seq, setAncPayload(mode))
@@ -463,6 +486,28 @@ internal object BudsParsers {
         }
     }
 
+    /** Current EQ reply `0x810F`: `00 <id>`. */
+    fun eqReply(p: ByteArray): Int? = if (p.size >= 2 && u(p, 0) == 0) u(p, 1) else null
+
+    /** EQ changed push `0x0504`: `<id>`. */
+    fun eqPush(p: ByteArray): Int? = if (p.isNotEmpty()) u(p, 0) else null
+
+    /**
+     * Firmware reply `0x8105` (section 6): `00 <count>` then UTF-8 `deviceType,versionType,version` triples joined by
+     * commas. The `versionType` 2 versions in reply order, joined by dots (`138.138.105`); null when there are none.
+     */
+    fun firmware(p: ByteArray): String? {
+        if (p.size < 3 || u(p, 0) != 0) return null
+        val parts = String(p, 2, p.size - 2, Charsets.UTF_8).trim().split(",").map { it.trim() }
+        val versions = ArrayList<String>()
+        var i = 0
+        while (i + 2 < parts.size) {
+            if (parts[i + 1] == "2" && parts[i + 2].isNotEmpty() && parts[i + 2].all { it.isLetterOrDigit() }) versions.add(parts[i + 2])
+            i += 3
+        }
+        return versions.joinToString(".").ifEmpty { null }
+    }
+
     /** The status byte of a write reply (`0x8403`, `0x8404`): 00 accepted. */
     fun ackStatus(payload: ByteArray): Int? = payload.firstOrNull()?.let { it.toInt() and 0xFF }
 }
@@ -596,13 +641,7 @@ internal object BudsPushAnswers {
     }
 }
 
-/** Per-model reads, keyed by the product id from 0x8103 (the ids come from QuickBuds' models.json entry for the model). */
+/** Per-model reads, keyed by the product id from 0x8103. The data lives in [BudsModelProfiles]. */
 internal object BudsModelQueries {
-    private val STATUS: Map<String, List<Int>> = mapOf(
-        // OnePlus Nord Buds 3 Pro: the switches its firmware answers, game mode at 0x06.
-        "064414" to listOf(0x05, 0x04, 0x0B, 0x0C, 0x11, 0x18, 0x06, 0x1B, 0x1D),
-    )
-
-    fun statusIds(productId: String?): List<Int> = productId?.let { STATUS[it.uppercase()] } ?: BudsIds.STATUS_FEATURE_IDS
+    fun statusIds(productId: String?): List<Int> = BudsModelProfiles.forProduct(productId).statusIds
 }
-

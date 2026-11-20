@@ -154,6 +154,36 @@ internal class DesktopBudsController(
         }
     }
 
+    suspend fun setAncLevel(level: BudsAncLevel) {
+        val s = session ?: return
+        try {
+            s.setAncLevel(level)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Throwable) {
+        }
+    }
+
+    suspend fun setEqPreset(id: Int) {
+        val s = session ?: return
+        try {
+            s.setEqPreset(id)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Throwable) {
+        }
+    }
+
+    suspend fun setSwitch(id: Int, on: Boolean) {
+        val s = session ?: return
+        try {
+            s.setSwitch(id, on)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Throwable) {
+        }
+    }
+
     // ── the loop ────────────────────────────────────────────────────────────────────────────────
 
     private suspend fun runLoop() {

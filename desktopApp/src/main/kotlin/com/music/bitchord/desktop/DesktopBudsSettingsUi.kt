@@ -33,7 +33,7 @@ internal fun DesktopBudsSettingsRows(
 
     toggle(
         "Earbuds (experimental)",
-        "Battery and noise control for OnePlus, OPPO, realme and DIZO earbuds, shown as a chip in the floating pill. " +
+        "Battery, noise control, equalizer and switches for OnePlus, OPPO, realme and DIZO earbuds, shown as a chip in the floating pill. " +
             "Pair them in Windows Bluetooth settings first; Muses never pairs. Only one app can control the earbuds at a time. " +
             "Off by default: nothing is scanned or opened until you turn this on.",
         enabled,

@@ -69,6 +69,7 @@ class DesktopBudsSessionTest {
 
         var offered: ByteArray = byteArrayOf(0, 9, 1, 2, 3, 4, 8, 0x0B, 0xF1.toByte(), 0xF2.toByte(), 0xF3.toByte())
         var answerAnc = true
+        var productReply: ByteArray = sessionHex("00 14 54 06")      // product id 065414
         var reportMask = 0x0008
         var refuseSet = false
         var silentSet = false
@@ -77,6 +78,10 @@ class DesktopBudsSessionTest {
         var refuseFeature = false
         var applyFeature = true
         var pushFeature = false
+        var eqId = 3
+        var pushEq = true
+        var ignoreEq = false
+        var refuseEq = false
 
         override suspend fun write(bytes: ByteArray) {
             if (failWrites) throw java.io.IOException("fake write failure")
@@ -118,6 +123,7 @@ class DesktopBudsSessionTest {
             setPayload.size == 4 -> 0x0800                         // Adaptive
             setPayload[2].toInt() == 0x01 -> 0x0008                // Off
             setPayload[2].toInt() == 0x02 -> 0x0020                // ANC: the buds report the last LEVEL (Medium)
+            setPayload[2].toInt() and 0xF0 != 0 -> setPayload[2].toInt() and 0xFF   // a level: the report bit is the SET bit
             else -> 0x0100                                         // Transparency
         }
 
@@ -126,7 +132,7 @@ class DesktopBudsSessionTest {
         private fun respond(f: BudsFrame) {
             when (f.cmd) {
                 0x0100 -> reply(f, bitmap)
-                0x0103 -> reply(f, sessionHex("00 14 54 06"))
+                0x0103 -> reply(f, productReply)
                 0x0200 -> reply(f, offered)
                 0x0205 -> reply(f, sessionHex("01 03 01 00 02 00 03 00"))
                 0x010D -> {
@@ -153,6 +159,19 @@ class DesktopBudsSessionTest {
                     if (!ignoreSet) {
                         reportMask = reportFor(f.payload)
                         push(byteArrayOf(0x03) + ancPayload(reportMask))
+                    }
+                }
+                0x010F -> reply(f, byteArrayOf(0, eqId.toByte()))
+                0x0105 -> reply(f, byteArrayOf(0, 4) + "1,2,138,2,2,138,3,1,01,3,2,105".toByteArray())
+                0x0406 -> {
+                    if (refuseEq) {
+                        reply(f, sessionHex("02"))
+                        return
+                    }
+                    reply(f, sessionHex("00"))
+                    if (!ignoreEq) {
+                        eqId = f.payload[0].toInt() and 0xFF
+                        if (pushEq) emit(BudsFrames.build(0x0504, 0xFF, byteArrayOf(eqId.toByte())))
                     }
                 }
                 0x0403 -> {
@@ -413,6 +432,335 @@ class DesktopBudsSessionTest {
         assertFalse(e.setNoise(BudsNoiseMode.TRANSPARENCY))
         assertEquals(BudsNoiseMode.OFF, e.session.state.value.noiseMode)    // the read-back shows the truth
         assertTrue(e.cmds().count { it == 0x010C } >= 2)                    // init read plus the read-back
+    }
+
+    // ── ANC levels and the mode decoding (E1) ────────────────────────────────────────────────────
+
+    private val nord = { b: FakeBuds -> b.productReply = sessionHex("00 14 44 06") }      // product id 064414
+
+    private suspend fun Env.setLevel(level: BudsAncLevel): Boolean {
+        val r = scope.async { session.setAncLevel(level) }
+        time.advance(2_500)
+        return r.await()
+    }
+
+    @Test
+    fun nordBuds3ProOffersTheFourAncLevels() = runSession(configure = nord) { e ->
+        e.session.start()
+        e.time.advance(2_000)
+        val s = e.session.state.value
+        assertEquals("064414", s.productId)
+        assertEquals(setOf(BudsAncLevel.LOW, BudsAncLevel.MEDIUM, BudsAncLevel.HIGH, BudsAncLevel.SMART), s.extras.ancLevels)
+        assertNull(s.extras.ancLevel)                                // the buds are Off: no level is known
+    }
+
+    @Test
+    fun anUnlistedModelOffersNoLevelsAndSendsNoLevelWrite() = runSession { e ->
+        e.session.start()
+        e.time.advance(2_000)
+        assertTrue(e.session.state.value.extras.ancLevels.isEmpty())
+        assertFalse(e.setLevel(BudsAncLevel.HIGH))
+        assertTrue(e.cmds().none { it == 0x0404 })
+    }
+
+    @Test
+    fun setAncLevelSendsTheModelsSetBitAndConfirmsByReadBack() = runSession(configure = nord) { e ->
+        e.session.start()
+        e.time.advance(2_000)
+        val expected = mapOf(
+            BudsAncLevel.HIGH to "01 01 10",
+            BudsAncLevel.MEDIUM to "01 01 20",
+            BudsAncLevel.LOW to "01 01 40",
+            BudsAncLevel.SMART to "01 01 80",
+        )
+        for ((level, hex) in expected) {
+            assertTrue(e.setLevel(level), level.name)
+            assertContentEquals(sessionHex(hex), e.buds.written.last { it.frame.cmd == 0x0404 }.frame.payload)
+            assertEquals(BudsNoiseMode.NOISE_CANCELLING, e.session.state.value.noiseMode)
+            assertEquals(level, e.session.state.value.extras.ancLevel)
+        }
+    }
+
+    @Test
+    fun setNoiseCancellingStillSendsThePlainAncBitOnTheNordBuds() = runSession(configure = nord) { e ->
+        e.session.start()
+        e.time.advance(2_000)
+        assertTrue(e.setNoise(BudsNoiseMode.NOISE_CANCELLING))
+        assertContentEquals(sessionHex("01 01 02"), e.buds.written.last { it.frame.cmd == 0x0404 }.frame.payload)
+        assertEquals(BudsAncLevel.MEDIUM, e.session.state.value.extras.ancLevel)   // the fake reports the Medium bit
+    }
+
+    @Test
+    fun aRefusedLevelWriteReturnsFalse() = runSession(configure = { nord(it); it.refuseSet = true }) { e ->
+        e.session.start()
+        e.time.advance(2_000)
+        assertFalse(e.setLevel(BudsAncLevel.HIGH))
+        assertNull(e.session.state.value.extras.ancLevel)
+    }
+
+    @Test
+    fun levelPushesMoveTheLevelAndAPlainAncPushKeepsIt() = runSession(configure = nord) { e ->
+        e.session.start()
+        e.time.advance(2_000)
+        e.buds.push(sessionHex("03 01 01 80 00"))                    // Smart
+        e.time.settle()
+        assertEquals(BudsAncLevel.SMART, e.session.state.value.extras.ancLevel)
+        e.buds.push(sessionHex("03 01 01 10 00"))                    // Deep
+        e.time.settle()
+        assertEquals(BudsAncLevel.HIGH, e.session.state.value.extras.ancLevel)
+        e.buds.push(sessionHex("03 01 01 02 00"))                    // plain ANC: names no level
+        e.time.settle()
+        assertEquals(BudsNoiseMode.NOISE_CANCELLING, e.session.state.value.noiseMode)
+        assertEquals(BudsAncLevel.HIGH, e.session.state.value.extras.ancLevel)
+        e.buds.push(sessionHex("03 04 01 20 00"))                    // the level Smart chose: not a mode report
+        e.time.settle()
+        assertEquals(BudsAncLevel.HIGH, e.session.state.value.extras.ancLevel)
+    }
+
+    @Test
+    fun offAndTransparencyReportedOnTheirParentBitsMoveTheHighlight() = runSession { e ->
+        e.session.start()
+        e.time.advance(2_000)
+        e.buds.push(sessionHex("03 01 01 20 00"))
+        e.time.settle()
+        assertEquals(BudsNoiseMode.NOISE_CANCELLING, e.session.state.value.noiseMode)
+        e.buds.push(sessionHex("03 01 01 01 00"))                    // Off on bit 0 (the old decoder returned null here)
+        e.time.settle()
+        assertEquals(BudsNoiseMode.OFF, e.session.state.value.noiseMode)
+        e.buds.push(sessionHex("03 01 01 20 00"))
+        e.buds.push(sessionHex("03 01 01 04 00"))                    // Transparency on bit 2
+        e.time.settle()
+        assertEquals(BudsNoiseMode.TRANSPARENCY, e.session.state.value.noiseMode)
+        e.buds.push(sessionHex("03 01 01 00 01"))                    // Transparency on bit 8
+        e.time.settle()
+        assertEquals(BudsNoiseMode.TRANSPARENCY, e.session.state.value.noiseMode)
+    }
+
+    @Test
+    fun aReportThatNamesNoModeIsLoggedAsHexAndChangesNothing() {
+        val log = ArrayList<String>()
+        runSession(debug = log) { e ->
+            e.session.start()
+            e.time.advance(2_000)
+            e.buds.push(sessionHex("03 01 01 00 40"))                // bit 14: in no table
+            e.time.settle()
+            assertEquals(BudsNoiseMode.OFF, e.session.state.value.noiseMode)
+        }
+        assertTrue(log.any { it.contains("ANC report names no mode, mask=4000") }, log.joinToString("\n"))
+    }
+
+    @Test
+    fun aModeWriteIsFollowedByOneLateReadSoAStaleReplyCannotStick() = runSession { e ->
+        e.session.start()
+        e.time.advance(2_000)
+        val before = e.cmds().count { it == 0x010C }
+        assertTrue(e.setNoise(BudsNoiseMode.TRANSPARENCY))           // the push confirmed it: no read-back needed
+        assertEquals(before + 1, e.cmds().count { it == 0x010C })    // the late read, about 1.5 s after the write
+    }
+
+    // ── equalizer, switches and firmware (E2, E3) ────────────────────────────────────────────────
+
+    private val nordFull = { b: FakeBuds ->
+        nord(b)
+        b.features[0x04] = 1
+        b.features[0x11] = 1
+        b.features[0x18] = 0
+        b.features[0x1B] = 0
+        b.features[0x1D] = 0
+        b.pushFeature = true
+    }
+
+    private suspend fun Env.setEq(id: Int): Boolean {
+        val r = scope.async { session.setEqPreset(id) }
+        time.advance(2_500)
+        return r.await()
+    }
+
+    private suspend fun Env.setSwitch(id: Int, on: Boolean): Boolean {
+        val r = scope.async { session.setSwitch(id, on) }
+        time.advance(5_000)
+        return r.await()
+    }
+
+    private fun Env.featureWrites(): List<String> =
+        buds.written.filter { it.frame.cmd == 0x0403 }.map { BudsHex.of(it.frame.payload) }
+
+    @Test
+    fun theNordBudsShowTheirEqualizerAfterInit() = runSession(configure = nord) { e ->
+        e.session.start()
+        e.time.advance(3_000)
+        val eq = e.session.state.value.extras.eq
+        assertEquals(listOf(3, 4, 5), eq?.presets?.map { it.id })
+        assertEquals(listOf("Balanced", "Clear Vocals", "Bass"), eq?.presets?.map { it.label })
+        assertEquals(3, eq?.selectedId)
+        assertTrue(e.cmds().contains(0x010F))
+    }
+
+    @Test
+    fun anUnlistedModelHasNoEqualizerAndNoExtraInitReads() = runSession { e ->
+        e.session.start()
+        e.time.advance(3_000)
+        assertNull(e.session.state.value.extras.eq)
+        assertTrue(e.cmds().none { it == 0x010F || it == 0x0105 })
+        assertNull(e.session.state.value.extras.firmware)
+    }
+
+    @Test
+    fun theFirmwareLineComesFromTheVersionTriples() = runSession(configure = nord) { e ->
+        e.session.start()
+        e.time.advance(3_000)
+        assertEquals("138.138.105", e.session.state.value.extras.firmware)
+    }
+
+    @Test
+    fun setEqPresetWritesTheIdAndConfirmsByPush() = runSession(configure = nord) { e ->
+        e.session.start()
+        e.time.advance(3_000)
+        assertTrue(e.setEq(5))
+        assertContentEquals(sessionHex("05"), e.buds.written.last { it.frame.cmd == 0x0406 }.frame.payload)
+        assertEquals(5, e.session.state.value.extras.eq?.selectedId)
+    }
+
+    @Test
+    fun setEqPresetConfirmsByReadWhenNoPushComes() = runSession(configure = { nord(it); it.pushEq = false }) { e ->
+        e.session.start()
+        e.time.advance(3_000)
+        val reads = e.cmds().count { it == 0x010F }
+        assertTrue(e.setEq(4))
+        assertEquals(4, e.session.state.value.extras.eq?.selectedId)
+        assertTrue(e.cmds().count { it == 0x010F } > reads)
+    }
+
+    @Test
+    fun anAckedButNotAppliedPresetIsNotReportedAsSuccess() = runSession(configure = { nord(it); it.ignoreEq = true }) { e ->
+        e.session.start()
+        e.time.advance(3_000)
+        assertFalse(e.setEq(5))
+        assertEquals(3, e.session.state.value.extras.eq?.selectedId)
+    }
+
+    @Test
+    fun aRefusedPresetReturnsFalseAndAnUnknownIdSendsNothing() = runSession(configure = { nord(it); it.refuseEq = true }) { e ->
+        e.session.start()
+        e.time.advance(3_000)
+        assertFalse(e.setEq(5))
+        assertFalse(e.setEq(9))
+        assertEquals(1, e.cmds().count { it == 0x0406 })
+        assertEquals(3, e.session.state.value.extras.eq?.selectedId)
+    }
+
+    @Test
+    fun aPushFromTheBudsMovesTheEqualizerHighlightWithoutAClick() = runSession(configure = nord) { e ->
+        e.session.start()
+        e.time.advance(3_000)
+        e.buds.emit(BudsFrames.build(0x0504, 0xFF, sessionHex("04")))
+        e.time.settle()
+        assertEquals(4, e.session.state.value.extras.eq?.selectedId)
+        e.buds.emit(BudsFrames.build(0x0504, 0xFF, sessionHex("06")))   // a custom preset: not in the list, so nothing selected
+        e.time.settle()
+        assertNull(e.session.state.value.extras.eq?.selectedId)
+    }
+
+    @Test
+    fun rapidPresetClicksAreCoalescedToTheLatest() = runSession(configure = nord) { e ->
+        e.session.start()
+        e.time.advance(3_000)
+        val a = e.scope.async { e.session.setEqPreset(4) }
+        val b = e.scope.async { e.session.setEqPreset(5) }
+        val c = e.scope.async { e.session.setEqPreset(3) }
+        e.time.advance(6_000)
+        assertTrue(a.await())
+        assertFalse(b.await())                                       // superseded: never written
+        assertTrue(c.await())
+        val writes = e.buds.written.filter { it.frame.cmd == 0x0406 }.map { it.frame.payload[0].toInt() }
+        assertEquals(listOf(4, 3), writes)
+        assertEquals(3, e.session.state.value.extras.eq?.selectedId)
+    }
+
+    @Test
+    fun theSwitchesAppearInDisplayOrderWithTheirValues() = runSession(configure = nordFull) { e ->
+        e.session.start()
+        e.time.advance(3_000)
+        val sw = e.session.state.value.extras.switches
+        assertEquals(listOf(0x18, 0x1B, 0x11, 0x04, 0x1D), sw.map { it.id })
+        assertEquals(listOf("High-quality audio", "3D audio", "Dual connection", "Auto play/pause", "Bass boost"), sw.map { it.label })
+        assertEquals(listOf(false, false, true, true, false), sw.map { it.on })
+        assertEquals(false, e.session.state.value.lowLatency)        // low latency stays where it is
+    }
+
+    @Test
+    fun aSwitchTheBudsDoNotAnswerIsHidden() = runSession(configure = { nordFull(it); it.features.remove(0x1B) }) { e ->
+        e.session.start()
+        e.time.advance(3_000)
+        assertEquals(listOf(0x18, 0x11, 0x04, 0x1D), e.session.state.value.extras.switches.map { it.id })
+    }
+
+    @Test
+    fun anUnlistedModelHasNoSwitches() = runSession { e ->
+        e.session.start()
+        e.time.advance(3_000)
+        assertTrue(e.session.state.value.extras.switches.isEmpty())
+    }
+
+    @Test
+    fun setSwitchWritesTheFeatureAndConfirmsByReadBack() = runSession(configure = nordFull) { e ->
+        e.session.start()
+        e.time.advance(3_000)
+        assertTrue(e.setSwitch(0x1D, true))
+        assertEquals(listOf("1D 01"), e.featureWrites())
+        assertEquals(true, e.session.state.value.extras.switches.first { it.id == 0x1D }.on)
+        assertTrue(e.setSwitch(0x04, false))
+        assertEquals(false, e.session.state.value.extras.switches.first { it.id == 0x04 }.on)
+    }
+
+    @Test
+    fun aRefusedSwitchReturnsFalseAndKeepsTheValue() = runSession(configure = { nordFull(it); it.refuseFeature = true }) { e ->
+        e.session.start()
+        e.time.advance(3_000)
+        assertFalse(e.setSwitch(0x18, true))
+        assertEquals(false, e.session.state.value.extras.switches.first { it.id == 0x18 }.on)
+    }
+
+    @Test
+    fun aSwitchOutsideTheModelsListIsNotWritten() = runSession(configure = nordFull) { e ->
+        e.session.start()
+        e.time.advance(3_000)
+        assertFalse(e.setSwitch(0x30, true))
+        assertFalse(e.setSwitch(0x06, true))                          // low latency has its own action
+        assertTrue(e.featureWrites().isEmpty())
+    }
+
+    @Test
+    fun turningOn3dAudioTurnsHighQualityAudioOffAfterIt() = runSession(configure = { nordFull(it); it.features[0x18] = 1 }) { e ->
+        e.session.start()
+        e.time.advance(3_000)
+        assertTrue(e.setSwitch(0x1B, true))
+        assertEquals(listOf("1B 01", "18 00"), e.featureWrites())
+        val sw = e.session.state.value.extras.switches
+        assertEquals(true, sw.first { it.id == 0x1B }.on)
+        assertEquals(false, sw.first { it.id == 0x18 }.on)
+    }
+
+    @Test
+    fun turningOnHighQualityAudioTurns3dAudioOffFirst() = runSession(configure = { nordFull(it); it.features[0x1B] = 1 }) { e ->
+        e.session.start()
+        e.time.advance(3_000)
+        assertTrue(e.setSwitch(0x18, true))
+        assertEquals(listOf("1B 00", "18 01"), e.featureWrites())
+    }
+
+    @Test
+    fun rapidTogglesOfOneSwitchAreCoalescedToTheLatest() = runSession(configure = nordFull) { e ->
+        e.session.start()
+        e.time.advance(3_000)
+        val a = e.scope.async { e.session.setSwitch(0x1D, true) }
+        val b = e.scope.async { e.session.setSwitch(0x1D, false) }
+        val c = e.scope.async { e.session.setSwitch(0x1D, true) }
+        e.time.advance(8_000)
+        assertTrue(a.await())
+        assertFalse(b.await())
+        assertTrue(c.await())
+        assertEquals(listOf("1D 01", "1D 01"), e.featureWrites())
     }
 
     // ── low latency ──────────────────────────────────────────────────────────────────────────────

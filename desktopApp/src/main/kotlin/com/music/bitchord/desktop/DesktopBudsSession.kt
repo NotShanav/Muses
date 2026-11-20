@@ -34,6 +34,8 @@ internal data class BudsState(
     val supportedNoiseModes: Set<BudsNoiseMode>,
     val lowLatency: Boolean?,
     val lowLatencySupported: Boolean,
+    /** Everything beyond the base popup (ANC levels, equalizer, switches, firmware). Contract: DesktopBudsContract.kt. */
+    val extras: BudsExtras = BudsExtras(),
 ) {
     companion object {
         val INITIAL = BudsState(
@@ -93,6 +95,14 @@ internal class BudsSession(
     @Volatile private var bitmap: BudsBitmap? = null
 
     @Volatile private var offeredCodes: Set<Int>? = null
+    @Volatile private var profile: BudsModelProfile = BudsModelProfiles.DEFAULT
+    @Volatile private var rereadJob: Job? = null
+
+    @Volatile private var eqRequested: Int? = null
+    @Volatile private var eqPicked: Int? = null
+    @Volatile private var eqPickedAt: Long = 0L
+    private val eqObservations = AtomicInteger(0)
+    private val switchRequested = ConcurrentHashMap<Int, Boolean>()
     @Volatile private var featureValues: Map<Int, Int> = emptyMap()
     @Volatile private var observedModes: Set<BudsNoiseMode> = emptySet()
     private val modeObservations = AtomicInteger(0)
@@ -116,6 +126,28 @@ internal class BudsSession(
     suspend fun setNoiseMode(mode: BudsNoiseMode): Boolean = opMutex.withLock { doSetNoiseMode(mode) }
 
     suspend fun setLowLatency(on: Boolean): Boolean = opMutex.withLock { doSetLowLatency(on) }
+
+    /** True only when the buds confirmed the level by reading the mode back. */
+    suspend fun setAncLevel(level: BudsAncLevel): Boolean = opMutex.withLock { doSetAncLevel(level) }
+
+    /**
+     * Selects a built-in equalizer preset; true only when the buds confirmed it. Rapid clicks are coalesced: a call
+     * that finds a newer request waiting returns false without writing, and the newest one is written.
+     */
+    suspend fun setEqPreset(id: Int): Boolean {
+        eqRequested = id
+        return opMutex.withLock {
+            if (eqRequested != id) false else doSetEqPreset(id)
+        }
+    }
+
+    /** Sets one of [BudsExtras.switches]; true only when the buds confirmed it. Rapid repeats per id are coalesced the same way. */
+    suspend fun setSwitch(id: Int, on: Boolean): Boolean {
+        switchRequested[id] = on
+        return opMutex.withLock {
+            if (switchRequested[id] != on) false else doSetSwitch(id, on)
+        }
+    }
 
     // ── lifecycle ────────────────────────────────────────────────────────────────────────────────
 
@@ -173,15 +205,22 @@ internal class BudsSession(
                 recomputeSupported()
             }
             BudsIds.CMD_PRODUCT_ID or BudsIds.REPLY_BIT ->
-                BudsParsers.productId(f.payload)?.let { id -> _state.update { it.copy(productId = id) } }
+                BudsParsers.productId(f.payload)?.let { id ->
+                    profile = BudsModelProfiles.forProduct(id)
+                    _state.update { it.copy(productId = id) }
+                    recomputeSupported()
+                }
             BudsIds.CMD_BROADCAST_CODES or BudsIds.REPLY_BIT -> {
                 BudsParsers.broadcastCodes(f.payload)?.let { offeredCodes = it }
                 recomputeSupported()
             }
             BudsIds.CMD_BATTERY or BudsIds.REPLY_BIT -> BudsParsers.battery(f.payload)?.let { applyBattery(it) }
             BudsIds.CMD_WEARING or BudsIds.REPLY_BIT -> BudsParsers.wearing(f.payload)?.let { applyWearing(it) }
-            BudsIds.CMD_ANC_QUERY or BudsIds.REPLY_BIT ->
-                BudsParsers.ancReplyMask(f.payload)?.let { BudsParsers.decodeNoiseMask(it) }?.let { applyMode(it) }
+            BudsIds.CMD_ANC_QUERY or BudsIds.REPLY_BIT -> BudsParsers.ancReplyMask(f.payload)?.let { applyAncMask(it) }
+            BudsIds.CMD_QUERY_EQ or BudsIds.REPLY_BIT -> BudsParsers.eqReply(f.payload)?.let { applyEq(it) }
+            BudsIds.CMD_EQ_CHANGED -> BudsParsers.eqPush(f.payload)?.let { applyEq(it) }
+            BudsIds.CMD_FIRMWARE or BudsIds.REPLY_BIT ->
+                BudsParsers.firmware(f.payload)?.let { v -> _state.update { it.copy(extras = it.extras.copy(firmware = v)) } }
             BudsIds.CMD_FEATURE_STATUS or BudsIds.REPLY_BIT -> {
                 if (BudsParsers.ackStatus(f.payload) == 0) BudsParsers.featureValues(f.payload)?.let { applyFeatures(it) }
             }
@@ -201,8 +240,7 @@ internal class BudsSession(
             BudsIds.EVENT_DIAGNOSTIC -> replyTo(f, BudsPushAnswers.diagnostic(p.copyOfRange(1, p.size)))
             BudsIds.EVENT_BATTERY -> BudsParsers.battery(p.copyOfRange(1, p.size))?.let { applyBattery(it) }
             BudsIds.EVENT_WEARING -> BudsParsers.wearing(p.copyOfRange(1, p.size))?.let { applyWearing(it) }
-            BudsIds.EVENT_ANC ->
-                BudsParsers.ancNotifyMask(p)?.let { BudsParsers.decodeNoiseMask(it) }?.let { applyMode(it) }
+            BudsIds.EVENT_ANC -> BudsParsers.ancNotifyMask(p)?.let { applyAncMask(it) }
             BudsIds.EVENT_GAME_MODE -> BudsParsers.gameModePush(p)?.let { state ->
                 val id = lowLatencyFeatureId() ?: BudsIds.FEATURE_GAME_MODE_LEGACY
                 applyFeatures(mapOf(id to state))
@@ -241,10 +279,29 @@ internal class BudsSession(
         _state.update { it.copy(inEar = w.inEar) }
     }
 
-    private fun applyMode(mode: BudsNoiseMode) {
-        observedModes = observedModes + mode
+    /**
+     * A mode report (reply 0x810C or push 03). The model's own tree decides first (it knows the parent bits 0 and 2
+     * as well as the report bits 3 and 8); the generic table is the fallback. A mask that names no mode is logged
+     * (hex only) and changes nothing.
+     */
+    private fun applyAncMask(mask: Int) {
+        val report = profile.decodeAnc(mask)
+            ?: BudsParsers.decodeNoiseMask(mask)?.let { BudsAncReport(it) }
+        if (report == null) {
+            debugLog?.invoke("ANC report names no mode, mask=" + String.format("%04X", mask))
+            return
+        }
+        applyAnc(report)
+    }
+
+    private fun applyAnc(report: BudsAncReport) {
+        observedModes = observedModes + report.mode
         modeObservations.incrementAndGet()
-        _state.update { it.copy(noiseMode = mode) }
+        // A plain ANC bit names no level: the last known level stays. A level this model does not offer is not shown.
+        val level = report.level?.takeIf { it in profile.ancLevels }
+        _state.update {
+            it.copy(noiseMode = report.mode, extras = if (level != null) it.extras.copy(ancLevel = level) else it.extras)
+        }
         recomputeSupported()
     }
 
@@ -256,16 +313,56 @@ internal class BudsSession(
         val ancOffered = bitmapSays != false &&
             (offeredCodes?.contains(BudsIds.EVENT_ANC) == true || observedModes.isNotEmpty() || bitmapSays == true)
         val modes = if (ancOffered) BASE_MODES + observedModes else emptySet()
-        _state.update { if (it.supportedNoiseModes == modes) it else it.copy(supportedNoiseModes = modes) }
+        val levels: Set<BudsAncLevel> = if (ancOffered) profile.ancLevels else emptySet()
+        _state.update {
+            val eq = eqFor(it.extras.eq?.selectedId)
+            val switches = switchesNow()
+            if (it.supportedNoiseModes == modes && it.extras.ancLevels == levels && it.extras.eq == eq && it.extras.switches == switches) it
+            else it.copy(supportedNoiseModes = modes, extras = it.extras.copy(ancLevels = levels, eq = eq, switches = switches))
+        }
     }
 
     private fun applyFeatures(values: Map<Int, Int>) {
         featureValues = featureValues + values
         featureObservations.incrementAndGet()
         val id = lowLatencyFeatureId()
+        val switches = switchesNow()
         _state.update {
-            it.copy(lowLatencySupported = id != null, lowLatency = id?.let { i -> (featureValues[i] ?: 0) != 0 })
+            it.copy(
+                lowLatencySupported = id != null,
+                lowLatency = id?.let { i -> (featureValues[i] ?: 0) != 0 },
+                extras = it.extras.copy(switches = switches),
+            )
         }
+    }
+
+    private fun featureOn(id: Int): Boolean? = featureValues[id]?.let { it != 0 }
+
+    /** The model's switches in display order, only those the buds answered in a status read (a missing id is a switch they lack). */
+    private fun switchesNow(): List<BudsSwitch> {
+        if (!supports(BudsIds.CMD_FEATURE_SWITCH)) return emptyList()
+        return profile.switches.filter { featureValues.containsKey(it.id) }.map { it.copy(on = featureOn(it.id)) }
+    }
+
+    /** The equalizer row: the model's presets when the buds can select one; [selected] only when it is one of them. */
+    private fun eqFor(selected: Int?): BudsEqState? {
+        val presets = profile.eqPresets
+        if (presets.isEmpty() || !supports(BudsIds.CMD_SET_EQ)) return null
+        return BudsEqState(presets, selected?.takeIf { id -> presets.any { it.id == id } })
+    }
+
+    /**
+     * The buds report [id] as the current preset (reply 0x810F or push 0x0504). While a pick of ours is unconfirmed
+     * and under [EQ_HOLD_MS] old, a report of another preset is ignored: a read answered before the buds applied the
+     * change must not make the highlight jump back (QuickBuds fixed the same bug).
+     */
+    private fun applyEq(id: Int) {
+        val want = eqPicked
+        if (want != null) {
+            if (id == want || nowMs() - eqPickedAt >= EQ_HOLD_MS) eqPicked = null else return
+        }
+        eqObservations.incrementAndGet()
+        _state.update { it.copy(extras = it.extras.copy(eq = eqFor(id))) }
     }
 
     /** Game mode lives under 0x28 on newer devices, else 0x06 (section 16). */
@@ -308,6 +405,15 @@ internal class BudsSession(
             delayFn(INIT_STEP_MS)
             send(BudsIds.CMD_WEARING, ByteArray(0))
         }
+        // Model extras last, same spacing: the current equalizer preset and the firmware version.
+        if (profile.eqPresets.isNotEmpty() && supports(BudsIds.CMD_QUERY_EQ)) {
+            delayFn(INIT_STEP_MS)
+            send(BudsIds.CMD_QUERY_EQ, ByteArray(0))
+        }
+        if (profile.readsFirmware && supports(BudsIds.CMD_FIRMWARE)) {
+            delayFn(INIT_STEP_MS)
+            send(BudsIds.CMD_FIRMWARE, ByteArray(0))
+        }
     }
 
     /** False only when the buds' bitmap is known and lacks the command; the vendor app never sends such a command. */
@@ -320,6 +426,10 @@ internal class BudsSession(
             send(BudsIds.CMD_BATTERY, ByteArray(0))     // wearing is pushed, never polled
             delayFn(INIT_STEP_MS)
             sendStatusQuery()
+            if (profile.eqPresets.isNotEmpty() && supports(BudsIds.CMD_QUERY_EQ)) {
+                delayFn(INIT_STEP_MS)
+                send(BudsIds.CMD_QUERY_EQ, ByteArray(0))
+            }
         }
     }
 
@@ -344,26 +454,110 @@ internal class BudsSession(
         replies.remove(BudsIds.CMD_SET_ANC or BudsIds.REPLY_BIT)
         if (!send(BudsIds.CMD_SET_ANC, BudsFrames.setAncPayload(mode))) return false
         if (!awaitAccepted(BudsIds.CMD_SET_ANC or BudsIds.REPLY_BIT, ACK_WAIT_MS)) return false
-        // Read the real state back: an ack of 00 means "accepted", not "applied".
-        if (!send(BudsIds.CMD_ANC_QUERY, byteArrayOf(1, 1))) return false
-        return awaitCondition(READBACK_WAIT_MS) {
-            modeObservations.get() > observedBefore && _state.value.noiseMode == mode
+        return confirmAnc { modeObservations.get() > observedBefore && _state.value.noiseMode == mode }
+    }
+
+    private suspend fun doSetAncLevel(level: BudsAncLevel): Boolean {
+        if (!isOpen() || !supports(BudsIds.CMD_SET_ANC)) return false
+        val payload = profile.levelSetPayload(level) ?: return false
+        val observedBefore = modeObservations.get()
+        replies.remove(BudsIds.CMD_SET_ANC or BudsIds.REPLY_BIT)
+        if (!send(BudsIds.CMD_SET_ANC, payload)) return false
+        if (!awaitAccepted(BudsIds.CMD_SET_ANC or BudsIds.REPLY_BIT, ACK_WAIT_MS)) return false
+        return confirmAnc {
+            modeObservations.get() > observedBefore &&
+                _state.value.noiseMode == BudsNoiseMode.NOISE_CANCELLING &&
+                _state.value.extras.ancLevel == level
+        }
+    }
+
+    /**
+     * An ack of 00 means "accepted", not "applied". Give the push a moment to confirm, then read the real state.
+     * Either way one more read follows later: a read answered before the buds applied the change must not leave
+     * the display on the old mode.
+     */
+    private suspend fun confirmAnc(confirmed: () -> Boolean): Boolean {
+        if (awaitCondition(PUSH_WAIT_MS, confirmed)) {
+            scheduleAncReread()
+            return true
+        }
+        val sent = send(BudsIds.CMD_ANC_QUERY, byteArrayOf(1, 1))
+        val ok = sent && awaitCondition(READBACK_WAIT_MS, confirmed)
+        scheduleAncReread()
+        return ok
+    }
+
+    /** One late read after a mode write; a newer write replaces the pending one. */
+    private fun scheduleAncReread() {
+        if (!supports(BudsIds.CMD_ANC_QUERY)) return
+        rereadJob?.cancel()
+        rereadJob = sessionScope.launch {
+            delayFn(ANC_REREAD_MS)
+            if (isOpen()) send(BudsIds.CMD_ANC_QUERY, byteArrayOf(1, 1))
         }
     }
 
     private suspend fun doSetLowLatency(on: Boolean): Boolean {
         if (!isOpen() || !supports(BudsIds.CMD_FEATURE_SWITCH)) return false
         val id = lowLatencyFeatureId() ?: return false
+        return writeFeature(id, on)
+    }
+
+    /**
+     * One feature write, confirmed by read-back. The buds apply a change up to about 1 s after the ack (game mode
+     * measured), so a read sooner returns the old value: give a push time to confirm, then read that id.
+     */
+    private suspend fun writeFeature(id: Int, on: Boolean): Boolean {
         val observedBefore = featureObservations.get()
         replies.remove(BudsIds.CMD_FEATURE_SWITCH or BudsIds.REPLY_BIT)
         if (!send(BudsIds.CMD_FEATURE_SWITCH, byteArrayOf(id.toByte(), (if (on) 1 else 0).toByte()))) return false
         if (!awaitAccepted(BudsIds.CMD_FEATURE_SWITCH or BudsIds.REPLY_BIT, ACK_WAIT_MS)) return false
-        // The buds apply a game-mode change about 1 s after the ack, so a read sooner returns the old value:
-        // give a push time to confirm, then read.
-        val confirmed = { featureObservations.get() > observedBefore && _state.value.lowLatency == on }
+        val confirmed = { featureObservations.get() > observedBefore && featureOn(id) == on }
         if (awaitCondition(PUSH_WAIT_MS, confirmed)) return true
         if (!send(BudsIds.CMD_FEATURE_STATUS, byteArrayOf(1, id.toByte()))) return false
         return awaitCondition(READ_AFTER_WAIT_MS, confirmed)
+    }
+
+    /**
+     * A switch of the popup. 3D audio and High-quality audio exclude each other (section 18): turning one on first
+     * turns the other off, in the order the section gives. A failed Hi-Res write puts 3D audio back.
+     */
+    private suspend fun doSetSwitch(id: Int, on: Boolean): Boolean {
+        if (!isOpen() || !supports(BudsIds.CMD_FEATURE_SWITCH)) return false
+        if (profile.switches.none { it.id == id } || !featureValues.containsKey(id)) return false
+        if (id == BudsIds.FEATURE_SPATIAL && on && featureOn(BudsIds.FEATURE_HIRES) == true) {
+            if (!writeFeature(BudsIds.FEATURE_SPATIAL, true)) return false
+            writeFeature(BudsIds.FEATURE_HIRES, false)
+            return true
+        }
+        if (id == BudsIds.FEATURE_HIRES && on && featureOn(BudsIds.FEATURE_SPATIAL) == true) {
+            if (!writeFeature(BudsIds.FEATURE_SPATIAL, false)) return false
+            if (!writeFeature(BudsIds.FEATURE_HIRES, true)) {
+                writeFeature(BudsIds.FEATURE_SPATIAL, true)
+                return false
+            }
+            return true
+        }
+        return writeFeature(id, on)
+    }
+
+    private suspend fun doSetEqPreset(id: Int): Boolean {
+        if (!isOpen() || !supports(BudsIds.CMD_SET_EQ)) return false
+        if (profile.eqPresets.none { it.id == id }) return false
+        val observedBefore = eqObservations.get()
+        replies.remove(BudsIds.CMD_SET_EQ or BudsIds.REPLY_BIT)
+        eqPicked = id
+        eqPickedAt = nowMs()
+        if (!send(BudsIds.CMD_SET_EQ, byteArrayOf(id.toByte())) ||
+            !awaitAccepted(BudsIds.CMD_SET_EQ or BudsIds.REPLY_BIT, ACK_WAIT_MS)
+        ) {
+            eqPicked = null
+            return false
+        }
+        val confirmed = { eqObservations.get() > observedBefore && _state.value.extras.eq?.selectedId == id }
+        if (awaitCondition(PUSH_WAIT_MS, confirmed)) return true
+        if (supports(BudsIds.CMD_QUERY_EQ) && !send(BudsIds.CMD_QUERY_EQ, ByteArray(0))) return false
+        return awaitCondition(READBACK_WAIT_MS, confirmed)
     }
 
     private suspend fun awaitAccepted(replyCmd: Int, timeoutMs: Long): Boolean {
@@ -429,10 +623,10 @@ internal class BudsSession(
         val isReply = cmd and BudsIds.REPLY_BIT != 0
         return when (base) {
             BudsIds.CMD_FEATURE_SWITCH, BudsIds.CMD_SET_ANC, BudsIds.CMD_ANC_QUERY,
-            BudsIds.CMD_FEATURE_STATUS, BudsIds.CMD_FEATURE_PUSH -> true
+            BudsIds.CMD_FEATURE_STATUS, BudsIds.CMD_FEATURE_PUSH, BudsIds.CMD_SET_EQ, BudsIds.CMD_EQ_CHANGED -> true
             // What the buds say about themselves and what they ask of us: answers only, never our own plain queries.
             BudsIds.CMD_HANDSHAKE, BudsIds.CMD_PRODUCT_ID, BudsIds.CMD_BROADCAST_CODES, BudsIds.CMD_REGISTER,
-            BudsIds.CMD_BATTERY, BudsIds.CMD_WEARING -> isReply
+            BudsIds.CMD_BATTERY, BudsIds.CMD_WEARING, BudsIds.CMD_QUERY_EQ -> isReply
             BudsIds.CMD_REQ_TIME, BudsIds.CMD_REQ_APP_LIST, BudsIds.CMD_REQ_CAPABILITIES, BudsIds.CMD_REQ_SPATIAL -> true
             BudsIds.CMD_PUSH -> payload.firstOrNull()?.toInt()?.let { it == BudsIds.EVENT_ANC || it == BudsIds.EVENT_GAME_MODE } == true
             else -> false
@@ -451,5 +645,7 @@ internal class BudsSession(
         const val READBACK_WAIT_MS = 1_200L
         const val PUSH_WAIT_MS = 900L
         const val READ_AFTER_WAIT_MS = 600L
+        const val ANC_REREAD_MS = 1_500L
+        const val EQ_HOLD_MS = 4_000L
     }
 }
