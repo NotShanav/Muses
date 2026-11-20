@@ -53,6 +53,9 @@ internal data class BudsState(
 internal interface BudsTransport : AutoCloseable {
     suspend fun write(bytes: ByteArray)
     suspend fun read(buffer: ByteArray): Int
+
+    /** Why the link ended, when the transport knows (debug log only). Never holds a name or an address. */
+    val closeReason: String? get() = null
 }
 
 /**
@@ -84,6 +87,11 @@ internal class BudsSession(
     /** Last reply seen per reply command (matched by command, not seq: some models answer with their own seq). */
     private val replies = ConcurrentHashMap<Int, BudsFrame>()
 
+    private val startedAt: Long = nowMs()
+
+    /** The command bitmap from the 0x0100 reply; null until it arrives (then nothing is held back). */
+    @Volatile private var bitmap: BudsBitmap? = null
+
     @Volatile private var offeredCodes: Set<Int>? = null
     @Volatile private var featureValues: Map<Int, Int> = emptyMap()
     @Volatile private var observedModes: Set<BudsNoiseMode> = emptySet()
@@ -102,7 +110,7 @@ internal class BudsSession(
 
     /** Idempotent. Stops the work of this session only (the caller's scope stays alive) and closes the transport. */
     fun close() {
-        shutdown()
+        shutdown("closed by the app")
     }
 
     suspend fun setNoiseMode(mode: BudsNoiseMode): Boolean = opMutex.withLock { doSetNoiseMode(mode) }
@@ -111,8 +119,9 @@ internal class BudsSession(
 
     // ── lifecycle ────────────────────────────────────────────────────────────────────────────────
 
-    private fun shutdown() {
+    private fun shutdown(reason: String) {
         if (!closed.compareAndSet(false, true)) return
+        debugLog?.invoke("END $reason (+${nowMs() - startedAt}ms)")
         _state.update { it.copy(connected = false) }
         job.cancel()
         try {
@@ -129,10 +138,14 @@ internal class BudsSession(
     private suspend fun readLoop() {
         val buffer = ByteArray(1024)
         val parser = BudsFrameParser()
+        var why = "read loop stopped"
         try {
             while (currentCoroutineContext().isActive && isOpen()) {
                 val n = transport.read(buffer)
-                if (n < 0) break
+                if (n < 0) {
+                    why = "link ended: " + (transport.closeReason ?: "no detail")
+                    break
+                }
                 if (n == 0) {
                     yield()
                     continue
@@ -143,8 +156,9 @@ internal class BudsSession(
             throw e
         } catch (e: Exception) {
             // a transport failure ends the link the same way a close does
+            why = "read threw " + e.javaClass.simpleName
         } finally {
-            shutdown()
+            shutdown(why)
         }
     }
 
@@ -152,8 +166,12 @@ internal class BudsSession(
         logFrame("RX", f.cmd, f.seq, f.payload)
         if (f.isReply) replies[f.cmd] = f
         when (f.cmd) {
-            BudsIds.CMD_PUSH -> handlePush(f.payload)
+            BudsIds.CMD_PUSH -> handlePush(f)
             BudsIds.CMD_FEATURE_PUSH -> BudsParsers.featureValues(f.payload)?.let { applyFeatures(it) }
+            BudsIds.CMD_HANDSHAKE or BudsIds.REPLY_BIT -> {
+                BudsBitmap.parse(f.payload)?.let { bitmap = it }
+                recomputeSupported()
+            }
             BudsIds.CMD_PRODUCT_ID or BudsIds.REPLY_BIT ->
                 BudsParsers.productId(f.payload)?.let { id -> _state.update { it.copy(productId = id) } }
             BudsIds.CMD_BROADCAST_CODES or BudsIds.REPLY_BIT -> {
@@ -169,13 +187,18 @@ internal class BudsSession(
             }
             BudsIds.CMD_REQ_TIME, BudsIds.CMD_REQ_APP_LIST, BudsIds.CMD_REQ_CAPABILITIES, BudsIds.CMD_REQ_SPATIAL ->
                 answerRequest(f)
-            else -> Unit
+            // Outside command groups 01-05 and 0F the vendor app answers "unknown request" (section 11).
+            else -> if (BudsPushAnswers.isUnknownRequest(f.cmd)) replyTo(f, byteArrayOf(1))
         }
     }
 
-    private fun handlePush(p: ByteArray) {
+    private fun handlePush(f: BudsFrame) {
+        val p = f.payload
         if (p.isEmpty()) return
         when (p[0].toInt() and 0xFF) {
+            // Some firmwares wait for these two answers and reset the link when none comes (section 11).
+            BudsIds.EVENT_LINKED -> replyTo(f, BudsPushAnswers.linked())
+            BudsIds.EVENT_DIAGNOSTIC -> replyTo(f, BudsPushAnswers.diagnostic(p.copyOfRange(1, p.size)))
             BudsIds.EVENT_BATTERY -> BudsParsers.battery(p.copyOfRange(1, p.size))?.let { applyBattery(it) }
             BudsIds.EVENT_WEARING -> BudsParsers.wearing(p.copyOfRange(1, p.size))?.let { applyWearing(it) }
             BudsIds.EVENT_ANC ->
@@ -199,6 +222,11 @@ internal class BudsSession(
             BudsIds.CMD_REQ_CAPABILITIES -> byteArrayOf(0, 0, 0)
             else -> byteArrayOf(1)
         }
+        replyTo(f, payload)
+    }
+
+    /** An answer to something the buds sent: the same command with bit 15 set, the same seq. */
+    private fun replyTo(f: BudsFrame, payload: ByteArray) {
         val bytes = BudsFrames.reply(f.cmd, f.seq, payload)
         sessionScope.launch { writeBytes(bytes, f.cmd or BudsIds.REPLY_BIT, f.seq, payload) }
     }
@@ -222,7 +250,11 @@ internal class BudsSession(
 
     /** Noise control is offered when the firmware offers event 03 or a mode has been seen; Adaptive only once seen. */
     private fun recomputeSupported() {
-        val ancOffered = offeredCodes?.contains(BudsIds.EVENT_ANC) == true || observedModes.isNotEmpty()
+        // The bitmap is the firmware's own list of what it does: noise control is there when it has the ANC command,
+        // even if the offered events lack 03 (Nord Buds 3 Pro offers battery and wearing only).
+        val bitmapSays = bitmap?.supports(BudsIds.CMD_SET_ANC)
+        val ancOffered = bitmapSays != false &&
+            (offeredCodes?.contains(BudsIds.EVENT_ANC) == true || observedModes.isNotEmpty() || bitmapSays == true)
         val modes = if (ancOffered) BASE_MODES + observedModes else emptySet()
         _state.update { if (it.supportedNoiseModes == modes) it else it.copy(supportedNoiseModes = modes) }
     }
@@ -255,16 +287,31 @@ internal class BudsSession(
         delayFn(INIT_STEP_MS)
         awaitCondition(BROADCAST_WAIT_MS) { offeredCodes != null }
         val ids = registerIds(offeredCodes)
-        send(BudsIds.CMD_REGISTER, ByteArray(ids.size + 1) { if (it == 0) ids.size.toByte() else ids[it - 1].toByte() })
-        delayFn(INIT_STEP_MS)
+        if (supports(BudsIds.CMD_REGISTER)) {
+            send(BudsIds.CMD_REGISTER, ByteArray(ids.size + 1) { if (it == 0) ids.size.toByte() else ids[it - 1].toByte() })
+            delayFn(INIT_STEP_MS)
+        } else {
+            // No 0x0205 in the bitmap: one code per command (section 6).
+            for (id in ids) {
+                send(BudsIds.CMD_REGISTER_ONE, byteArrayOf(id.toByte()))
+                delayFn(INIT_STEP_MS)
+            }
+        }
         sendStatusQuery()
         delayFn(INIT_STEP_MS)
-        send(BudsIds.CMD_ANC_QUERY, byteArrayOf(1, 1))
-        delayFn(INIT_STEP_MS)
+        if (supports(BudsIds.CMD_ANC_QUERY)) {
+            send(BudsIds.CMD_ANC_QUERY, byteArrayOf(1, 1))
+            delayFn(INIT_STEP_MS)
+        }
         send(BudsIds.CMD_BATTERY, ByteArray(0))
-        delayFn(INIT_STEP_MS)
-        send(BudsIds.CMD_WEARING, ByteArray(0))
+        if (supports(BudsIds.CMD_WEARING)) {
+            delayFn(INIT_STEP_MS)
+            send(BudsIds.CMD_WEARING, ByteArray(0))
+        }
     }
+
+    /** False only when the buds' bitmap is known and lacks the command; the vendor app never sends such a command. */
+    private fun supports(cmd: Int): Boolean = bitmap?.supports(cmd) ?: true
 
     private suspend fun pollLoop() {
         while (isOpen()) {
@@ -277,7 +324,7 @@ internal class BudsSession(
     }
 
     private suspend fun sendStatusQuery() {
-        val ids = BudsIds.STATUS_FEATURE_IDS
+        val ids = BudsModelQueries.statusIds(_state.value.productId)
         send(BudsIds.CMD_FEATURE_STATUS, ByteArray(ids.size + 1) { if (it == 0) ids.size.toByte() else ids[it - 1].toByte() })
     }
 
@@ -292,7 +339,7 @@ internal class BudsSession(
     // ── writes the owner asks for ────────────────────────────────────────────────────────────────
 
     private suspend fun doSetNoiseMode(mode: BudsNoiseMode): Boolean {
-        if (!isOpen()) return false
+        if (!isOpen() || !supports(BudsIds.CMD_SET_ANC)) return false
         val observedBefore = modeObservations.get()
         replies.remove(BudsIds.CMD_SET_ANC or BudsIds.REPLY_BIT)
         if (!send(BudsIds.CMD_SET_ANC, BudsFrames.setAncPayload(mode))) return false
@@ -305,7 +352,7 @@ internal class BudsSession(
     }
 
     private suspend fun doSetLowLatency(on: Boolean): Boolean {
-        if (!isOpen()) return false
+        if (!isOpen() || !supports(BudsIds.CMD_FEATURE_SWITCH)) return false
         val id = lowLatencyFeatureId() ?: return false
         val observedBefore = featureObservations.get()
         replies.remove(BudsIds.CMD_FEATURE_SWITCH or BudsIds.REPLY_BIT)
@@ -359,22 +406,34 @@ internal class BudsSession(
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            shutdown()
+            shutdown("write failed (" + e.javaClass.simpleName + ")")
             false
         }
     }
 
     private fun logFrame(direction: String, cmd: Int, seq: Int, payload: ByteArray) {
         val log = debugLog ?: return
+        val at = nowMs() - startedAt
+        val head = payload.firstOrNull()?.toInt()?.and(0xFF)
+        if ((cmd and 0x7FFF) == BudsIds.CMD_PUSH && (head == BudsIds.EVENT_LINKED || head == BudsIds.EVENT_DIAGNOSTIC)) {
+            // Connected-devices info and diagnostic JSON can hold names or addresses: size only.
+            log("$direction push ${String.format("%02X", head ?: 0)} len=${payload.size} payload-not-logged (+${at}ms)")
+            return
+        }
         if (!isControlFrame(cmd, payload)) return
-        log("$direction ${BudsHex.of(BudsFrames.build(cmd, seq, payload))}")
+        log("$direction ${BudsHex.of(BudsFrames.build(cmd, seq, payload))} (+${at}ms)")
     }
 
     private fun isControlFrame(cmd: Int, payload: ByteArray): Boolean {
         val base = cmd and 0x7FFF
+        val isReply = cmd and BudsIds.REPLY_BIT != 0
         return when (base) {
             BudsIds.CMD_FEATURE_SWITCH, BudsIds.CMD_SET_ANC, BudsIds.CMD_ANC_QUERY,
             BudsIds.CMD_FEATURE_STATUS, BudsIds.CMD_FEATURE_PUSH -> true
+            // What the buds say about themselves and what they ask of us: answers only, never our own plain queries.
+            BudsIds.CMD_HANDSHAKE, BudsIds.CMD_PRODUCT_ID, BudsIds.CMD_BROADCAST_CODES, BudsIds.CMD_REGISTER,
+            BudsIds.CMD_BATTERY, BudsIds.CMD_WEARING -> isReply
+            BudsIds.CMD_REQ_TIME, BudsIds.CMD_REQ_APP_LIST, BudsIds.CMD_REQ_CAPABILITIES, BudsIds.CMD_REQ_SPATIAL -> true
             BudsIds.CMD_PUSH -> payload.firstOrNull()?.toInt()?.let { it == BudsIds.EVENT_ANC || it == BudsIds.EVENT_GAME_MODE } == true
             else -> false
         }

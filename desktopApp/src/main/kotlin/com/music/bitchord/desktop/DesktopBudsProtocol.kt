@@ -52,6 +52,8 @@ internal object BudsIds {
     const val CMD_BROADCAST_CODES = 0x0200
     const val CMD_PUSH = 0x0204
     const val CMD_REGISTER = 0x0205
+    /** One code per command, for buds whose bitmap lacks [CMD_REGISTER] (section 6). */
+    const val CMD_REGISTER_ONE = 0x0201
     const val CMD_FEATURE_SWITCH = 0x0403
     const val CMD_SET_ANC = 0x0404
     const val CMD_REQ_TIME = 0x0500
@@ -70,6 +72,10 @@ internal object BudsIds {
     const val EVENT_WEARING = 0x02
     const val EVENT_ANC = 0x03
     const val EVENT_GAME_MODE = 0x05
+
+    // Section 11: pushes the buds wait for an answer to.
+    const val EVENT_LINKED = 0xF2
+    const val EVENT_DIAGNOSTIC = 0xF4
 
     // Section 16: feature switch ids.
     const val FEATURE_STATUS_UNKNOWN_FIRST = 0x05
@@ -460,3 +466,143 @@ internal object BudsParsers {
     /** The status byte of a write reply (`0x8403`, `0x8404`): 00 accepted. */
     fun ackStatus(payload: ByteArray): Int? = payload.firstOrNull()?.let { it.toInt() and 0xFF }
 }
+
+/**
+ * The command bitmap of the buds (reply to 0x0100, section 5): `00`, then bytes read least significant bit first.
+ * A command with a bit that is off must not be sent: some firmwares reset the link when they get one.
+ * Commands the table does not list, and the always-enabled ones, are never gated.
+ */
+internal class BudsBitmap private constructor(private val bits: Set<Int>) {
+
+    fun supports(cmd: Int): Boolean {
+        if (cmd in ALWAYS) return true
+        val needed = BITS_OF[cmd] ?: return true
+        return needed.any { it in bits }
+    }
+
+    companion object {
+        private const val MAX_BITS = 69
+
+        /** Section 5: bit n enables these commands (PROTOCOL.md). */
+        private val TABLE: Map<Int, List<Int>> = mapOf(
+            0 to listOf(0x0105),
+            1 to listOf(0x0106),
+            2 to listOf(0x0107),
+            3 to listOf(0x0108, 0x0401, 0x0416),
+            4 to listOf(0x0109),
+            5 to listOf(0x0400),
+            6 to listOf(0x0402),
+            7 to listOf(0x0403),
+            8 to listOf(0x010C, 0x0404),
+            9 to listOf(0x0405),
+            10 to listOf(0x0406, 0x010F),
+            11 to listOf(0x0407),
+            13 to listOf(0x0408),
+            14 to listOf(0x0409),
+            17 to listOf(0x0114),
+            19 to listOf(0x040E, 0x040D, 0x0115, 0x0116),
+            20 to listOf(0x040F),
+            21 to listOf(0x0410, 0x0119),
+            22 to listOf(0x0205),
+            23 to listOf(0x0F00),
+            25 to listOf(0x0118, 0x0411),
+            26 to listOf(0x011A, 0x0412),
+            27 to listOf(0x011C, 0x0413),
+            29 to listOf(0x0112, 0x040B),
+            30 to listOf(0x011E, 0x011F, 0x0415),
+            31 to listOf(0x040D),
+            33 to listOf(0x0121, 0x0417),
+            34 to listOf(0x0122, 0x0418),
+            35 to listOf(0x0419),
+            36 to listOf(0x011D, 0x0414),
+            37 to listOf(0x0123, 0x041A),
+            38 to listOf(0x0124, 0x041B),
+            39 to listOf(0x0125, 0x041C, 0x0127, 0x041D, 0x041F),
+            40 to listOf(0x0421, 0x0023, 0x0024, 0x0022, 0x0126, 0x0129),
+            41 to listOf(0xEF01),
+            42 to listOf(0xEF02),
+            43 to listOf(0xEF03, 0x041E),
+            44 to listOf(0x0420),
+            45 to listOf(0x001C),
+            47 to listOf(0x0422, 0x012A),
+            48 to listOf(0xEF04),
+            49 to listOf(0x0423, 0x012B),
+            51 to listOf(0x0424),
+            52 to listOf(0xEF06),
+            54 to listOf(0x012C),
+            55 to listOf(0x0425, 0x012E, 0x0426),
+            56 to listOf(0x012F),
+            57 to listOf(0x0427, 0x0130),
+            58 to listOf(0x0131, 0x0428),
+            59 to listOf(0x0429, 0x0132),
+            60 to listOf(0x0014),
+            61 to listOf(0x042D, 0x0133),
+            62 to listOf(0x042E),
+            63 to listOf(0xEF07),
+            64 to listOf(0xEF08, 0x0136, 0x0433),
+            65 to listOf(0xEF09),
+            66 to listOf(0x0431, 0x0134),
+            67 to listOf(0x0432, 0x0135, 0x0435),
+            68 to listOf(0x0117),
+        )
+
+        private val ALWAYS: Set<Int> =
+            setOf(0x0100, 0x0101, 0x0102, 0x0103, 0x0104, 0x0106, 0x010B, 0x010D, 0x0F00, 0x0F03, 0x0F04)
+
+        private val BITS_OF: Map<Int, List<Int>> = HashMap<Int, MutableList<Int>>().also { m ->
+            for ((bit, cmds) in TABLE) for (c in cmds) m.getOrPut(c) { ArrayList() }.add(bit)
+        }
+
+        /** Null when [payload] is not a successful bitmap reply (then nothing is gated). */
+        fun parse(payload: ByteArray): BudsBitmap? {
+            if (payload.isEmpty() || payload[0].toInt() != 0) return null
+            val on = HashSet<Int>()
+            for (i in 1 until payload.size) {
+                val v = payload[i].toInt() and 0xFF
+                for (b in 0 until 8) {
+                    val bit = (i - 1) * 8 + b
+                    if (bit < MAX_BITS && (v shr b) and 1 == 1) on.add(bit)
+                }
+            }
+            return BudsBitmap(on)
+        }
+    }
+}
+
+/** Answers to pushes the buds wait for (section 11). Pure. */
+internal object BudsPushAnswers {
+
+    /** `0xF2`, the connected-devices info: always `00 F2`, whether or not the list is understood. */
+    fun linked(): ByteArray = byteArrayOf(0, BudsIds.EVENT_LINKED.toByte())
+
+    /** `0xF4`, diagnostic JSON: `00 F4 {"cmd":<its cmd>}`; `00 F4 {}` without a cmd; `01 F4` when it is not an object; `00 F4` when empty. */
+    fun diagnostic(json: ByteArray): ByteArray {
+        val head = byteArrayOf(0, BudsIds.EVENT_DIAGNOSTIC.toByte())
+        if (json.isEmpty()) return head
+        val text = String(json, Charsets.UTF_8).trim()
+        if (!(text.startsWith("{") && text.endsWith("}"))) return byteArrayOf(1, BudsIds.EVENT_DIAGNOSTIC.toByte())
+        val value = CMD_VALUE.find(text)?.groupValues?.get(1)
+        val echo = if (value != null) "{\"cmd\":$value}" else "{}"
+        return head + echo.toByteArray(Charsets.UTF_8)
+    }
+
+    private val CMD_VALUE = Regex("\"cmd\"\\s*:\\s*(\"(?:[^\"\\\\]|\\\\.)*\"|-?\\d+(?:\\.\\d+)?|true|false|null)")
+
+    /** A request outside command groups 01-05 and 0F gets `01` ("unknown request"); replies and known groups do not. */
+    fun isUnknownRequest(cmd: Int): Boolean {
+        if (cmd and BudsIds.REPLY_BIT != 0) return false
+        val group = (cmd shr 8) and 0xFF
+        return group !in 1..5 && group != 0x0F
+    }
+}
+
+/** Per-model reads, keyed by the product id from 0x8103 (the ids come from QuickBuds' models.json entry for the model). */
+internal object BudsModelQueries {
+    private val STATUS: Map<String, List<Int>> = mapOf(
+        // OnePlus Nord Buds 3 Pro: the switches its firmware answers, game mode at 0x06.
+        "064414" to listOf(0x05, 0x04, 0x0B, 0x0C, 0x11, 0x18, 0x06, 0x1B, 0x1D),
+    )
+
+    fun statusIds(productId: String?): List<Int> = productId?.let { STATUS[it.uppercase()] } ?: BudsIds.STATUS_FEATURE_IDS
+}
+

@@ -453,6 +453,12 @@ internal class WindowsRfcommTransport(
     private val closed = AtomicBoolean(false)
     private val holdsWinsock = AtomicBoolean(false)
 
+    @Volatile
+    private var endReason: String? = null
+
+    /** Why the last read ended the link (error numbers and timing only; never a name or an address). */
+    override val closeReason: String? get() = endReason
+
     companion object {
         const val CONNECT_TIMEOUT_MS = 6_000L
         const val RECEIVE_TIMEOUT_MS = 500
@@ -546,17 +552,37 @@ internal class WindowsRfcommTransport(
 
     /** n > 0 bytes, 0 = receive timeout (try again), -1 = closed or failed. */
     private fun recvOnce(buffer: ByteArray): Int {
-        val s = socket ?: return -1
+        val s = socket ?: run {
+            if (endReason == null) endReason = "socket closed by the app"
+            return -1
+        }
         val api = BudsNative.ws2 ?: return -1
+        val started = System.nanoTime()
         val n = try {
             api.recv(s, buffer, buffer.size, 0)
         } catch (t: Throwable) {
+            endReason = "recv threw " + t.javaClass.simpleName
             return -1
         }
         if (n > 0) return n
-        if (n == 0) return -1                       // the buds closed the link
-        return if (api.WSAGetLastError() == BudsSocketErrors.WSAETIMEDOUT) 0 else -1
+        if (n == 0) {
+            endReason = "the buds closed the link (recv returned 0)"
+            return -1
+        }
+        // A separate JNA call reads the error, so the number can be stale or wrong. A real receive timeout comes back
+        // after about RECEIVE_TIMEOUT_MS; only an error that is clearly a dead link ends the session.
+        val err = api.WSAGetLastError()
+        val waitedMs = (System.nanoTime() - started) / 1_000_000L
+        if (err == BudsSocketErrors.WSAETIMEDOUT) return 0
+        val deadLink = err == BudsSocketErrors.WSAECONNRESET || err == BudsSocketErrors.WSAECONNABORTED ||
+            err == BudsSocketErrors.WSAENOTCONN || err == WSAESHUTDOWN || err == WSAENOTSOCK
+        if (!deadLink && waitedMs >= RECEIVE_TIMEOUT_MS - 150) return 0
+        endReason = "recv failed, error $err after ${waitedMs}ms"
+        return -1
     }
+
+    private val WSAESHUTDOWN = 10058
+    private val WSAENOTSOCK = 10038
 
     override suspend fun write(bytes: ByteArray) {
         withContext(Dispatchers.IO) {

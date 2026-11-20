@@ -65,6 +65,7 @@ class DesktopBudsSessionTest {
 
         var failWrites = false
         var closedByUs = false
+        var bitmap: ByteArray = sessionHex("00 FF 77 5A EA 67 0E 20 07")
 
         var offered: ByteArray = byteArrayOf(0, 9, 1, 2, 3, 4, 8, 0x0B, 0xF1.toByte(), 0xF2.toByte(), 0xF3.toByte())
         var answerAnc = true
@@ -124,7 +125,7 @@ class DesktopBudsSessionTest {
 
         private fun respond(f: BudsFrame) {
             when (f.cmd) {
-                0x0100 -> reply(f, sessionHex("00 FF 77 5A EA 67 0E 20 07"))
+                0x0100 -> reply(f, bitmap)
                 0x0103 -> reply(f, sessionHex("00 14 54 06"))
                 0x0200 -> reply(f, offered)
                 0x0205 -> reply(f, sessionHex("01 03 01 00 02 00 03 00"))
@@ -476,6 +477,67 @@ class DesktopBudsSessionTest {
         assertTrue(e.cmds().none { it == 0x0403 })
     }
 
+    // ── answers the buds wait for, and the command bitmap ─────────────────────────────────────────
+
+    private fun Env.answers(from: Int): List<Sent> = buds.written.drop(from).filter { it.frame.cmd and 0x8000 != 0 }
+
+    @Test
+    fun linkedAndDiagnosticPushesAreAnsweredWithTheirOwnSeq() = runSession { e ->
+        e.session.start()
+        e.time.advance(2_000)
+        val before = e.buds.written.size
+        e.buds.emit(BudsFrames.build(0x0204, 0x21, byteArrayOf(0xF2.toByte(), 1, 2, 3)))
+        e.buds.emit(BudsFrames.build(0x0204, 0xFF, byteArrayOf(0xF4.toByte()) + "{\"cmd\":\"a2dp_caton\",\"ver\":\"1\"}".toByteArray()))
+        e.buds.emit(BudsFrames.build(0x0204, 0x22, byteArrayOf(0xF4.toByte()) + "not json".toByteArray()))
+        e.time.advance(100)
+        val got = e.answers(before)
+        assertEquals(listOf(0x8204, 0x8204, 0x8204), got.map { it.frame.cmd })
+        assertEquals(listOf(0x21, 0xFF, 0x22), got.map { it.frame.seq })
+        assertContentEquals(sessionHex("00 F2"), got[0].frame.payload)
+        assertContentEquals(byteArrayOf(0, 0xF4.toByte()) + "{\"cmd\":\"a2dp_caton\"}".toByteArray(), got[1].frame.payload)
+        assertContentEquals(sessionHex("01 F4"), got[2].frame.payload)
+    }
+
+    @Test
+    fun timeRequestAndUnknownRequestsAreAnswered() = runSession { e ->
+        e.session.start()
+        e.time.advance(2_000)
+        val before = e.buds.written.size
+        e.buds.emit(BudsFrames.build(0x0500, 0x14, byteArrayOf(0, 0, 0, 0)))
+        e.buds.emit(BudsFrames.build(0x0600, 0x09, ByteArray(0)))
+        e.buds.emit(BudsFrames.build(0x0502, 0x0A, byteArrayOf(5)))           // camera/ring request: no answer
+        e.time.advance(100)
+        val got = e.answers(before)
+        assertEquals(listOf(0x8500, 0x8600), got.map { it.frame.cmd })
+        assertContentEquals(sessionHex("00 04 03 02 01"), got[0].frame.payload)
+        assertContentEquals(sessionHex("01"), got[1].frame.payload)
+    }
+
+    @Test
+    fun commandsMissingFromTheBitmapAreNotSent() = runSession(
+        configure = { it.bitmap = sessionHex("00 EF 76 1A EA 67 0E 20 07") },   // bits 4 (wearing), 8 (ANC) and 22 (register) cleared
+    ) { e ->
+        e.session.start()
+        e.time.advance(3_000)
+        assertEquals(
+            listOf(0x0100, 0x0103, 0x0200, 0x0201, 0x0201, 0x0201, 0x010D, 0x0106),
+            e.cmds(),
+        )
+        assertEquals(listOf(listOf(1), listOf(2), listOf(3)), e.buds.written.filter { it.frame.cmd == 0x0201 }.map { f -> f.frame.payload.map { it.toInt() } })
+        assertTrue(e.session.state.value.supportedNoiseModes.isEmpty())
+        assertFalse(e.setNoise(BudsNoiseMode.OFF))                              // refused without sending 0x0404
+        assertTrue(e.cmds().none { it == 0x0404 })
+    }
+
+    @Test
+    fun noiseControlShowsWhenTheBitmapListsItEvenIfEventThreeIsNotOffered() = runSession(
+        configure = { it.offered = byteArrayOf(0, 2, 2, 1); it.answerAnc = false },
+    ) { e ->
+        e.session.start()
+        e.time.advance(2_000)
+        assertEquals(setOf(BudsNoiseMode.OFF, BudsNoiseMode.NOISE_CANCELLING, BudsNoiseMode.TRANSPARENCY), e.session.state.value.supportedNoiseModes)
+    }
+
     // ── privacy of the debug log ─────────────────────────────────────────────────────────────────
 
     @Test
@@ -488,7 +550,7 @@ class DesktopBudsSessionTest {
         }
         assertTrue(lines.any { it.startsWith("TX AA 0A 00 00 04 04") })
         assertTrue(lines.none { it.contains("AA 07 00 00 00 01") })          // the handshake is not a control frame
-        assertTrue(lines.all { it.startsWith("TX ") || it.startsWith("RX ") })
+        assertTrue(lines.all { it.startsWith("TX ") || it.startsWith("RX ") || it.startsWith("END ") })
         runSession { e ->
             e.session.start()
             e.time.advance(2_000)
