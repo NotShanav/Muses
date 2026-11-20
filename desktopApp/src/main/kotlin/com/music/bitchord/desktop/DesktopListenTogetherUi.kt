@@ -244,7 +244,7 @@ private fun PartyLanding(
                             onValueChange = onNicknameChange,
                             label = { Text("Nickname") },
                             singleLine = true,
-                            modifier = Modifier.weight(1f),
+                            modifier = Modifier.trackTextFocus().weight(1f),
                         )
                     }
                     Spacer(Modifier.height(16.dp))
@@ -273,7 +273,7 @@ private fun PartyLanding(
                         placeholder = { Text("ABC123") },
                         singleLine = true,
                         textStyle = MaterialTheme.typography.headlineSmall.copy(letterSpacing = 5.sp),
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier.trackTextFocus().fillMaxWidth(),
                     )
                     Spacer(Modifier.height(18.dp))
                     PrimaryButton(
@@ -371,7 +371,7 @@ private fun JoinConfirmation(
             onValueChange = onNicknameChange,
             label = { Text("Nickname") },
             singleLine = true,
-            modifier = Modifier.fillMaxWidth().widthIn(max = 360.dp),
+            modifier = Modifier.trackTextFocus().fillMaxWidth().widthIn(max = 360.dp),
         )
         error?.let { Spacer(Modifier.height(10.dp)); Text(it, color = DesktopDestructive) }
         Spacer(Modifier.height(20.dp))

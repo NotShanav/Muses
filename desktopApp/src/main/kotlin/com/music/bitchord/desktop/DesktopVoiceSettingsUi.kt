@@ -128,6 +128,7 @@ internal fun DesktopVoiceSettingsRows(
     VoiceModelBlock(rowVisible)
     VoiceProgramBlock(rowVisible)
     VoiceHotkeyBlock(rowVisible)
+    if (rowVisible("Single-key trigger", "One key starts voice while Muses is focused: hold to speak, or tap once and speak within a time limit.")) VoiceKeyTriggerBlock()
 
     val confirm by DesktopVoiceSettings.confirmBeforePlay.collectAsState()
     toggle(

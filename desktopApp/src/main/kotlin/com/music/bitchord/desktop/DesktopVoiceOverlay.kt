@@ -58,6 +58,7 @@ private fun DesktopVoiceOverlayFor(controller: DesktopVoiceController) {
     val state by controller.state.collectAsState()
     val shown = state
     if (shown is DesktopVoiceState.Idle) return
+    // Preparing keeps the window created (so it is ready) but draws nothing until the ready tone.
 
     val choiceCount = (shown as? DesktopVoiceState.Done)?.choices?.size ?: 0
     val heightDp = if (choiceCount > 0) CHOICES_HEIGHT_DP else PILL_HEIGHT_DP
@@ -81,7 +82,7 @@ private fun DesktopVoiceOverlayFor(controller: DesktopVoiceController) {
             placeNearBottomCentre(awtWindow)
         }
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.BottomCenter) {
-            DesktopVoicePill(
+            if (shown !is DesktopVoiceState.Preparing) DesktopVoicePill(
                 state = shown,
                 onUndo = controller::undo,
                 onChoose = controller::choose,
@@ -123,7 +124,7 @@ internal fun DesktopVoicePill(
         verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
         when (state) {
-            DesktopVoiceState.Idle -> Unit
+            DesktopVoiceState.Idle, DesktopVoiceState.Preparing -> Unit
             DesktopVoiceState.Listening -> StatusRow("Listening...", dot = true)
             DesktopVoiceState.Thinking -> StatusRow("Thinking...", dot = false)
             is DesktopVoiceState.Failed -> Text(

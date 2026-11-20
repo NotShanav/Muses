@@ -90,13 +90,23 @@ internal object DesktopArtPress {
     @Volatile var position: Offset? = null
     @Volatile var nanos: Long = 0L
 
-    const val FRESH_MS = 600L
+    const val FRESH_MS = 4_000L
 
-    /** The last press if it happened within [FRESH_MS], else null. */
-    fun fresh(): Offset? {
-        val p = position ?: return null
+    /** A keyboard or media-key intent (no pointer). */
+    fun noteKey() {
+        position = null
+        nanos = System.nanoTime()
+    }
+
+    /** True when a click or a media key happened within [FRESH_MS] and was not used yet. */
+    fun isFresh(): Boolean {
         val age = (System.nanoTime() - nanos) / 1_000_000L
-        return if (nanos != 0L && age in 0..FRESH_MS) p else null
+        return nanos != 0L && age in 0..FRESH_MS
+    }
+
+    /** One user action starts one transition. */
+    fun consume() {
+        nanos = 0L
     }
 }
 
@@ -140,15 +150,16 @@ internal fun maybeStartArtTransition(
         println("ArtTransition skipped: disabled")
         return
     }
-    val press = DesktopArtPress.fresh()
-    if (press == null) {
+    if (!DesktopArtPress.isFresh()) {
         println("ArtTransition skipped: no fresh press")
         return
     }
+    val press = DesktopArtPress.position
     if (mode == DesktopArtTransitionMode.ON_CHANGE && videoId == previousVideoId) {
         println("ArtTransition skipped: same song")
         return
     }
+    DesktopArtPress.consume()
     DesktopArtTransition.start(ArtTransitionRequest(videoId, thumbnailUrl, sourceBounds = null, pointer = press))
 }
 
@@ -159,6 +170,11 @@ internal fun ArtTransitionHostEffects() {
     DisposableEffect(Unit) {
         DesktopArtTransition.backdropSink = DesktopBackdropPulses
         onDispose { if (DesktopArtTransition.backdropSink === DesktopBackdropPulses) DesktopArtTransition.backdropSink = null }
+    }
+    val nowPlayingOpen = DesktopArtTransition.playerOpenFlag.collectAsState()
+    DisposableEffect(nowPlayingOpen.value) {
+        DesktopArtTransition.playerOpen = nowPlayingOpen.value
+        onDispose { }
     }
     DisposableEffect(config.artTransitionMode) {
         DesktopArtTransition.enabled = config.artTransitionMode != DesktopArtTransitionMode.OFF

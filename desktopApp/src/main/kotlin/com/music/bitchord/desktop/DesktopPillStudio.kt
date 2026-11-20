@@ -426,7 +426,7 @@ internal fun DesktopPillStudioPage(
                                 } }
                                 item { Text("Your presets", style = MaterialTheme.typography.titleSmall) }
                                 item {
-                                    OutlinedTextField(presetName, { presetName = it.take(32) }, modifier = Modifier.fillMaxWidth(), singleLine = true, label = { Text("Preset name") })
+                                    OutlinedTextField(presetName, { presetName = it.take(32) }, modifier = Modifier.trackTextFocus().fillMaxWidth(), singleLine = true, label = { Text("Preset name") })
                                 }
                                 item { Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                                     TextButton(enabled = presetName.isNotBlank() && (presetName in draft.userPresets || draft.userPresets.size < 8), onClick = {

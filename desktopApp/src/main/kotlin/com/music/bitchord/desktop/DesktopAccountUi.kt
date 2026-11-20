@@ -356,7 +356,7 @@ internal fun DesktopSignInDialog(
                         singleLine = false,
                         textStyle = MaterialTheme.typography.bodySmall.copy(color = Color.White),
                         cursorBrush = SolidColor(DesktopAccent),
-                        modifier = Modifier
+                        modifier = Modifier.trackTextFocus()
                             .padding(horizontal = 22.dp, vertical = 10.dp)
                             .fillMaxWidth()
                             .heightIn(min = 84.dp, max = 160.dp)

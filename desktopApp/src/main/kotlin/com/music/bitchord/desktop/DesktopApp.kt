@@ -1731,6 +1731,7 @@ fun BitChordDesktopApp() {
         }
     }
     val playback by playbackEngine.state.collectAsState()
+    SideEffect { DesktopArtTransition.playerOpenFlag.value = overlays.nowPlaying }
     // Artwork transition: audio finished loading (isLoading true -> false). Never gates playback.
     var artWasLoading by remember { mutableStateOf(false) }
     LaunchedEffect(playback.isLoading, playback.song?.videoId) {
@@ -3221,7 +3222,9 @@ fun BitChordDesktopApp() {
                     }
                 },
                 modifier = Modifier.onPreviewKeyEvent { event ->
+                    if (DesktopVoiceKeyTrigger.onKey(event)) return@onPreviewKeyEvent true
                     if (event.type != KeyEventType.KeyUp) return@onPreviewKeyEvent false
+                    if (event.key == Key.MediaNext || event.key == Key.MediaPrevious) DesktopArtPress.noteKey()
                     when (event.key) {
                         Key.MediaPlayPause -> {
                             if (selectedSong != null) togglePlayPauseFromUser()
@@ -4426,6 +4429,10 @@ private data class DesktopShellCallbacks(
     val onForward: () -> Unit,
 )
 
+/** Half the width the Windows Dynamic Island overlay takes in the middle of the top bar. */
+private val ISLAND_HALF_WIDTH = 310.dp
+private val SEARCH_MIN_WIDTH = 150.dp
+
 @Composable
 private fun DesktopTopBar(
     common: DesktopShellCallbacks,
@@ -4455,7 +4462,13 @@ private fun DesktopTopBar(
         targetValue = if (searchOpen) {
             if (narrow) {
                 (windowWidth - captionReserve - 16.dp - (buttonSize * 2 + 12.dp)).coerceAtLeast(96.dp)
-            } else if (compact) 132.dp else 340.dp
+            } else if (compact) 132.dp else {
+                // The Windows Dynamic Island overlay sits over the middle of the bar. Keep the field to the
+                // right of it (island half-width plus a gap) instead of sliding underneath it.
+                val rightEdgeReserve = 134.dp
+                val free = windowWidth / 2 - ISLAND_HALF_WIDTH - rightEdgeReserve
+                minOf(340.dp, free).coerceAtLeast(SEARCH_MIN_WIDTH)
+            }
         } else {
             0.dp
         },
@@ -4574,7 +4587,7 @@ private fun DesktopLegacyTopBar(common: DesktopShellCallbacks, compact: Boolean)
                 }
                 if (!compact) {
                     DesktopToolbarButton(onClick = { common.onShuffleChange(!common.shuffle) }, size = 32.dp) {
-                        Icon(BitChordIcons.Shuffle, DesktopStrings["shuffle", "Shuffle"], tint = if (common.shuffle) DesktopAccent else DesktopSecondary, modifier = Modifier.size(18.dp))
+                        Icon(BitChordIcons.Shuffle, DesktopStrings["shuffle", "Shuffle"], tint = if (common.shuffle) Color.White else Color.White.copy(alpha = 0.45f), modifier = Modifier.size(18.dp))
                     }
                     DesktopToolbarButton(onClick = common.onPrevious, enabled = common.previousEnabled, size = 32.dp) {
                         Icon(Icons.Rounded.FastRewind, "Previous", tint = if (common.previousEnabled) Color.White else DesktopSecondary.copy(alpha = 0.4f), modifier = Modifier.size(20.dp))
@@ -5001,11 +5014,11 @@ internal fun DesktopFloatingMiniPlayer(
                 }
                 "next" -> DesktopSpringButton(onClick = onNext, size = 34.dp) { Icon(Icons.Rounded.FastForward, DesktopStrings["widget_next", "Next"], tint = Color.White, modifier = Modifier.size(19.dp)) }
                 "shuffle" -> if (custom.miniPlayerShowShuffle && !pillNarrow) DesktopSpringButton(onClick = { onShuffleChange(!shuffle) }, size = 34.dp) {
-                    Icon(BitChordIcons.Shuffle, "Shuffle", tint = if (shuffle) DesktopAccent else DesktopSecondary, modifier = Modifier.size(17.dp))
+                    Icon(BitChordIcons.Shuffle, "Shuffle", tint = if (shuffle) Color.White else Color.White.copy(alpha = 0.45f), modifier = Modifier.size(17.dp))
                 }
                 "repeat" -> if (custom.miniPlayerShowRepeat && !pillNarrow) DesktopSpringButton(onClick = { onRepeatModeChange(repeatMode.next()) }, size = 34.dp) {
-                    if (repeatMode == DesktopRepeatMode.ONE) Text("1", color = DesktopAccent, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.labelMedium)
-                    else Icon(BitChordIcons.Repeat, "Repeat ${repeatMode.label()}", tint = if (repeatMode == DesktopRepeatMode.OFF) DesktopSecondary else DesktopAccent, modifier = Modifier.size(17.dp))
+                    if (repeatMode == DesktopRepeatMode.ONE) Text("1", color = Color.White, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.labelMedium)
+                    else Icon(BitChordIcons.Repeat, "Repeat ${repeatMode.label()}", tint = if (repeatMode == DesktopRepeatMode.OFF) Color.White.copy(alpha = 0.45f) else Color.White, modifier = Modifier.size(17.dp))
                 }
                 "buds" -> DesktopBudsPillSlot(preview = false) // BUDS B4 hook
                 "more" -> Box {
@@ -5184,7 +5197,7 @@ internal fun DesktopSearchField(
         BasicTextField(
             value = query,
             onValueChange = onQueryChange,
-            modifier = Modifier
+            modifier = Modifier.trackTextFocus()
                 .fillMaxWidth()
                 .focusRequester(focusRequester)
                 .onFocusChanged { onFocusChanged(it.isFocused); if (it.isFocused) DesktopTouchKeyboard.show(touchActive) } // 360 T3 hook
@@ -6970,6 +6983,16 @@ private fun DesktopSettingsScreen(
                 }
                 // VOICE V4 hook: the Experimental group (voice commands), inside the Advanced category.
                 SettingsGroup("Experimental") {
+                    val artExperimentCfg by DesktopAdvancedAppearance.config.collectAsState()
+                    SettingsToggle(
+                        "Artwork snap transition (experimental)",
+                        "Artwork turns to particles and flies into the player pill when you start a song. Off stops it completely; the mode (every click or only on change) is in the player pill settings.",
+                        artExperimentCfg.artTransitionMode != DesktopArtTransitionMode.OFF,
+                    ) { on ->
+                        DesktopAdvancedAppearance.update {
+                            it.copy(artTransitionMode = if (on) DesktopArtTransitionMode.EVERY_CLICK else DesktopArtTransitionMode.OFF)
+                        }
+                    }
                     DesktopVoiceSettingsRows(
                         rowVisible = { title, subtitle -> settingsRowVisible(title, subtitle) },
                         toggle = { title, subtitle, checked, onChange -> SettingsToggle(title, subtitle, checked, onChange) },
@@ -7164,7 +7187,7 @@ internal fun DesktopAdvancedCustomizationSettings(onOpenHomeSections: () -> Unit
         OutlinedTextField(
             value = search,
             onValueChange = { search = it },
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier.trackTextFocus().fillMaxWidth(),
             singleLine = true,
             label = { Text("Search appearance settings") },
             placeholder = { Text("Try glass, spacing, dock, or font") },
@@ -7191,7 +7214,7 @@ internal fun DesktopAdvancedCustomizationSettings(onOpenHomeSections: () -> Unit
             OutlinedTextField(
                 value = presetName,
                 onValueChange = { presetName = it.take(32) },
-                modifier = Modifier.weight(1f), singleLine = true,
+                modifier = Modifier.trackTextFocus().weight(1f), singleLine = true,
                 label = { Text(if (renameFrom == null) "Save current preset" else "Rename preset") },
             )
             Button(onClick = {
@@ -7313,7 +7336,7 @@ internal fun DesktopAdvancedCustomizationSettings(onOpenHomeSections: () -> Unit
                 Text("Fixed accent${if (modified("desktop.fixed_accent")) " · modified" else ""}", style = MaterialTheme.typography.bodyMedium)
                 Text("Enter a six-digit hex colour. Colours below the 4.5:1 contrast floor are rejected.", color = DesktopSecondary, style = MaterialTheme.typography.bodySmall)
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedTextField(accentInput, { accentInput = it.filter(Char::isLetterOrDigit).take(8) }, modifier = Modifier.weight(1f), singleLine = true, label = { Text("Hex accent") })
+                    OutlinedTextField(accentInput, { accentInput = it.filter(Char::isLetterOrDigit).take(8) }, modifier = Modifier.trackTextFocus().weight(1f), singleLine = true, label = { Text("Hex accent") })
                     Button(onClick = {
                         val hex = accentInput.removePrefix("#")
                         val parsed = runCatching { (if (hex.length == 6) "FF$hex" else hex).toLong(16) }.getOrNull()
@@ -7840,7 +7863,7 @@ private fun DesktopSourceEditorDialog(
                         baseUrl = it
                         message = null
                     },
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier.trackTextFocus().fillMaxWidth(),
                     label = { Text(DesktopStrings["d_addon_url", "Addon URL"]) },
                     placeholder = { Text("https://example.com/addon") },
                     singleLine = true,
@@ -7857,7 +7880,7 @@ private fun DesktopSourceEditorDialog(
                 OutlinedTextField(
                     value = label,
                     onValueChange = { label = it },
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier.trackTextFocus().fillMaxWidth(),
                     label = { Text(DesktopStrings["d_name_optional", "Name (optional)"]) },
                     placeholder = { Text(DesktopStrings["d_my_music_source", "My music source"]) },
                     singleLine = true,

@@ -1210,3 +1210,12 @@ Edited: `desktopApp/native/window/window_jni.cpp` (audio section rewritten, `JNI
 
 ### Exact next step
 Build in GitHub Actions (the DLL with the new native code, then Kotlin). On the HP ENVY: play, then switch Windows Sonic / DTS / output while playing, paused and idle; expect a short silence then recovery, never a frozen window. If anything still freezes, send `audio-trace.log` (in `%USERPROFILE%\.local\state\bitchord`, next to `desktop.log`) and the "UI FREEZE" block from `desktop.log`: the trace's `holder=` line and the thread dump say who held what.
+
+## Muses fixes: art transition, voice sync, single-key trigger, pill, search (NOT compiled)
+
+- Art transition source: `lookupSource` now ignores views that are off-screen or are the pill thumbnail, and picks the view under the click, else the nearest to it, else the biggest. The mouse-box fallback is gone: with no view on screen (next button, media key, full player) it starts from the player estimate or the pill thumbnail. Press freshness 600 ms -> 4 s, consumed once; media keys count (`DesktopArtPress.noteKey`); artwork load timeout 700 ms -> 2.5 s.
+- Settings: Experimental has "Artwork snap transition" (maps to mode OFF / EVERY_CLICK).
+- Pill: shuffle/repeat/"1" are white (active) or dim white (inactive), no artwork colour, liquid and classic pill.
+- Search: with search open the field is clamped to the right of `ISLAND_HALF_WIDTH` (310 dp, window-centred guess); min 150 dp.
+- Voice sync: new state `Preparing` (overlay window made, nothing drawn). `Listening` is published only after the ready tone returned, so popup and beep arrive together and the recorder's flush drops only the tone.
+- Single-key trigger: `DesktopVoiceKeyTrigger.kt`; settings keys `voice_trigger_key`, `voice_trigger_mode`, `voice_tap_seconds`. Works only with the Muses window focused and no text field focused (`Modifier.trackTextFocus()` on all text fields). Tap mode: record up to N s, second tap ends early.

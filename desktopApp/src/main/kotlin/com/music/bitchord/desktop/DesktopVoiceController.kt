@@ -75,6 +75,8 @@ internal class VoiceControllerConfig(
 /** IDLE, LISTENING, THINKING, DONE(result), ERROR(code). Strings exist only while a state is shown. */
 internal sealed interface DesktopVoiceState {
     object Idle : DesktopVoiceState
+    /** Capture is still opening; nothing is shown. Listening starts only when the ready tone has played. */
+    object Preparing : DesktopVoiceState
     object Listening : DesktopVoiceState
     object Thinking : DesktopVoiceState
 
@@ -314,6 +316,21 @@ internal class DesktopVoiceController(
     @Volatile
     private var cancelled = false
 
+    /** 0 = hold to talk; above 0 = tap once, record for at most this long. */
+    @Volatile
+    private var tapWindowMillis = 0L
+
+    /** When the ready tone finished (nanoTime); 0 until then. The tap timeframe counts from here. */
+    @Volatile
+    private var listenStartNanos = 0L
+
+    private fun shouldStopRecording(): Boolean {
+        if (cancelled || !held) return true
+        val window = tapWindowMillis
+        val from = listenStartNanos
+        return window > 0L && from != 0L && (System.nanoTime() - from) / 1_000_000L >= window
+    }
+
     // ── Hotkey wiring ────────────────────────────────────────────────────────────────────────────
 
     /** Registers the hotkey when the feature is on. Does nothing at all when it is off. */
@@ -363,19 +380,29 @@ internal class DesktopVoiceController(
 
     // ── Events ───────────────────────────────────────────────────────────────────────────────────
 
-    /** Hotkey down. Any thread. */
-    fun onPressed() {
+    /** Hotkey down (hold to talk). Any thread. */
+    fun onPressed() = onKeyDown(0L)
+
+    /**
+     * A trigger went down. [tapMillis] 0 means hold to talk (released by [onReleased]); above 0 means
+     * tap once and speak: recording ends after [tapMillis], or at a second tap.
+     */
+    fun onKeyDown(tapMillis: Long) {
         if (!config.enabled()) return
         var pickFirst = false
         synchronized(lock) {
             if (_state.value is DesktopVoiceState.Done && pendingChoices.isNotEmpty()) {
                 pickFirst = true
             } else if (busy) {
-                return // single-flight
+                // Single-flight. In tap mode a second tap while listening ends the recording early.
+                if (tapMillis > 0L && tapWindowMillis > 0L && _state.value is DesktopVoiceState.Listening) held = false
+                return
             } else {
                 busy = true
                 held = true
                 cancelled = false
+                tapWindowMillis = tapMillis
+                listenStartNanos = 0L
                 sessionId++
             }
         }
@@ -394,6 +421,7 @@ internal class DesktopVoiceController(
 
     /** Hotkey up. Any thread. */
     fun onReleased() {
+        if (tapWindowMillis > 0L) return // tap mode ends by timeframe or a second tap, not by release
         held = false
     }
 
@@ -447,7 +475,9 @@ internal class DesktopVoiceController(
             if (program == null) return fail(VoiceErrors.PROGRAM_MISSING)
             if (model == null) return fail(VoiceErrors.MODEL_MISSING)
 
-            _state.value = DesktopVoiceState.Listening
+            // Not shown yet: the overlay would appear before the ready tone and the owner would start
+            // speaking while the microphone is still opening. Listening is published by the tone callback.
+            _state.value = DesktopVoiceState.Preparing
             startEscWatcher()
             val warming = scope.launch(Dispatchers.IO) {
                 runCatching { warm(model.encoder) { isActive } }
@@ -459,7 +489,18 @@ internal class DesktopVoiceController(
             // samples are collected, so the user does not lose the first word.
             runCatching { actions.duckPlayback(true) }
             playbackDucked = true
-            val recorded = record(MAX_RECORD_MILLIS, { runCatching { tick() } }) { !held || cancelled }
+            val recorded = record(
+                MAX_RECORD_MILLIS,
+                {
+                    // Capture line is open. Tone first, then show "Listening" (so the popup and the beep
+                    // arrive together); the recorder drops everything captured up to here.
+                    runCatching { tick() }
+                    if (!cancelled && busy) {
+                        listenStartNanos = System.nanoTime()
+                        _state.value = DesktopVoiceState.Listening
+                    }
+                },
+            ) { shouldStopRecording() }
             runCatching { actions.duckPlayback(false) }
             playbackDucked = false
             if (cancelled) return

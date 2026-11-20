@@ -64,7 +64,7 @@ internal object DesktopArtTransition {
     private const val GRID_CACHE = 16
     private const val LOADED_URLS = 256
     private const val TARGET_WAIT_MS = 400L
-    private const val LOAD_TIMEOUT_MS = 700L
+    private const val LOAD_TIMEOUT_MS = 2_500L
     private const val STALL_MS = 700L
     private const val HARD_CAP_MS = 12_000L
     private const val MAX_DT_MS = 50f
@@ -357,10 +357,28 @@ internal object DesktopArtTransition {
         }
     }
 
-    /** Where a reported artwork view for [videoId] is right now (full, unclipped box, window px). */
+    /** True while the full-screen player is open; its big artwork is not reported, so it is estimated. */
+    @Volatile internal var playerOpen: Boolean = false
+    internal val playerOpenFlag = MutableStateFlow(false)
+
+    private fun overlapArea(a: Rect, b: Rect): Float {
+        val w = minOf(a.right, b.right) - maxOf(a.left, b.left)
+        val h = minOf(a.bottom, b.bottom) - maxOf(a.top, b.top)
+        return if (w > 0f && h > 0f) w * h else 0f
+    }
+
+    /**
+     * Where a reported artwork view for [videoId] is right now (full, unclipped box, window px).
+     * Only views that are really on screen count: at least half inside the window, and not the
+     * landing thumbnail itself. Several views can show the same song (Recents, mixes, queue), so the
+     * one the click was on wins, else the nearest to the click, else the biggest.
+     */
     private fun lookupSource(videoId: String, artworkUrl: String?, pointer: Offset?): Rect? {
         val urlKey = if (artworkUrl.isNullOrBlank()) null else "url:$artworkUrl"
-        var best: Rect? = null
+        val ws = windowSize
+        val windowRect = if (ws.width >= 2f && ws.height >= 2f) Rect(0f, 0f, ws.width, ws.height) else null
+        val target = try { targetBounds() } catch (t: Throwable) { Rect.Zero }
+        val candidates = ArrayList<Rect>()
         synchronized(sources) {
             val it = sources.entries.iterator()
             while (it.hasNext()) {
@@ -373,26 +391,43 @@ internal object DesktopArtTransition {
                 val pos = e.key.positionInWindow()
                 val r = Rect(pos, Size(e.key.size.width.toFloat(), e.key.size.height.toFloat()))
                 if (r.width < 2f || r.height < 2f) continue
-                if (pointer != null && r.contains(pointer)) return r
-                if (best == null) best = r
+                val own = r.width * r.height
+                if (windowRect != null && overlapArea(r, windowRect) < own * 0.5f) continue
+                if (target.width >= 2f && target.height >= 2f && overlapArea(r, target) > own * 0.5f) continue
+                candidates += r
             }
         }
-        return best
+        if (candidates.isEmpty()) return null
+        if (pointer == null) return candidates.maxByOrNull { it.width * it.height }
+        candidates.filter { it.contains(pointer) }.minByOrNull { it.width * it.height }?.let { return it }
+        fun dist(r: Rect): Float {
+            val dx = maxOf(r.left - pointer.x, 0f, pointer.x - r.right)
+            val dy = maxOf(r.top - pointer.y, 0f, pointer.y - r.bottom)
+            return dx * dx + dy * dy
+        }
+        return candidates.minByOrNull { dist(it) }
     }
 
     private fun resolveSource(request: ArtTransitionRequest): Rect {
         val p = request.pointer
-        // The live, unclipped box of the view that was clicked beats any bounds passed in.
         fun chosen(branch: String, r: Rect): Rect {
             println("ArtTransition source: $branch $r")
             return r
         }
         val hit = lookupSource(request.videoId, request.artworkUrl, p)
-        if (hit != null && (p == null || hit.contains(p))) return chosen("reported view", hit)
+        if (hit != null) return chosen("reported view", hit)
         val b = request.sourceBounds
         if (b != null && b.width >= 2f && b.height >= 2f) return chosen("sourceBounds", b)
-        if (hit != null) return chosen("reported view (pointer outside it)", hit)
-        if (p != null) return chosen("pointer box", Rect(p.x - 40f, p.y - 40f, p.x + 40f, p.y + 40f))
+        // No view of this song is on screen (next button, media key, full player). Never the mouse:
+        // start from the big player artwork when that is open, else from the pill thumbnail itself.
+        val ws = windowSize
+        if (playerOpen && ws.width >= 2f && ws.height >= 2f) {
+            val side = minOf(ws.width, ws.height) * 0.46f
+            val c = Offset(ws.width * 0.5f, ws.height * 0.45f)
+            return chosen("player estimate", Rect(c.x - side / 2f, c.y - side / 2f, c.x + side / 2f, c.y + side / 2f))
+        }
+        val t = try { targetBounds() } catch (t: Throwable) { Rect.Zero }
+        if (t.width >= 2f && t.height >= 2f) return chosen("pill thumbnail", t)
         val c = liveTarget().center
         return chosen("above pill", Rect(c.x - 40f, c.y - 220f, c.x + 40f, c.y - 140f))
     }

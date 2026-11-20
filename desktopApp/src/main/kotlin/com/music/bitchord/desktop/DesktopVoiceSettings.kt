@@ -35,6 +35,33 @@ internal object DesktopVoiceSettings {
     private val _sidecarExe = MutableStateFlow(persistence.string(KEY_SIDECAR_EXE, "").ifBlank { null })
     private val _confirmBeforePlay = MutableStateFlow(persistence.boolean(KEY_CONFIRM, true))
 
+    // Single-key trigger (works while the Muses window is focused). null = off.
+    private val _triggerKey = MutableStateFlow(persistence.string(KEY_TRIGGER_KEY, "").toLongOrNull())
+    private val _triggerTap = MutableStateFlow(persistence.string(KEY_TRIGGER_MODE, "HOLD") == "TAP")
+    private val _tapSeconds = MutableStateFlow(persistence.string(KEY_TAP_SECONDS, "6").toIntOrNull()?.coerceIn(2, 15) ?: 6)
+
+    /** Compose `Key.keyCode` of the trigger key, or null when no single-key trigger is set. */
+    val triggerKey: StateFlow<Long?> = _triggerKey
+    /** False = hold the key to talk; true = tap once, then speak within [tapSeconds]. */
+    val triggerTap: StateFlow<Boolean> = _triggerTap
+    val tapSeconds: StateFlow<Int> = _tapSeconds
+
+    fun setTriggerKey(code: Long?) {
+        persistence.saveString(KEY_TRIGGER_KEY, code?.toString().orEmpty())
+        _triggerKey.value = code
+    }
+
+    fun setTriggerTap(tap: Boolean) {
+        persistence.saveString(KEY_TRIGGER_MODE, if (tap) "TAP" else "HOLD")
+        _triggerTap.value = tap
+    }
+
+    fun setTapSeconds(seconds: Int) {
+        val v = seconds.coerceIn(2, 15)
+        persistence.saveString(KEY_TAP_SECONDS, v.toString())
+        _tapSeconds.value = v
+    }
+
     val enabled: StateFlow<Boolean> = _enabled
     val hotkey: StateFlow<VoiceHotkey> = _hotkey
     val modelDir: StateFlow<String?> = _modelDir
@@ -79,6 +106,9 @@ internal object DesktopVoiceSettings {
     private const val KEY_MODEL_DIR = "voice_model_dir"
     private const val KEY_SIDECAR_EXE = "voice_sidecar_exe"
     private const val KEY_CONFIRM = "voice_confirm_before_play"
+    private const val KEY_TRIGGER_KEY = "voice_trigger_key"
+    private const val KEY_TRIGGER_MODE = "voice_trigger_mode"
+    private const val KEY_TAP_SECONDS = "voice_tap_seconds"
 }
 
 /** Where a one-time download stands. Never holds any recognised text. */

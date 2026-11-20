@@ -570,16 +570,16 @@ internal fun DesktopLiquidPill(
                     Icon(Icons.Rounded.FastForward, DesktopStrings["widget_next", "Next"], tint = Color.White, modifier = Modifier.size(19.dp))
                 }
                 "shuffle" -> if (showShuffle && !pillNarrow) DesktopSpringButton(onClick = { onShuffleChange(!shuffle) }, size = 34.dp) {
-                    Icon(BitChordIcons.Shuffle, "Shuffle", tint = if (shuffle) accent else Color.White.copy(alpha = 0.62f), modifier = Modifier.size(17.dp))
+                    Icon(BitChordIcons.Shuffle, "Shuffle", tint = if (shuffle) Color.White else Color.White.copy(alpha = 0.45f), modifier = Modifier.size(17.dp))
                 }
                 "repeat" -> if (showRepeat && !pillNarrow) DesktopSpringButton(onClick = { onRepeatModeChange(repeatMode.next()) }, size = 34.dp) {
                     if (repeatMode == DesktopRepeatMode.ONE) {
-                        Text("1", color = accent, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.labelMedium)
+                        Text("1", color = Color.White, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.labelMedium)
                     } else {
                         Icon(
                             BitChordIcons.Repeat,
                             "Repeat ${repeatMode.label()}",
-                            tint = if (repeatMode == DesktopRepeatMode.OFF) Color.White.copy(alpha = 0.62f) else accent,
+                            tint = if (repeatMode == DesktopRepeatMode.OFF) Color.White.copy(alpha = 0.45f) else Color.White,
                             modifier = Modifier.size(17.dp),
                         )
                     }
