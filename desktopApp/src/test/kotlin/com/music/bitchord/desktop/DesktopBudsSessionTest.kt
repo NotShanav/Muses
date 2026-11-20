@@ -241,7 +241,8 @@ class DesktopBudsSessionTest {
 
     @Test
     fun noiseControlIsHiddenWhenTheBudsOfferNoAncEventAndNeverAnswer() = runSession(
-        configure = { it.offered = sessionHex("00 02 02 01"); it.answerAnc = false },
+        // Buds without ANC have bit 8 of the bitmap off as well; with it on, noise control shows (next tests).
+        configure = { it.offered = sessionHex("00 02 02 01"); it.answerAnc = false; it.bitmap = sessionHex("00 FF 76 5A EA 67 0E 20 07") },
     ) { e ->
         e.session.start()
         e.time.advance(2_000)

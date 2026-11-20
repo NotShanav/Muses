@@ -71,7 +71,8 @@ class DesktopBudsLinkTest {
     @Test
     fun onlyRequestsOutsideGroupsOneToFiveAndZeroFAreUnknown() {
         assertTrue(BudsPushAnswers.isUnknownRequest(0x0600))
-        assertTrue(BudsPushAnswers.isUnknownRequest(0xEF01))
+        assertTrue(BudsPushAnswers.isUnknownRequest(0x0700))
+        assertFalse(BudsPushAnswers.isUnknownRequest(0xEF01))       // bit 15 set: looks like a reply, never answered (QuickBuds does the same)
         assertFalse(BudsPushAnswers.isUnknownRequest(0x0502))
         assertFalse(BudsPushAnswers.isUnknownRequest(0x0F00))
         assertFalse(BudsPushAnswers.isUnknownRequest(0x8600))       // a reply is never answered
