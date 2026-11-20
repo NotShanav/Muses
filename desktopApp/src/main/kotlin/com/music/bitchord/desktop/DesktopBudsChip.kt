@@ -154,6 +154,10 @@ internal object BudsChipLogic {
 
     fun eqScrolls(presetCount: Int): Boolean = presetCount > EQ_SCROLL_THRESHOLD
 
+    /** The built-in presets and the personal ones (ids from [BUDS_CUSTOM_EQ_ID_BASE]) as two lists, each in the engine's order. */
+    fun splitEq(presets: List<BudsEqPreset>): Pair<List<BudsEqPreset>, List<BudsEqPreset>> =
+        presets.partition { it.id < BUDS_CUSTOM_EQ_ID_BASE }
+
     /** The switch position to draw: the pending value, else the real one (unknown counts as off). */
     fun switchChecked(sw: BudsSwitch, pending: Boolean?): Boolean = pending ?: (sw.on == true)
 
@@ -225,7 +229,10 @@ internal object BudsChipLogic {
                 ancLevels = setOf(BudsAncLevel.LOW, BudsAncLevel.MEDIUM, BudsAncLevel.HIGH, BudsAncLevel.SMART),
                 ancLevel = BudsAncLevel.MEDIUM,
                 eq = BudsEqState(
-                    presets = listOf(BudsEqPreset(3, "Balanced"), BudsEqPreset(4, "Clear Vocals"), BudsEqPreset(5, "Bass")),
+                    presets = listOf(
+                        BudsEqPreset(3, "Balanced"), BudsEqPreset(4, "Clear Vocals"), BudsEqPreset(5, "Bass"),
+                        BudsEqPreset(BUDS_CUSTOM_EQ_ID_BASE + 1, "Gym"), BudsEqPreset(BUDS_CUSTOM_EQ_ID_BASE + 2, "Night"),
+                    ),
                     selectedId = 3,
                 ),
                 switches = listOf(
@@ -441,16 +448,19 @@ private fun BudsChipBody(
                         val eq = sec.eq
                         if (eq != null) {
                             Text("Equalizer", color = DesktopSecondary, style = MaterialTheme.typography.labelMedium)
-                            BudsEqRow(
-                                presets = eq.presets,
-                                selectedId = BudsChipLogic.shown(eq.selectedId, pendingEq),
-                                onPick = { id ->
-                                    if (id != eq.selectedId || pendingEq != null) {
-                                        pendingEq = id
-                                        onSetEq(id)
-                                    }
-                                },
-                            )
+                            val (builtIn, personal) = BudsChipLogic.splitEq(eq.presets)
+                            val pickEq = { id: Int ->
+                                if (id != eq.selectedId || pendingEq != null) {
+                                    pendingEq = id
+                                    onSetEq(id)
+                                }
+                            }
+                            val shownEq = BudsChipLogic.shown(eq.selectedId, pendingEq)
+                            if (builtIn.isNotEmpty()) BudsEqRow(presets = builtIn, selectedId = shownEq, onPick = pickEq)
+                            if (personal.isNotEmpty()) {
+                                Text("My presets", color = DesktopSecondary, style = MaterialTheme.typography.labelMedium)
+                                BudsEqRow(presets = personal, selectedId = shownEq, onPick = pickEq)
+                            }
                             if (pendingEq != null) Text("Setting...", color = DesktopSecondary, style = MaterialTheme.typography.bodySmall)
                         }
                         for (sw in sec.switches) {

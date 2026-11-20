@@ -58,6 +58,8 @@ class DesktopBudsSessionTest {
     private class Sent(val time: Long, val frame: BudsFrame)
 
     /** A pair of buds: answers requests the way the documented firmware does, and can be told to misbehave. */
+    private class FakeCustom(val id: Int, val name: String)
+
     private class FakeBuds(private val time: FakeTime, private val chunk: Int = 0) : BudsTransport {
         val inbound = Channel<ByteArray>(Channel.UNLIMITED)
         val written = ArrayList<Sent>()
@@ -82,6 +84,9 @@ class DesktopBudsSessionTest {
         var pushEq = true
         var ignoreEq = false
         var refuseEq = false
+        var customs: List<FakeCustom> = emptyList()
+        var ignoreCustom = false
+        var refuseCustom = false
 
         override suspend fun write(bytes: ByteArray) {
             if (failWrites) throw java.io.IOException("fake write failure")
@@ -127,6 +132,26 @@ class DesktopBudsSessionTest {
             else -> 0x0100                                         // Transparency
         }
 
+        /** 0x8122 payload: `00 <count>`, then flag, FA 06, id, name, two bands (62 Hz +3, 1000 Hz -2) per preset. */
+        private fun customListPayload(): ByteArray {
+            val out = ArrayList<Byte>()
+            out.add(0.toByte())
+            out.add(customs.size.toByte())
+            for (c in customs) {
+                val name = c.name.toByteArray(Charsets.UTF_8)
+                out.add((if (c.id == eqId) 1 else 0).toByte())
+                out.add(0xFA.toByte())
+                out.add(0x06.toByte())
+                out.add(c.id.toByte())
+                out.add(name.size.toByte())
+                for (b in name) out.add(b)
+                out.add(2.toByte())
+                out.add(0x3E.toByte()); out.add(0x00.toByte()); out.add(0x03.toByte())
+                out.add(0xE8.toByte()); out.add(0x03.toByte()); out.add(0xFE.toByte())
+            }
+            return out.toByteArray()
+        }
+
         private fun ancPayload(mask: Int) = byteArrayOf(0x01, 0x01, (mask and 0xFF).toByte(), ((mask shr 8) and 0xFF).toByte())
 
         private fun respond(f: BudsFrame) {
@@ -162,6 +187,19 @@ class DesktopBudsSessionTest {
                     }
                 }
                 0x010F -> reply(f, byteArrayOf(0, eqId.toByte()))
+                0x0122 -> reply(f, customListPayload())
+                0x0418 -> {
+                    if (refuseCustom) {
+                        reply(f, sessionHex("02"))
+                        return
+                    }
+                    val id = f.payload[3].toInt() and 0xFF
+                    reply(f, byteArrayOf(0, id.toByte()))
+                    if (!ignoreCustom) {
+                        eqId = id
+                        if (pushEq) emit(BudsFrames.build(0x0504, 0xFF, byteArrayOf(id.toByte())))
+                    }
+                }
                 0x0105 -> reply(f, byteArrayOf(0, 4) + "1,2,138,2,2,138,3,1,01,3,2,105".toByteArray())
                 0x0406 -> {
                     if (refuseEq) {
@@ -904,5 +942,129 @@ class DesktopBudsSessionTest {
             e.session.start()
             e.time.advance(2_000)
         }                                                                    // no logger: nothing to capture, nothing thrown
+    }
+
+    // ── personal (custom) equalizer presets ──────────────────────────────────────────────────────
+
+    private val nordCustoms = { b: FakeBuds ->
+        nord(b)
+        b.customs = listOf(FakeCustom(6, "Gym"), FakeCustom(7, "Night"))
+    }
+
+    private suspend fun Env.setPersonal(id: Int): Boolean {
+        val r = scope.async { session.setEqPreset(id) }
+        time.advance(4_000)
+        return r.await()
+    }
+
+    @Test
+    fun personalPresetsAppearAfterTheBuiltInOnesWithTheirOwnNames() = runSession(configure = nordCustoms) { e ->
+        e.session.start()
+        e.time.advance(3_000)
+        val eq = e.session.state.value.extras.eq
+        assertEquals(listOf(3, 4, 5, 0x106, 0x107), eq?.presets?.map { it.id })
+        assertEquals(listOf("Balanced", "Clear Vocals", "Bass", "Gym", "Night"), eq?.presets?.map { it.label })
+        assertEquals(3, eq?.selectedId)
+        assertTrue(e.cmds().contains(0x0122))
+    }
+
+    @Test
+    fun selectingAPersonalPresetSendsTheWholePresetAndConfirmsByReadBack() = runSession(configure = nordCustoms) { e ->
+        e.session.start()
+        e.time.advance(3_000)
+        assertTrue(e.setPersonal(0x107))
+        assertContentEquals(
+            sessionHex("02 FA 06 07 05 4E 69 67 68 74 02 3E 00 03 E8 03 FE"),
+            e.buds.written.last { it.frame.cmd == 0x0418 }.frame.payload,
+        )
+        assertEquals(0x107, e.session.state.value.extras.eq?.selectedId)
+        assertTrue(e.cmds().none { it == 0x0406 })
+    }
+
+    @Test
+    fun aBuiltInPresetStillWorksNextToPersonalOnesAndNeverSendsThe0418Frame() = runSession(configure = nordCustoms) { e ->
+        e.session.start()
+        e.time.advance(3_000)
+        assertTrue(e.setPersonal(0x106))
+        assertTrue(e.setPersonal(5))
+        assertEquals(5, e.session.state.value.extras.eq?.selectedId)
+        assertEquals(1, e.cmds().count { it == 0x0418 })
+    }
+
+    @Test
+    fun aRefusedPersonalPresetReturnsFalseAndKeepsTheSelection() = runSession(configure = { nordCustoms(it); it.refuseCustom = true }) { e ->
+        e.session.start()
+        e.time.advance(3_000)
+        assertFalse(e.setPersonal(0x106))
+        assertEquals(3, e.session.state.value.extras.eq?.selectedId)
+    }
+
+    @Test
+    fun anAckedButNotAppliedPersonalPresetIsNotReportedAsSuccess() = runSession(configure = { nordCustoms(it); it.ignoreCustom = true }) { e ->
+        e.session.start()
+        e.time.advance(3_000)
+        assertFalse(e.setPersonal(0x106))
+        assertEquals(3, e.session.state.value.extras.eq?.selectedId)
+    }
+
+    @Test
+    fun aPersonalPresetTheBudsDidNotListIsNeverWritten() = runSession(configure = nordCustoms) { e ->
+        e.session.start()
+        e.time.advance(3_000)
+        assertFalse(e.setPersonal(0x109))
+        assertTrue(e.cmds().none { it == 0x0418 })
+    }
+
+    @Test
+    fun aPushWithAPersonalIdMovesTheHighlightWithoutAClick() = runSession(configure = nordCustoms) { e ->
+        e.session.start()
+        e.time.advance(3_000)
+        e.buds.emit(BudsFrames.build(0x0504, 0xFF, sessionHex("06")))
+        e.time.settle()
+        assertEquals(0x106, e.session.state.value.extras.eq?.selectedId)
+        e.buds.emit(BudsFrames.build(0x0504, 0xFF, sessionHex("04")))
+        e.time.settle()
+        assertEquals(4, e.session.state.value.extras.eq?.selectedId)
+    }
+
+    @Test
+    fun anIdOutsideEveryListMakesTheSessionReadThePersonalListAgain() = runSession(configure = nord) { e ->
+        e.session.start()
+        e.time.advance(3_000)
+        assertEquals(listOf(3, 4, 5), e.session.state.value.extras.eq?.presets?.map { it.id })
+        e.buds.customs = listOf(FakeCustom(6, "Gym"))                  // saved on the phone meanwhile
+        e.buds.emit(BudsFrames.build(0x0504, 0xFF, sessionHex("06")))
+        e.time.advance(1_000)
+        assertEquals(listOf(3, 4, 5, 0x106), e.session.state.value.extras.eq?.presets?.map { it.id })
+        assertEquals(0x106, e.session.state.value.extras.eq?.selectedId)
+    }
+
+    @Test
+    fun withoutTheBitmapBitNoPersonalPresetIsReadOrOffered() = runSession(
+        configure = { nordCustoms(it); it.bitmap = sessionHex("00 FF 77 5A EA 63 0E 20 07") },   // bit 34 cleared
+    ) { e ->
+        e.session.start()
+        e.time.advance(3_000)
+        assertTrue(e.cmds().none { it == 0x0122 || it == 0x0418 })
+        assertEquals(listOf(3, 4, 5), e.session.state.value.extras.eq?.presets?.map { it.id })
+    }
+
+    @Test
+    fun anUnlistedModelNeverReadsPersonalPresets() = runSession(configure = { it.customs = listOf(FakeCustom(6, "Gym")) }) { e ->
+        e.session.start()
+        e.time.advance(3_000)
+        assertTrue(e.cmds().none { it == 0x0122 || it == 0x0418 })
+        assertNull(e.session.state.value.extras.eq)
+    }
+
+    @Test
+    fun personalPresetNamesNeverReachTheDebugLog() {
+        val log = ArrayList<String>()
+        runSession(debug = log, configure = nordCustoms) { e ->
+            e.session.start()
+            e.time.advance(3_000)
+            assertTrue(e.setPersonal(0x107))
+        }
+        assertTrue(log.none { it.contains("Night") || it.contains("Gym") || it.contains("4E 69 67 68 74") })
     }
 }

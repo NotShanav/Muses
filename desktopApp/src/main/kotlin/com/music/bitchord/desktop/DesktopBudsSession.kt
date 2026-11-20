@@ -102,6 +102,13 @@ internal class BudsSession(
     @Volatile private var eqPicked: Int? = null
     @Volatile private var eqPickedAt: Long = 0L
     private val eqObservations = AtomicInteger(0)
+
+    /** The id 0x010F / push 0x0504 reported last (a built-in slot or a personal preset's own id). */
+    @Volatile private var eqCurrent: Int? = null
+
+    /** The personal presets from the last 0x8122 list (empty until read, or when the model has none). */
+    @Volatile private var customList: List<BudsCustomPreset> = emptyList()
+    private val customObservations = AtomicInteger(0)
     private val switchRequested = ConcurrentHashMap<Int, Boolean>()
     @Volatile private var featureValues: Map<Int, Int> = emptyMap()
     @Volatile private var observedModes: Set<BudsNoiseMode> = emptySet()
@@ -219,6 +226,7 @@ internal class BudsSession(
             BudsIds.CMD_ANC_QUERY or BudsIds.REPLY_BIT -> BudsParsers.ancReplyMask(f.payload)?.let { applyAncMask(it) }
             BudsIds.CMD_QUERY_EQ or BudsIds.REPLY_BIT -> BudsParsers.eqReply(f.payload)?.let { applyEq(it) }
             BudsIds.CMD_EQ_CHANGED -> BudsParsers.eqPush(f.payload)?.let { applyEq(it) }
+            BudsIds.CMD_QUERY_EQ_ALL or BudsIds.REPLY_BIT -> BudsCustomEq.parseList(f.payload)?.let { applyCustomList(it) }
             BudsIds.CMD_FIRMWARE or BudsIds.REPLY_BIT ->
                 BudsParsers.firmware(f.payload)?.let { v -> _state.update { it.copy(extras = it.extras.copy(firmware = v)) } }
             BudsIds.CMD_FEATURE_STATUS or BudsIds.REPLY_BIT -> {
@@ -315,7 +323,7 @@ internal class BudsSession(
         val modes = if (ancOffered) BASE_MODES + observedModes else emptySet()
         val levels: Set<BudsAncLevel> = if (ancOffered) profile.ancLevels else emptySet()
         _state.update {
-            val eq = eqFor(it.extras.eq?.selectedId)
+            val eq = eqNow()
             val switches = switchesNow()
             if (it.supportedNoiseModes == modes && it.extras.ancLevels == levels && it.extras.eq == eq && it.extras.switches == switches) it
             else it.copy(supportedNoiseModes = modes, extras = it.extras.copy(ancLevels = levels, eq = eq, switches = switches))
@@ -344,11 +352,39 @@ internal class BudsSession(
         return profile.switches.filter { featureValues.containsKey(it.id) }.map { it.copy(on = featureOn(it.id)) }
     }
 
-    /** The equalizer row: the model's presets when the buds can select one; [selected] only when it is one of them. */
-    private fun eqFor(selected: Int?): BudsEqState? {
-        val presets = profile.eqPresets
-        if (presets.isEmpty() || !supports(BudsIds.CMD_SET_EQ)) return null
-        return BudsEqState(presets, selected?.takeIf { id -> presets.any { it.id == id } })
+    /** Personal presets are offered when the model has them and the bitmap lists both the read and the select command. */
+    private fun customEqOn(): Boolean =
+        profile.customEq && supports(BudsIds.CMD_QUERY_EQ_ALL) && supports(BudsIds.CMD_SAVE_CUSTOM_EQ)
+
+    /**
+     * The equalizer row: the model's built-in presets, then the personal ones (ids [BUDS_CUSTOM_EQ_ID_BASE] + their own id).
+     * The selection is the reported current id when it names one of them, else nothing.
+     */
+    private fun eqNow(): BudsEqState? {
+        val builtins = profile.eqPresets
+        if (builtins.isEmpty() || !supports(BudsIds.CMD_SET_EQ)) return null
+        val custom = if (customEqOn()) customList else emptyList()
+        val presets = builtins + custom.map { BudsEqPreset(BudsCustomEq.chipId(it.id), BudsCustomEq.label(it)) }
+        return BudsEqState(presets, selectedEqId(builtins, custom))
+    }
+
+    /** A built-in id and a personal id share one id space on the buds; when both match, the list's own "selected" flag decides. */
+    private fun selectedEqId(builtins: List<BudsEqPreset>, custom: List<BudsCustomPreset>): Int? {
+        val current = eqCurrent ?: return null
+        val isBuiltin = builtins.any { it.id == current }
+        val mine = custom.firstOrNull { it.id == current }
+        return when {
+            mine != null && (!isBuiltin || mine.selected) -> BudsCustomEq.chipId(mine.id)
+            isBuiltin -> current
+            else -> null
+        }
+    }
+
+    /** The 0x8122 list always wins, also when it is empty. */
+    private fun applyCustomList(list: List<BudsCustomPreset>) {
+        customList = list
+        customObservations.incrementAndGet()
+        _state.update { it.copy(extras = it.extras.copy(eq = eqNow())) }
     }
 
     /**
@@ -361,8 +397,13 @@ internal class BudsSession(
         if (want != null) {
             if (id == want || nowMs() - eqPickedAt >= EQ_HOLD_MS) eqPicked = null else return
         }
+        eqCurrent = id
         eqObservations.incrementAndGet()
-        _state.update { it.copy(extras = it.extras.copy(eq = eqFor(id))) }
+        _state.update { it.copy(extras = it.extras.copy(eq = eqNow())) }
+        // An id that is neither built-in nor in the list we hold: a personal preset we have not read (or were renumbered). Read the list.
+        if (customEqOn() && profile.eqPresets.none { it.id == id } && customList.none { it.id == id }) {
+            sessionScope.launch { send(BudsIds.CMD_QUERY_EQ_ALL, ByteArray(0)) }
+        }
     }
 
     /** Game mode lives under 0x28 on newer devices, else 0x06 (section 16). */
@@ -409,6 +450,10 @@ internal class BudsSession(
         if (profile.eqPresets.isNotEmpty() && supports(BudsIds.CMD_QUERY_EQ)) {
             delayFn(INIT_STEP_MS)
             send(BudsIds.CMD_QUERY_EQ, ByteArray(0))
+            if (customEqOn()) {
+                delayFn(INIT_STEP_MS)
+                send(BudsIds.CMD_QUERY_EQ_ALL, ByteArray(0))
+            }
         }
         if (profile.readsFirmware && supports(BudsIds.CMD_FIRMWARE)) {
             delayFn(INIT_STEP_MS)
@@ -429,6 +474,10 @@ internal class BudsSession(
             if (profile.eqPresets.isNotEmpty() && supports(BudsIds.CMD_QUERY_EQ)) {
                 delayFn(INIT_STEP_MS)
                 send(BudsIds.CMD_QUERY_EQ, ByteArray(0))
+                if (customEqOn()) {
+                    delayFn(INIT_STEP_MS)
+                    send(BudsIds.CMD_QUERY_EQ_ALL, ByteArray(0))
+                }
             }
         }
     }
@@ -543,6 +592,7 @@ internal class BudsSession(
 
     private suspend fun doSetEqPreset(id: Int): Boolean {
         if (!isOpen() || !supports(BudsIds.CMD_SET_EQ)) return false
+        if (BudsCustomEq.isChipId(id)) return doSetCustomPreset(id - BUDS_CUSTOM_EQ_ID_BASE)
         if (profile.eqPresets.none { it.id == id }) return false
         val observedBefore = eqObservations.get()
         replies.remove(BudsIds.CMD_SET_EQ or BudsIds.REPLY_BIT)
@@ -558,6 +608,36 @@ internal class BudsSession(
         if (awaitCondition(PUSH_WAIT_MS, confirmed)) return true
         if (supports(BudsIds.CMD_QUERY_EQ) && !send(BudsIds.CMD_QUERY_EQ, ByteArray(0))) return false
         return awaitCondition(READBACK_WAIT_MS, confirmed)
+    }
+
+    /**
+     * Selects one of the buds' personal presets: 0x0418 with the whole preset (save and select), ack, then read the list and
+     * the current id back (twice at most). True only when the buds report it as the selected one.
+     */
+    private suspend fun doSetCustomPreset(presetId: Int): Boolean {
+        if (!isOpen() || !customEqOn()) return false
+        val preset = customList.firstOrNull { it.id == presetId } ?: return false
+        val observedBefore = eqObservations.get()
+        val listsBefore = customObservations.get()
+        val ackCmd = BudsIds.CMD_SAVE_CUSTOM_EQ or BudsIds.REPLY_BIT
+        replies.remove(ackCmd)
+        eqPicked = presetId
+        eqPickedAt = nowMs()
+        if (!send(BudsIds.CMD_SAVE_CUSTOM_EQ, BudsCustomEq.encodeSelect(preset)) || !awaitAccepted(ackCmd, ACK_WAIT_MS)) {
+            eqPicked = null
+            return false
+        }
+        val wanted = BudsCustomEq.chipId(presetId)
+        val confirmed = {
+            eqObservations.get() > observedBefore && customObservations.get() > listsBefore &&
+                _state.value.extras.eq?.selectedId == wanted
+        }
+        for (attempt in 1..2) {
+            if (!send(BudsIds.CMD_QUERY_EQ_ALL, ByteArray(0))) return false
+            if (supports(BudsIds.CMD_QUERY_EQ) && !send(BudsIds.CMD_QUERY_EQ, ByteArray(0))) return false
+            if (awaitCondition(READBACK_WAIT_MS, confirmed)) return true
+        }
+        return false
     }
 
     private suspend fun awaitAccepted(replyCmd: Int, timeoutMs: Long): Boolean {

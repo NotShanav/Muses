@@ -492,6 +492,10 @@ compose.desktop {
         jvmArgs("-XX:+UseG1GC", "-XX:G1PeriodicGCInterval=20000", "-XX:G1PeriodicGCSystemLoadThreshold=0")
         // UPGRADE M3, diagnostic: native memory tracking for the memory report. Remove later.
         jvmArgs("-XX:NativeMemoryTracking=summary")
+        // AUDIO FIX: a real native crash leaves a report. `\$APPDIR` is expanded by the jpackage
+        // launcher (the per-user install folder, which is writable); a plain `gradle run` cannot
+        // expand it, and the JVM then just fails to write the report. `%p` is the process id.
+        jvmArgs("-XX:ErrorFile=\$APPDIR/hs_err_pid%p.log")
         jvmArgs("-Dbitchord.version=$appVersion")
         if (desktopModuleIndexUrl.isNotBlank()) {
             jvmArgs("-Dbitchord.module.index=$desktopModuleIndexUrl")

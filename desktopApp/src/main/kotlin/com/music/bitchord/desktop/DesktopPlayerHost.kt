@@ -93,8 +93,8 @@ internal object DesktopPlayerHost : PlayerHost {
     @Composable
     override fun rememberAudioOutputs(): List<AudioOutputDevice> {
         val selected by DesktopAudioDevices.selected.collectAsState()
-        val changes by DesktopAudioDevices.changes.collectAsState()
-        val devices = remember(changes) { DesktopAudioDevices.available() }
+        // AUDIO FIX: the cached list; enumerating here would run a native call on the UI thread.
+        val devices by DesktopAudioDevices.devices.collectAsState()
         return remember(selected, devices) {
             val ids = listOf(DesktopAudioDevices.SYSTEM_DEFAULT) + devices.map { it.id }
             listed = ids

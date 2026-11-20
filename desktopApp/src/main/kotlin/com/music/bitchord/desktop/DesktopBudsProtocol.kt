@@ -61,6 +61,10 @@ internal object BudsIds {
     const val CMD_SET_ANC = 0x0404
     /** Select a built-in equalizer preset: `0x0406 <id>`, reply `00` (section 17). */
     const val CMD_SET_EQ = 0x0406
+    /** Personal (custom) equalizer presets: list read `0x0122`, reply `00 <count> <entries>` (section 17). */
+    const val CMD_QUERY_EQ_ALL = 0x0122
+    /** Create / save+select / delete a personal preset: `0x0418 <action> <preset>`, reply `00 <id>` (section 17). */
+    const val CMD_SAVE_CUSTOM_EQ = 0x0418
     /** Push: the equalizer changed, payload `<id>` (section 10). */
     const val CMD_EQ_CHANGED = 0x0504
     const val CMD_REQ_TIME = 0x0500

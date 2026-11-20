@@ -22,6 +22,8 @@ internal class BudsModelProfile(
     val switches: List<BudsSwitch> = emptyList(),
     /** True when the firmware version (0x0105) is read after init. */
     val readsFirmware: Boolean = false,
+    /** models.json `customEq`: the buds keep personal equalizer presets (listed with 0x0122, selected with 0x0418). */
+    val customEq: Boolean = false,
 ) {
     val ancLevels: Set<BudsAncLevel> get() = ancLevelSlots.keys
 
@@ -95,6 +97,7 @@ internal object BudsModelProfiles {
             BudsSwitch(BudsIds.FEATURE_BASSWAVE, "Bass boost", null),
         ),
         readsFirmware = true,
+        customEq = true,                                   // models.json "customEq":1 for 064414
     )
 
     private val BY_ID: Map<String, BudsModelProfile> = listOf(NORD_BUDS_3_PRO).associateBy { it.productId!! }

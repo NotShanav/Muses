@@ -82,6 +82,23 @@ class DesktopBudsChipSectionsTest {
         assertTrue(BudsChipLogic.eqScrolls(5))
     }
 
+    @Test
+    fun personalPresetsGoInTheirOwnRowAfterTheBuiltInOnes() {
+        val builtIn = listOf(BudsEqPreset(3, "Balanced"), BudsEqPreset(4, "Clear Vocals"))
+        val personal = listOf(BudsEqPreset(BUDS_CUSTOM_EQ_ID_BASE + 6, "Gym"), BudsEqPreset(BUDS_CUSTOM_EQ_ID_BASE + 7, "Night"))
+        assertEquals(Pair(builtIn, personal), BudsChipLogic.splitEq(builtIn + personal))
+        val none = emptyList<BudsEqPreset>()
+        assertEquals(Pair(builtIn, none), BudsChipLogic.splitEq(builtIn))
+        assertEquals(Pair(none, personal), BudsChipLogic.splitEq(personal))
+        assertEquals(Pair(none, none), BudsChipLogic.splitEq(none))
+    }
+
+    @Test
+    fun aBuiltInIdIsNeverTakenForAPersonalOne() {
+        // Built-in ids stay far below the personal base, so no built-in preset can land in the "My presets" row.
+        assertTrue((0..0xFF).all { id -> BudsChipLogic.splitEq(listOf(BudsEqPreset(id, "x"))).second.isEmpty() })
+    }
+
     // ---- switches
 
     @Test
@@ -194,7 +211,8 @@ class DesktopBudsChipSectionsTest {
         val sec = BudsChipLogic.sections(s)
         assertTrue(sec.battery && sec.noise && sec.sound)
         assertEquals(4, sec.ancLevels.size)
-        assertEquals(3, sec.eq?.presets?.size)
+        assertEquals(5, sec.eq?.presets?.size)
+        assertEquals(2, BudsChipLogic.splitEq(sec.eq?.presets.orEmpty()).second.size)
         assertEquals(5, sec.switches.size)
         assertTrue(sec.switches.any { it.on == null })
         assertTrue(sec.lowLatency)

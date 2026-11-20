@@ -20,3 +20,10 @@ internal data class BudsExtras(
     val switches: List<BudsSwitch> = emptyList(),
     val firmware: String? = null,
 )
+
+/**
+ * Personal equalizer presets travel inside [BudsEqState.presets] too: their [BudsEqPreset.id] is this base plus the
+ * buds' own preset id, so they can never collide with a built-in id (which is below this base).
+ * [BudsEqState.selectedId] uses the same numbering. `setEqPreset(id)` accepts both kinds. No signature changed.
+ */
+internal const val BUDS_CUSTOM_EQ_ID_BASE = 0x100

@@ -34,6 +34,8 @@ import kotlin.math.roundToInt
 import org.jetbrains.compose.resources.painterResource
 
 fun main() {
+    // AUDIO FIX: reports a frozen UI thread (all stacks into desktop.log) for the next debugging round.
+    DesktopFreezeWatchdog.start()
     // The player is the phone's, from the shared UI module; this is what it reads underneath.
     PlayerPlatform.install(DesktopPlayerHost)
     com.music.bitchord.ui.AppUi.install(DesktopAppUiHost)

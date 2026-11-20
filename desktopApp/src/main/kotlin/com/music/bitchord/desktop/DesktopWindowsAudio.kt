@@ -15,6 +15,22 @@ internal object DesktopWindowsAudio {
             runCatching { DesktopAnalysisRuntime.loadNative(LIBRARY) }
                 .onFailure { DesktopTrackLog.log("native Windows audio unavailable: ${it.message}") }
                 .isSuccess
+                .also { loaded -> if (loaded) configureTrace() }
+    }
+
+    /**
+     * AUDIO FIX: tells the native side where to write audio-trace.log (beside desktop.log). The
+     * native library may be an older build without this entry point, so a failure is only logged.
+     */
+    private fun configureTrace() {
+        runCatching {
+            DesktopTrackLog.directory?.let { nativeSetTracePath(it.resolve("audio-trace.log").toString()) }
+        }.onFailure { DesktopTrackLog.log("audio trace unavailable: ${it.javaClass.simpleName}") }
+    }
+
+    /** AUDIO FIX: asks the native side to write audio-trace.log now (called when the UI froze). */
+    fun flushTrace() {
+        if (available) runCatching { nativeFlushTrace() }
     }
 
     fun open(device: String, format: DesktopPcmFormat): Result<Int> = runCatching {
@@ -61,6 +77,9 @@ internal object DesktopWindowsAudio {
     /**
      * The active render endpoints, keyed by their endpoint id; null when the native library is
      * missing, so the caller can fall back to Java Sound's mixers.
+     *
+     * AUDIO FIX: blocking native call. Never call it from the UI thread; [DesktopAudioDevices]
+     * runs it on Dispatchers.IO and the UI reads its cached list.
      */
     fun devices(): List<DesktopAudioDevice>? {
         if (!available) return null
@@ -81,6 +100,8 @@ internal object DesktopWindowsAudio {
         floatingPoint: Boolean,
     ): Int
 
+    @JvmStatic private external fun nativeSetTracePath(path: String)
+    @JvmStatic private external fun nativeFlushTrace()
     @JvmStatic private external fun nativeDevices(): Array<String>
     @JvmStatic private external fun nativeWrite(samples: FloatArray, count: Int, gain: Float): Int
     @JvmStatic private external fun nativeFramesPlayed(): Long

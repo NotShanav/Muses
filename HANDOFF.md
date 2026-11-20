@@ -1163,3 +1163,50 @@ Compile watch-list: `if (open) DismissOnDisplayChange { open = false }` inside a
 
 ### Exact next step
 Build in GitHub Actions and fix errors from the B1 to B4 watch-lists. Then test with real earbuds: pair in Windows, Settings > Experimental > Earbuds on, close QuickBuds / HeyMelody, check the chip and the popup.
+
+
+## AUDIO FIX
+
+### Did
+Read the last 3 HANDOFF sections, then only the audio output path. Findings on the six points (all from reading the code; nothing reproduced):
+1. **Confirmed.** `write_audio` set `g_audio_reroute` on `DEVICE_INVALIDATED` and `continue`d; `reroute_locked` then found the same endpoint id and returned without rebuilding, so the loop spun with `g_audio_mutex` held. Everything that takes that mutex blocked behind it.
+2. **Fix, native (`window_jni.cpp`).** New `g_audio_invalidated` flag. `mark_stream_dead_locked` keeps the frames heard so far, releases the client, sets the flag and schedules a retry; `reroute_locked` rebuilds when the flag is set even if the endpoint id is unchanged. Back-off is a timestamp (`g_next_rebuild_ms`: 50, 100, 200, then 250 ms), never a sleep under the lock: while it has not elapsed `write_audio` sees no client, counts the block as played in real time (at least 50 ms), unlocks and returns. The failure counter is cleared by the first write the new stream accepts, so a stream that dies again at once keeps backing off. "Dead stream" HRESULTs: DEVICE_INVALIDATED, SERVICE_NOT_RUNNING, RESOURCES_INVALIDATED, DEVICE_IN_USE, UNSUPPORTED_FORMAT, NOT_INITIALIZED, ENDPOINT_CREATE_FAILED, RPC_E_DISCONNECTED, RPC_S_SERVER_UNAVAILABLE (raw values, see Unverified). Handled in write (padding, GetBuffer, ReleaseBuffer), `played_frames_locked`, pause, resume, flush, drain. A full buffer whose padding does not change for 1.5 s while running counts as dead (stall). `nativeDrain` is bounded (1 s without progress, 3 s total, not at all when paused). `nativeFramesPlayed` uses `try_lock` and returns the last count when the stream is busy.
+3. **Locks.** `g_enum_mutex` (creation of the shared enumerator only) and `g_info_mutex` (leaf; device name and last error). Order: `g_audio_mutex`, then `g_enum_mutex`. `list_devices` takes no audio lock. `nativeDeviceName` / `nativeLastError` take only the leaf lock, so the pipeline panel (UI thread) cannot wait behind a rebuild. The enumerator and the static watcher are never released or unregistered, so no callback can outlive them.
+4. **Notifications.** Callbacks only set atomics, write a trace record and raise a flag (never throw: try/catch). One worker thread waits 250 ms and makes one JNI call per burst. Class and method id are cached (global ref) in `JNI_OnLoad`, with a retry from `nativeOpen` / `nativeDevices`; exceptions are always cleared.
+5. **Kotlin.** `DesktopAudioDevices.devices` (StateFlow) is the cached list; a refresh loop on `Dispatchers.IO` debounces 200 ms, waits at most 1.5 s per enumeration, retries with 250/500/1000/2000 ms (4 retries), and keeps the last good list. `DesktopAudioOutputUi` and `DesktopPlayerHost` read it instead of calling `available()` while composing. `label()` (Settings) is now `@Composable` and reads the cache. Playback writes, `framesPlayed`, pause, resume, flush, drain run on the `Muses-Audio` thread only; `pipeline()` (composition) only touches the lock-free getters.
+6. **Idle.** The sink is opened only when a track is loaded, so with an empty queue the only native work is the device list, and it ran on the UI thread. I found one more suspect there: the AWT thread is a single-threaded COM apartment, and the first `nativeDevices` call from it created the shared enumerator in that apartment (and so registered the notification client there, with callbacks delivered through the UI message loop, and raw-pointer use of it from the audio thread). Now `get_enumerator` refuses to create it on a non-MTA thread and `list_devices` returns nothing there; Kotlin no longer calls it from the UI thread. This is a hypothesis, not a proven cause.
+
+Instrumentation: `audio-trace.log` (native ring of 256 records, written by a watchdog thread every 100 ms on request, every 2 s while an error persists, and while `g_audio_mutex` stays held over 300 ms: which entry point holds it and which wait); `DesktopFreezeWatchdog` (daemon, probes the AWT queue each second after a 10 s start grace, one all-threads dump into `desktop.log` per freeze, under "=== UI FREEZE ..."); `-XX:ErrorFile=$APPDIR/hs_err_pid%p.log`.
+
+### Files
+Edited: `desktopApp/native/window/window_jni.cpp` (audio section rewritten, `JNI_OnLoad`, `nativeSetTracePath`, `nativeFlushTrace`; frame/window code untouched), `DesktopWindowsAudio.kt`, `DesktopAudioDevices.kt`, `DesktopAudioOutputUi.kt`, `DesktopPlayerHost.kt`, `DesktopTrackLog.kt` (exposes `directory`), `Main.kt` (one line), `desktopApp/build.gradle.kts` (one jvmArg), `HANDOFF.md`. New: `DesktopAudioSafety.kt`, `DesktopAudioSafetyTest.kt`. All marked `// AUDIO FIX` (the native section carries it in its comments). `DesktopApp.kt` never opened. No new dependency, no Gradle flag changed.
+
+### Decisions
+- Back-off is a timestamp, not a sleep; during it audio is silent and the track position advances in real time (as the old no-client path did). The spec said 50 to 250 ms; I kept to that.
+- Stream builds (`Activate` / `Initialize`) still run under `g_audio_mutex`, so pause / resume / flush / close on the audio thread wait behind a slow build. Only the audio thread can wait; the UI thread and the device list cannot. Moving the build outside the lock is riskier to write blind.
+- Trace flushing is done by the watchdog thread, never under the audio lock; a crash within ~100 ms of an error can lose the newest records.
+- Device names never enter the trace (endpoint-id hash only); `hs_err` files are the JVM's own and can hold paths and module names.
+- No C++ test target exists, so no native tests; the pure Kotlin helpers are tested.
+
+### Verified
+**NOT compiled. Tests NOT run. Nothing was run on Windows or with audio.** Done: brace/paren balance by script; the new native audio section and JNI tail were syntax-checked with host g++ (`-fsyntax-only -Wall -Wextra`) against hand-written stub headers, which proves typos and types in my code only, not the real Windows/JNI headers or MinGW; Kotlin hand-read against the repo's imports; the three test groups hand-traced (retry delay values, freeze tracker sequence, dump text). Compile watch-list: `ULONGLONG{25} << step`, `std::atomic<jclass>` / `<jmethodID>`, `thread_local` under `-static` MinGW, `constexpr HRESULT` from `static_cast<HRESULT>(0x...u)`, `@Composable fun label()` in an `internal object`, `Deferred<List<...>?>` with `takeIf { it.isActive }`.
+
+### Unverified assumptions about Windows audio (could not check here)
+- The raw HRESULT values (`0x88890004` invalidated, `…10` service not running, `…26` resources invalidated, `…0A` in use, `…08` unsupported, `…01` not initialized, `…0F` endpoint create) are from memory.
+- That Windows Sonic / DTS / a Bluetooth profile switch invalidates a shared-mode stream with the endpoint id unchanged (your finding 1), and that `GetCurrentPadding` or `GetBuffer` then returns one of those codes rather than silently stalling (the 1.5 s stall rule is a guess for that case).
+- That `Stop` / `Release` on an invalidated client return at once and never block; that `Activate` / `Initialize` may block for seconds.
+- That a rebuild 50 ms after invalidation is early enough to succeed; if not, it retries every 250 ms.
+- That `OnPropertyValueChanged` bursts during an effect switch (only traced, nothing acts on them), and how many `OnDevice*` callbacks one switch produces.
+- That `CoInitializeEx(MTA)` on a Java IO/audio thread returns S_OK, and that the AWT thread is an STA (it returned RPC_E_CHANGED_MODE, which the old code ignored).
+- That the static `EndpointWatcher` is safe to leave registered at process exit.
+- That jpackage expands `$APPDIR` in a java-option; the per-user MSI install folder being writable. A portable zip may behave differently. `gradle run` writes nothing.
+- That `FindClass` in `JNI_OnLoad` sees the app class (System.load is called from an app class); the fallback from `nativeOpen` / `nativeDevices` covers it otherwise.
+
+### Deferred
+- Building the stream outside the audio lock; a hung `Activate` still stalls the audio thread (the UI stays alive, and the trace shows who holds the lock).
+- Proactive rebuild while paused (it happens at resume or at the next write).
+- The paused-with-full-buffer wait in `write_audio` (legitimate while paused; unbounded by design).
+- Reading `hs_err` / `audio-trace.log` back into Settings diagnostics.
+
+### Exact next step
+Build in GitHub Actions (the DLL with the new native code, then Kotlin). On the HP ENVY: play, then switch Windows Sonic / DTS / output while playing, paused and idle; expect a short silence then recovery, never a frozen window. If anything still freezes, send `audio-trace.log` (in `%USERPROFILE%\.local\state\bitchord`, next to `desktop.log`) and the "UI FREEZE" block from `desktop.log`: the trace's `holder=` line and the thread dump say who held what.

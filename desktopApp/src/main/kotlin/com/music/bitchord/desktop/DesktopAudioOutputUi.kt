@@ -17,7 +17,6 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -35,8 +34,8 @@ import com.music.bitchord.ui.icons.BitChordIcons
 @Composable
 internal fun DesktopAudioOutputDialog(onDismiss: () -> Unit) {
     val selected by DesktopAudioDevices.selected.collectAsState()
-    val changes by DesktopAudioDevices.changes.collectAsState()
-    val devices = remember(changes) { DesktopAudioDevices.available() }
+    // AUDIO FIX: the cached list; enumerating here would run a native call on the UI thread.
+    val devices by DesktopAudioDevices.devices.collectAsState()
     DesktopDialogPanel(onDismiss = onDismiss, maxWidth = 440) {
         Column(Modifier.padding(horizontal = panelInset(22.dp), vertical = 22.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Text(
