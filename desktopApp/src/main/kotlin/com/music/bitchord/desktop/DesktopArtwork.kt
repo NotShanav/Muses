@@ -13,6 +13,9 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.painter.BitmapPainter
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.collectAsState
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.foundation.Image
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -73,7 +76,12 @@ fun DesktopArtwork(
     val sized = if (px != null) url.artworkAt(px) else url
     // Lets the artwork transition find the thumbnail that was clicked. Keyed by the ORIGINAL url.
     val reportKey = if (url.isNullOrBlank()) null else "url:$url"
-    val reported = if (reportKey == null) modifier else modifier.onGloballyPositioned { DesktopArtTransition.reportSource(reportKey, it) }
+    val myCoords = remember { arrayOfNulls<androidx.compose.ui.layout.LayoutCoordinates>(1) }
+    val sourceFade = DesktopArtTransition.sourceFade.collectAsState()
+    val reported = if (reportKey == null) modifier else modifier
+        .onGloballyPositioned { myCoords[0] = it; DesktopArtTransition.reportSource(reportKey, it) }
+        // The clicked artwork dissolves into the particles: it fades out while they leave it.
+        .graphicsLayer { alpha = if (DesktopArtTransition.isSource(myCoords[0])) 1f - sourceFade.value else 1f }
     val bitmap by produceState<ImageBitmap?>(initialValue = null, key1 = sized) {
         val loaded = withContext(Dispatchers.IO) {
             DesktopArtworkCache.load(sized)

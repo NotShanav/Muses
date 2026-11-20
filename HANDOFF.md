@@ -1216,6 +1216,8 @@ Build in GitHub Actions (the DLL with the new native code, then Kotlin). On the 
 - Art transition source: `lookupSource` now ignores views that are off-screen or are the pill thumbnail, and picks the view under the click, else the nearest to it, else the biggest. The mouse-box fallback is gone: with no view on screen (next button, media key, full player) it starts from the player estimate or the pill thumbnail. Press freshness 600 ms -> 4 s, consumed once; media keys count (`DesktopArtPress.noteKey`); artwork load timeout 700 ms -> 2.5 s.
 - Settings: Experimental has "Artwork snap transition" (maps to mode OFF / EVERY_CLICK).
 - Pill: shuffle/repeat/"1" are white (active) or dim white (inactive), no artwork colour, liquid and classic pill.
-- Search: with search open the field is clamped to the right of `ISLAND_HALF_WIDTH` (310 dp, window-centred guess); min 150 dp.
+- Search: the open search field now ends left of the Back arrow (end padding 134 dp + button + 8 dp), so Back no longer sits on top of it; the island is not touched.
 - Voice sync: new state `Preparing` (overlay window made, nothing drawn). `Listening` is published only after the ready tone returned, so popup and beep arrive together and the recorder's flush drops only the tone.
 - Single-key trigger: `DesktopVoiceKeyTrigger.kt`; settings keys `voice_trigger_key`, `voice_trigger_mode`, `voice_tap_seconds`. Works only with the Muses window focused and no text field focused (`Modifier.trackTextFocus()` on all text fields). Tap mode: record up to N s, second tap ends early.
+- Art transition (follow-up): source rect uses localToWindow corners (includes hover scale); the clicked artwork view fades out with `sourceFade` (`DesktopArtTransition.sourceCoords/isSource`, applied in `DesktopArtwork`) so the album visibly turns into the particles.
+- Full-screen player: no transition at all (maybeStartArtTransition skips and a running one is cancelled when the player opens).

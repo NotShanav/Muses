@@ -378,7 +378,7 @@ internal object DesktopArtTransition {
         val ws = windowSize
         val windowRect = if (ws.width >= 2f && ws.height >= 2f) Rect(0f, 0f, ws.width, ws.height) else null
         val target = try { targetBounds() } catch (t: Throwable) { Rect.Zero }
-        val candidates = ArrayList<Rect>()
+        val candidates = ArrayList<Pair<Rect, LayoutCoordinates>>()
         synchronized(sources) {
             val it = sources.entries.iterator()
             while (it.hasNext()) {
@@ -388,25 +388,38 @@ internal object DesktopArtTransition {
                     continue
                 }
                 if (e.value != videoId && (urlKey == null || e.value != urlKey)) continue
-                val pos = e.key.positionInWindow()
-                val r = Rect(pos, Size(e.key.size.width.toFloat(), e.key.size.height.toFloat()))
+                // localToWindow includes the view's own scale (a hovered, enlarged card), unlike size alone.
+                val tl = e.key.localToWindow(Offset.Zero)
+                val br = e.key.localToWindow(Offset(e.key.size.width.toFloat(), e.key.size.height.toFloat()))
+                val r = Rect(minOf(tl.x, br.x), minOf(tl.y, br.y), maxOf(tl.x, br.x), maxOf(tl.y, br.y))
                 if (r.width < 2f || r.height < 2f) continue
                 val own = r.width * r.height
                 if (windowRect != null && overlapArea(r, windowRect) < own * 0.5f) continue
                 if (target.width >= 2f && target.height >= 2f && overlapArea(r, target) > own * 0.5f) continue
-                candidates += r
+                candidates += r to e.key
             }
         }
         if (candidates.isEmpty()) return null
-        if (pointer == null) return candidates.maxByOrNull { it.width * it.height }
-        candidates.filter { it.contains(pointer) }.minByOrNull { it.width * it.height }?.let { return it }
-        fun dist(r: Rect): Float {
-            val dx = maxOf(r.left - pointer.x, 0f, pointer.x - r.right)
+        fun area(c: Pair<Rect, LayoutCoordinates>) = c.first.width * c.first.height
+        fun dist(c: Pair<Rect, LayoutCoordinates>): Float {
+            val r = c.first
+            val dx = maxOf(r.left - pointer!!.x, 0f, pointer.x - r.right)
             val dy = maxOf(r.top - pointer.y, 0f, pointer.y - r.bottom)
             return dx * dx + dy * dy
         }
-        return candidates.minByOrNull { dist(it) }
+        val best = if (pointer == null) {
+            candidates.maxByOrNull { area(it) }
+        } else {
+            candidates.filter { it.first.contains(pointer) }.minByOrNull { area(it) } ?: candidates.minByOrNull { dist(it) }
+        } ?: return null
+        sourceCoords = best.second
+        return best.first
     }
+
+    /** The artwork view the current run started from; it is drawn at `1 - sourceFade` so it reads as dissolving. */
+    @Volatile internal var sourceCoords: LayoutCoordinates? = null
+
+    internal fun isSource(coords: LayoutCoordinates?): Boolean = coords != null && coords === sourceCoords
 
     private fun resolveSource(request: ArtTransitionRequest): Rect {
         val p = request.pointer
@@ -414,18 +427,13 @@ internal object DesktopArtTransition {
             println("ArtTransition source: $branch $r")
             return r
         }
+        sourceCoords = null
         val hit = lookupSource(request.videoId, request.artworkUrl, p)
         if (hit != null) return chosen("reported view", hit)
         val b = request.sourceBounds
         if (b != null && b.width >= 2f && b.height >= 2f) return chosen("sourceBounds", b)
         // No view of this song is on screen (next button, media key, full player). Never the mouse:
-        // start from the big player artwork when that is open, else from the pill thumbnail itself.
-        val ws = windowSize
-        if (playerOpen && ws.width >= 2f && ws.height >= 2f) {
-            val side = minOf(ws.width, ws.height) * 0.46f
-            val c = Offset(ws.width * 0.5f, ws.height * 0.45f)
-            return chosen("player estimate", Rect(c.x - side / 2f, c.y - side / 2f, c.x + side / 2f, c.y + side / 2f))
-        }
+        // start from the pill thumbnail itself.
         val t = try { targetBounds() } catch (t: Throwable) { Rect.Zero }
         if (t.width >= 2f && t.height >= 2f) return chosen("pill thumbnail", t)
         val c = liveTarget().center

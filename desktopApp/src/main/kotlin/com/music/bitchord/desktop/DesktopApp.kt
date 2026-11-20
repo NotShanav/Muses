@@ -4429,10 +4429,6 @@ private data class DesktopShellCallbacks(
     val onForward: () -> Unit,
 )
 
-/** Half the width the Windows Dynamic Island overlay takes in the middle of the top bar. */
-private val ISLAND_HALF_WIDTH = 310.dp
-private val SEARCH_MIN_WIDTH = 150.dp
-
 @Composable
 private fun DesktopTopBar(
     common: DesktopShellCallbacks,
@@ -4462,13 +4458,7 @@ private fun DesktopTopBar(
         targetValue = if (searchOpen) {
             if (narrow) {
                 (windowWidth - captionReserve - 16.dp - (buttonSize * 2 + 12.dp)).coerceAtLeast(96.dp)
-            } else if (compact) 132.dp else {
-                // The Windows Dynamic Island overlay sits over the middle of the bar. Keep the field to the
-                // right of it (island half-width plus a gap) instead of sliding underneath it.
-                val rightEdgeReserve = 134.dp
-                val free = windowWidth / 2 - ISLAND_HALF_WIDTH - rightEdgeReserve
-                minOf(340.dp, free).coerceAtLeast(SEARCH_MIN_WIDTH)
-            }
+            } else if (compact) 132.dp else 340.dp
         } else {
             0.dp
         },
@@ -4548,7 +4538,7 @@ private fun DesktopTopBar(
                 }
             }
             Box(
-                Modifier.align(Alignment.CenterEnd).padding(end = if (narrow) (buttonSize * 2 + 12.dp) else 134.dp)
+                Modifier.align(Alignment.CenterEnd).padding(end = if (narrow) (buttonSize * 2 + 12.dp) else (134.dp + buttonSize + 8.dp))
                     .width(searchWidth).height(38.dp.forTouch())
                     .graphicsLayer { alpha = if (searchOpen) 1f else 0f },
             ) {

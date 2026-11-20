@@ -150,6 +150,11 @@ internal fun maybeStartArtTransition(
         println("ArtTransition skipped: disabled")
         return
     }
+    if (DesktopArtTransition.playerOpenFlag.value) {
+        // Full-screen player: plain song change, no particles.
+        println("ArtTransition skipped: full player open")
+        return
+    }
     if (!DesktopArtPress.isFresh()) {
         println("ArtTransition skipped: no fresh press")
         return
@@ -174,6 +179,7 @@ internal fun ArtTransitionHostEffects() {
     val nowPlayingOpen = DesktopArtTransition.playerOpenFlag.collectAsState()
     DisposableEffect(nowPlayingOpen.value) {
         DesktopArtTransition.playerOpen = nowPlayingOpen.value
+        if (nowPlayingOpen.value) DesktopArtTransition.cancel()
         onDispose { }
     }
     DisposableEffect(config.artTransitionMode) {
