@@ -6992,6 +6992,11 @@ private fun DesktopSettingsScreen(
                         rowVisible = { title, subtitle -> settingsRowVisible(title, subtitle) },
                         toggle = { title, subtitle, checked, onChange -> SettingsToggle(title, subtitle, checked, onChange) },
                     )
+                    // WEB 1 hook: Muses Web (experimental) rows, same group.
+                    DesktopWebSettingsRows(
+                        rowVisible = { title, subtitle -> settingsRowVisible(title, subtitle) },
+                        toggle = { title, subtitle, checked, onChange -> SettingsToggle(title, subtitle, checked, onChange) },
+                    )
                 }
             }
             }

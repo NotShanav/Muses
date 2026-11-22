@@ -541,6 +541,8 @@ compose.desktop {
                 "java.xml",
                 "jdk.crypto.ec",
                 "jdk.dynalink",
+                // WEB 1 hook: Muses Web's embedded server (com.sun.net.httpserver). A JDK module, not a dependency.
+                "jdk.httpserver",
                 // UPGRADE M3, diagnostic: lets the memory report run the vmNativeMemory command in-process.
                 "jdk.management",
                 // JavaFX WebEngine returns JavaScript objects through netscape.javascript.JSObject.

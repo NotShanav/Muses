@@ -137,3 +137,15 @@ Honest limits:
 - About 1 GB of RAM is used while a command is processed; with under 1.8 GB free it refuses. The model is loaded per command and then unloaded, so a cold start can take a few seconds.
 - The global hotkey is Windows-only. Windows must allow desktop apps to use the microphone (Settings → Privacy → Microphone).
 - The Sherpa-ONNX Windows program is downloaded from the project's official v2.0.1 release; it is not bundled with Muses.
+
+### Muses Web (experimental, browser client)
+Muses can serve a light **browser version** of itself from the desktop app. Under **Settings → Advanced → Experimental** switch on **Muses Web (experimental)** and press **Open in browser** (default address `http://localhost:8765`). The page has Home, Search, Library, playlists and Now Playing with synced lyrics, simple themes (Light, Dark, AMOLED, Album tint) and a Battery saver; the browser plays the music with its own decoder, and media keys, the lock screen and Bluetooth buttons work through the Media Session API. A microphone button in the top bar lets you click, speak and have the song played in the tab (the desktop's offline recogniser does the listening; nothing is stored). Start the app with `--web`, or turn on *Start without the desktop window*, to run with only a tray icon, which uses far less memory and power than the window.
+
+Honest limits:
+- The desktop app (window or tray) has to be running; this is a personal server for you and your devices, **not a public website** (YouTube blocks datacenter addresses and its terms forbid re-hosting).
+- The desktop equaliser, spatial sound and crossfade are not used in the browser.
+- The microphone works on `localhost` or HTTPS only, so voice works on the same PC but not over the network (HTTPS is not included yet). Voice also needs the desktop voice recogniser to be set up.
+- Other devices on your network can connect only if you switch that on; they then need the 6-digit pairing code shown in the settings.
+- It was written without being compiled or run; the first build and test round will find problems.
+
+See [docs/WEB_SERVER.md](docs/WEB_SERVER.md) (API, security model, headless mode, battery notes) and [docs/WEB_UI_CHECKLIST.md](docs/WEB_UI_CHECKLIST.md).

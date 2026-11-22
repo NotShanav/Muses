@@ -33,7 +33,7 @@ import java.awt.Toolkit
 import kotlin.math.roundToInt
 import org.jetbrains.compose.resources.painterResource
 
-fun main() {
+fun main(args: Array<String>) {
     // AUDIO FIX: reports a frozen UI thread (all stacks into desktop.log) for the next debugging round.
     DesktopFreezeWatchdog.start()
     // The player is the phone's, from the shared UI module; this is what it reads underneath.
@@ -61,6 +61,11 @@ fun main() {
             available = { DesktopPoTokenWebView.available },
         ).asTokenProvider(),
     )
+    // WEB 1 hook: Muses Web. `--web` turns the server on for this launch; with it (or the setting
+    // "Start without the desktop window") no window is made until "Show the desktop window".
+    if (DesktopWebSettingsLogic.FLAG in args) DesktopWebRuntime.forceOn()
+    DesktopWebRuntime.refresh()
+    if (DesktopWebBackground.requested(args)) DesktopWebBackground.runUntilWindowRequested()
     desktopMain()
 }
 

@@ -27,6 +27,9 @@ internal object DesktopTrayMenu {
     private const val ID_SETTINGS = 8
     private const val ID_SEPARATOR_BOTTOM = 9
     private const val ID_QUIT = 10
+    // WEB 1 hook: the Muses Web entries.
+    private const val ID_OPEN_WEB = 11
+    private const val ID_SHOW_WINDOW = 12
 
     private val lock = Any()
 
@@ -40,6 +43,11 @@ internal object DesktopTrayMenu {
     private var openPlayer: () -> Unit = {}
     private var openSettings: () -> Unit = {}
     private var quit: () -> Unit = {}
+
+    // WEB 1 hook: set while the server runs; background mode shows only the web entries.
+    private var openWeb: (() -> Unit)? = null
+    private var showWindow: (() -> Unit)? = null
+    private var backgroundMode = false
 
     /** Told to the host so it knows the menu it holds has gone stale. */
     private var onLayoutChanged: (Int) -> Unit = {}
@@ -62,6 +70,38 @@ internal object DesktopTrayMenu {
 
     fun onLayoutChanged(listener: (Int) -> Unit) = synchronized(lock) { onLayoutChanged = listener }
 
+    // WEB 1 hook: "Open Muses Web" appears while the server runs; null removes it.
+    fun setWebOpener(opener: (() -> Unit)?) {
+        val rev = synchronized(lock) {
+            openWeb = opener
+            ++revision
+        }
+        onLayoutChanged(rev)
+    }
+
+    // WEB 1 hook: the menu of the window-less (background) mode: Open Muses Web, Show the desktop
+    // window, Quit. There is no player here, so no play / next / previous entries.
+    fun bindBackground(onOpenWeb: () -> Unit, onShowWindow: () -> Unit, onQuit: () -> Unit) {
+        val rev = synchronized(lock) {
+            backgroundMode = true
+            openWeb = onOpenWeb
+            showWindow = onShowWindow
+            quit = onQuit
+            ++revision
+        }
+        onLayoutChanged(rev)
+    }
+
+    // WEB 1 hook: the desktop window is being created, so the normal menu comes back.
+    fun leaveBackground() {
+        val rev = synchronized(lock) {
+            backgroundMode = false
+            showWindow = null
+            ++revision
+        }
+        onLayoutChanged(rev)
+    }
+
     /** Keeps the menu's text in step with playback; silent when nothing moved. */
     fun publish(title: String?, playing: Boolean) {
         val next = synchronized(lock) {
@@ -78,6 +118,16 @@ internal object DesktopTrayMenu {
     /** The menu as it stands. */
     private fun entries(): List<Entry> = synchronized(lock) {
         buildList {
+            // WEB 1 hook: the window-less mode has its own short menu.
+            if (backgroundMode) {
+                add(Entry(ID_NOW_PLAYING, label = "Muses Web", enabled = false))
+                add(Entry(ID_SEPARATOR_TOP, separator = true))
+                openWeb?.let { add(Entry(ID_OPEN_WEB, label = DesktopStrings["web_open", "Open Muses Web"], icon = "web-browser", action = it)) }
+                showWindow?.let { add(Entry(ID_SHOW_WINDOW, label = DesktopStrings["web_show_window", "Show the desktop window"], icon = "media-playback-start", action = it)) }
+                add(Entry(ID_SEPARATOR_BOTTOM, separator = true))
+                add(Entry(ID_QUIT, label = DesktopStrings["d_quit_bitchord", "Quit Muses"], icon = "application-exit", action = quit))
+                return@buildList
+            }
             nowPlaying?.let { playing ->
                 add(Entry(ID_NOW_PLAYING, label = playing, enabled = false))
                 add(Entry(ID_SEPARATOR_TOP, separator = true))
@@ -95,6 +145,8 @@ internal object DesktopTrayMenu {
             add(Entry(ID_SEPARATOR_MIDDLE, separator = true))
             add(Entry(ID_OPEN_PLAYER, label = DesktopStrings["widget_open_bitchord", "Open Muses"], icon = "media-playback-start", action = openPlayer))
             add(Entry(ID_SETTINGS, label = DesktopStrings["settings", "Settings"], icon = "preferences-system", action = openSettings))
+            // WEB 1 hook
+            openWeb?.let { add(Entry(ID_OPEN_WEB, label = DesktopStrings["web_open", "Open Muses Web"], icon = "web-browser", action = it)) }
             add(Entry(ID_SEPARATOR_BOTTOM, separator = true))
             add(Entry(ID_QUIT, label = DesktopStrings["d_quit_bitchord", "Quit Muses"], icon = "application-exit", action = quit))
         }
