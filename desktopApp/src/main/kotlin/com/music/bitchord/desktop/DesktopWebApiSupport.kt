@@ -130,7 +130,7 @@ internal object WebStreamPlan {
 
     /**
      * The type the browser is told. The URL's own `mime` is first (it names what the bytes are),
-     * then the upstream header, else `audio/mp4`. Only `audio/*` or `video/webm` shaped values are
+     * then the upstream header, else `audio/mp4`. Only an `audio` type (any subtype) or `video/webm` is
      * accepted, without parameters; Opus in WebM is returned as `audio/webm`, honestly.
      */
     fun contentType(url: String, upstream: String?): String {
