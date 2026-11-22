@@ -158,10 +158,10 @@ class DesktopWebAuthTest {
         val remote = request(host = "192.168.1.5:8765", loopback = false)
         assertEquals(WebAuthDecision.FORBIDDEN, DesktopWebAuth.check(remote, local).decision)
         assertEquals(WebAuthDecision.NEEDS_PAIRING, DesktopWebAuth.check(remote, lan).decision)
-        assertEquals(WebAuthDecision.ALLOW, DesktopWebAuth.check(remote.copy(cookie = session), lan).decision)
-        val api = remote.copy(path = "/api/ping", cookie = session, header = "1")
+        assertEquals(WebAuthDecision.ALLOW, DesktopWebAuth.check(remote.copy(cookieHeader = session), lan).decision)
+        val api = remote.copy(path = "/api/ping", cookieHeader = session, musesHeader = "1")
         assertEquals(WebAuthDecision.ALLOW, DesktopWebAuth.check(api, lan).decision)
-        assertEquals(WebAuthDecision.FORBIDDEN, DesktopWebAuth.check(api.copy(cookie = null), lan).decision)
+        assertEquals(WebAuthDecision.FORBIDDEN, DesktopWebAuth.check(api.copy(cookieHeader = null), lan).decision)
     }
 
     @Test
@@ -176,7 +176,7 @@ class DesktopWebAuthTest {
         assertEquals(WebAuthDecision.ALLOW, DesktopWebAuth.checkPairing(remote, lan).decision)
         assertEquals(WebAuthDecision.FORBIDDEN, DesktopWebAuth.checkPairing(remote, local).decision)
         assertEquals(WebAuthDecision.FORBIDDEN, DesktopWebAuth.checkPairing(remote.copy(method = "GET"), lan).decision)
-        assertEquals(WebAuthDecision.FORBIDDEN, DesktopWebAuth.checkPairing(remote.copy(host = "evil.example"), lan).decision)
+        assertEquals(WebAuthDecision.FORBIDDEN, DesktopWebAuth.checkPairing(remote.copy(hostHeader = "evil.example"), lan).decision)
         assertEquals(WebAuthDecision.FORBIDDEN, DesktopWebAuth.checkPairing(remote.copy(secFetchSite = "cross-site"), lan).decision)
         assertEquals(WebAuthDecision.FORBIDDEN, DesktopWebAuth.checkPairing(remote.copy(origin = "http://evil.example"), lan).decision)
         assertEquals(WebAuthDecision.FORBIDDEN, DesktopWebAuth.checkPairing(request(method = "POST", path = "/pair"), local).decision)
