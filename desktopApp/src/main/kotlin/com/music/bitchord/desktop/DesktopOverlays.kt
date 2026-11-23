@@ -46,6 +46,15 @@ internal class DesktopOverlays {
     /** The column beside the page with the lyrics or the queue in it, or none. */
     var sidePanel by mutableStateOf<DesktopSidePanel?>(null)
 
+    /**
+     * EDGE 2 hook: whether a dialog, sheet or sign-in card is open. The side panel does not slide
+     * away under one. Full pages (Settings, the player) and the side column are not counted.
+     */
+    val anyDialogOpen: Boolean
+        get() = pipeline || audioOutput || listenTogether || songMenu || downloadManager || replay ||
+            playlistDialog || rename || delete || lastfmLogin || listenBrainzToken || discordToken ||
+            accounts || signIn
+
     /** Opens [panel] in the column, or puts the column away if [panel] is what it already shows. */
     fun toggleSidePanel(panel: DesktopSidePanel) {
         sidePanel = if (sidePanel == panel) null else panel

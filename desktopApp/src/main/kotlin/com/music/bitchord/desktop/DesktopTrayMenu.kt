@@ -30,6 +30,9 @@ internal object DesktopTrayMenu {
     // WEB 1 hook: the Muses Web entries.
     private const val ID_OPEN_WEB = 11
     private const val ID_SHOW_WINDOW = 12
+    // EDGE 3 hook: side panel entries.
+    private const val ID_EDGE_TOGGLE = 13
+    private const val ID_EDGE_SHOW = 14
 
     private val lock = Any()
 
@@ -48,6 +51,11 @@ internal object DesktopTrayMenu {
     private var openWeb: (() -> Unit)? = null
     private var showWindow: (() -> Unit)? = null
     private var backgroundMode = false
+
+    // EDGE 3 hook: null while the side panel feature is off (then the menu is exactly as before).
+    private var edgeToggle: (() -> Unit)? = null
+    private var edgeShow: (() -> Unit)? = null
+    private var edgePanelOn = false
 
     /** Told to the host so it knows the menu it holds has gone stale. */
     private var onLayoutChanged: (Int) -> Unit = {}
@@ -74,6 +82,18 @@ internal object DesktopTrayMenu {
     fun setWebOpener(opener: (() -> Unit)?) {
         val rev = synchronized(lock) {
             openWeb = opener
+            ++revision
+        }
+        onLayoutChanged(rev)
+    }
+
+    // EDGE 3 hook: "Side panel mode" (and "Show panel now" while the mode is on); nulls remove them.
+    fun setEdgePanel(toggle: (() -> Unit)?, show: (() -> Unit)?, panelOn: Boolean) {
+        val rev = synchronized(lock) {
+            if (toggle == null && edgeToggle == null) return
+            edgeToggle = toggle
+            edgeShow = show
+            edgePanelOn = panelOn
             ++revision
         }
         onLayoutChanged(rev)
@@ -145,6 +165,21 @@ internal object DesktopTrayMenu {
             add(Entry(ID_SEPARATOR_MIDDLE, separator = true))
             add(Entry(ID_OPEN_PLAYER, label = DesktopStrings["widget_open_bitchord", "Open Muses"], icon = "media-playback-start", action = openPlayer))
             add(Entry(ID_SETTINGS, label = DesktopStrings["settings", "Settings"], icon = "preferences-system", action = openSettings))
+            // EDGE 3 hook
+            edgeToggle?.let { toggle ->
+                add(
+                    Entry(
+                        ID_EDGE_TOGGLE,
+                        label = if (edgePanelOn) DesktopStrings["edge_tray_off", "Side panel mode: on (click to leave)"]
+                        else DesktopStrings["edge_tray_on", "Side panel mode: off (click to enter)"],
+                        icon = "view-restore",
+                        action = toggle,
+                    ),
+                )
+                if (edgePanelOn) edgeShow?.let { show ->
+                    add(Entry(ID_EDGE_SHOW, label = DesktopStrings["edge_tray_show", "Show panel now"], icon = "go-next", action = show))
+                }
+            }
             // WEB 1 hook
             openWeb?.let { add(Entry(ID_OPEN_WEB, label = DesktopStrings["web_open", "Open Muses Web"], icon = "web-browser", action = it)) }
             add(Entry(ID_SEPARATOR_BOTTOM, separator = true))

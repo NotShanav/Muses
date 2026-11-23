@@ -89,6 +89,8 @@ internal class DesktopDisplayWatcher(
 
     /** Sets the minimum for the current screen. Called once at start-up and again on every change. */
     fun applyMinimumSize() {
+        // EDGE 2 hook: in side panel mode the controller owns the minimum size.
+        if (DesktopEdgePanel.isPanelMode) return
         runCatching {
             val screen = screen() ?: return
             val minimum = DesktopDisplayGeometry.minimumSize(screen.work, screen.scale)
@@ -130,6 +132,13 @@ internal class DesktopDisplayWatcher(
 
     /** Re-reads scale and work area, fixes the minimum, brings the window fully on screen and repaints. */
     private fun adapt() {
+        // EDGE 2 hook: in side panel mode the controller re-docks the panel instead of clamping a normal window.
+        if (DesktopEdgePanel.isPanelMode) {
+            DesktopEdgePanel.onDisplayChanged()
+            publishInfo()
+            logState("adapt-panel")
+            return
+        }
         val screen = screen() ?: return
         val minimum = DesktopDisplayGeometry.minimumSize(screen.work, screen.scale)
         window.minimumSize = Dimension(minimum.width, minimum.height)

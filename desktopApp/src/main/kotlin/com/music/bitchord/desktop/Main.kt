@@ -8,6 +8,7 @@ import com.music.bitchord.data.innertube.InnerTubeXResolver
 import com.music.bitchord.data.innertube.StreamResolver
 import com.music.bitchord.data.innertube.potoken.PoTokenGenerator
 import com.music.bitchord.data.lyrics.LyricsTranslation
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -98,6 +99,8 @@ private fun desktopApplication() = application {
     // [DesktopWindowMode].
     val placement by DesktopWindowMode.placement.collectAsState()
     val state = rememberWindowState(width = 1_220.dp, height = 780.dp)
+    // EDGE 2 hook: side panel mode drives these four window flags; with the mode off they are today's values.
+    val edgeFlags by DesktopEdgePanel.flags.collectAsState()
     // Bumped by [DesktopDisplayWatcher] when the window stopped drawing after a display change.
     // Rebuilding the Window gives it a new native peer and a new Skia surface; the player, the queue
     // and the audio engine live outside the composition, so playback carries on through it.
@@ -123,7 +126,7 @@ private fun desktopApplication() = application {
     key(windowEpoch) {
     Window(
         onCloseRequest = { if (DesktopWindowVisibility.onCloseRequest()) exitApplication() },
-        visible = visible,
+        visible = visible && edgeFlags.shown, // EDGE 2 hook
         title = "Muses",
         icon = painterResource(Res.drawable.logo),
         state = state,
@@ -134,9 +137,18 @@ private fun desktopApplication() = application {
         // DWM's material show through the chrome. Fixed at creation, so it is on wherever the
         // material is possible and the chosen one can be switched live — see [DesktopWindowBackdrop].
         transparent = DesktopWindowBackdrop.available,
-        resizable = true,
+        resizable = edgeFlags.resizable, // EDGE 2 hook
+        alwaysOnTop = edgeFlags.alwaysOnTop, // EDGE 2 hook
+        focusable = edgeFlags.focusable, // EDGE 2 hook
     ) {
         val composeWindow = window
+        // EDGE 2 hook: the panel controller owns this window's size and place while the mode is on.
+        DisposableEffect(composeWindow) {
+            DesktopEdgePanel.attach(composeWindow, state)
+            onDispose { DesktopEdgePanel.detach(composeWindow) }
+        }
+        // EDGE 2 hook: a hover reveal never takes focus; once the owner clicked, `focusable` is on and focus follows.
+        LaunchedEffect(edgeFlags.focusable) { DesktopEdgePanel.grantFocus(composeWindow) }
         val openingSize = remember { state.size }
         LaunchedEffect(composeWindow) {
             // AWT's default is white, and it is what shows for the frame or two a moved or resized
@@ -159,12 +171,15 @@ private fun desktopApplication() = application {
             // 1220dp surface inside a 900dp window, cropping the right edge and putting its resize
             // boundary off-screen until a maximize/restore cycle synchronised the two. Re-assert
             // the requested opening size on the native peer so both layers start in agreement.
-            composeWindow.size = Dimension(
-                (openingSize.width.value * transform.scaleX).roundToInt(),
-                (openingSize.height.value * transform.scaleY).roundToInt(),
-            )
-            // A portrait or small screen may be narrower than the opening size.
-            watcher.settle()
+            // EDGE 2 hook: a window rebuilt in panel mode keeps the panel's size; the controller re-docks it.
+            if (!DesktopEdgePanel.isPanelMode) {
+                composeWindow.size = Dimension(
+                    (openingSize.width.value * transform.scaleX).roundToInt(),
+                    (openingSize.height.value * transform.scaleY).roundToInt(),
+                )
+                // A portrait or small screen may be narrower than the opening size.
+                watcher.settle()
+            }
             if (DesktopPlatform.isWindows && DesktopWindowsFrame.install("Muses")) {
                 DesktopWindowBackdrop.apply()
             }
@@ -213,7 +228,7 @@ private fun desktopApplication() = application {
             // screen's right or bottom edge reached the browser behind. One alpha step in 255 is
             // invisible and makes every pixel of the window ours.
             Box(
-                Modifier.fillMaxSize().then(
+                Modifier.fillMaxSize().edgePanelPointer().then( // EDGE 2 hook
                     if (DesktopWindowBackdrop.available) {
                         Modifier.background(Color.Black.copy(alpha = 1f / 255f))
                     } else {

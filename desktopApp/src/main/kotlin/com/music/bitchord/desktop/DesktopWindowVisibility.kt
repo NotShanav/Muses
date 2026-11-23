@@ -18,6 +18,8 @@ internal object DesktopWindowVisibility {
     /** Brings the window back — from the tray menu, or the icon itself. */
     fun show() {
         _visible.value = true
+        // EDGE 2 hook: in side panel mode, "show the window" slides the panel in (the flag may already be true).
+        DesktopEdgePanel.onWindowShownByTray()
     }
 
     /**

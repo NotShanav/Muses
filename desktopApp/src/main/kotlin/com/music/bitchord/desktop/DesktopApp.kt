@@ -605,6 +605,10 @@ fun BitChordDesktopApp() {
     var likedSyncJob by remember { mutableStateOf<Job?>(null) }
     var dislikedIds by remember { mutableStateOf(persistence.dislikedIds()) }
     val overlays = remember { DesktopOverlays() }
+    // EDGE 2 hook: the side panel does not slide away under an open dialog.
+    LaunchedEffect(Unit) { snapshotFlow { overlays.anyDialogOpen }.collect { DesktopEdgePanel.setDialogOpen(it) } }
+    // EDGE 3 hook: publishes the saved side panel settings, syncs the tray and honours "start in side panel mode".
+    LaunchedEffect(Unit) { DesktopEdgeSettings.start() }
     var downloads by remember { mutableStateOf(persistence.downloads()) }
     var localSongs by remember { mutableStateOf<List<Song>>(emptyList()) }
     val downloadQueue by DesktopDownloadQueue.active.collectAsState()
@@ -3223,6 +3227,7 @@ fun BitChordDesktopApp() {
                 },
                 modifier = Modifier.onPreviewKeyEvent { event ->
                     if (DesktopVoiceKeyTrigger.onKey(event)) return@onPreviewKeyEvent true
+                    if (DesktopEdgeShortcut.onKey(event)) return@onPreviewKeyEvent true // EDGE 3 hook: Ctrl+Shift+P
                     if (event.type != KeyEventType.KeyUp) return@onPreviewKeyEvent false
                     if (event.key == Key.MediaNext || event.key == Key.MediaPrevious) DesktopArtPress.noteKey()
                     when (event.key) {
@@ -4443,10 +4448,16 @@ private fun DesktopTopBar(
     compact: Boolean,
 ) {
     val titleBarEnabled by DesktopTitleBarSetting.enabled.collectAsState()
-    val inlineCaption = DesktopPlatform.drawsOwnWindowFrame && !titleBarEnabled
+    val inlineCaption = DesktopPlatform.drawsOwnWindowFrame && !titleBarEnabled && !DesktopEdgePanel.mode.collectAsState().value // EDGE 3 hook: no caption buttons in the panel
     val reduceMotion by DesktopAppearanceSettings.reduceAnimation.collectAsState()
     var searchOpen by remember { mutableStateOf(false) }
     var accountMenuOpen by remember { mutableStateOf(false) }
+    // EDGE 3 hook: an open menu keeps the side panel from sliding away.
+    DisposableEffect(accountMenuOpen) {
+        DesktopEdgePanel.setPopupOpen(accountMenuOpen)
+        onDispose { if (accountMenuOpen) DesktopEdgePanel.setPopupOpen(false) }
+    }
+    val edgeEnabled by DesktopEdgeSettings.values.collectAsState()
     val searchFocusRequester = remember { FocusRequester() }
     // A phone-sized window or a portrait screen: Back, Forward and Customise move into the account
     // menu, and the search field takes the strip while it is open.
@@ -4534,6 +4545,8 @@ private fun DesktopTopBar(
                         DropdownMenuItem(text = { Text("Switch account") }, onClick = { accountMenuOpen = false; common.onOpenAccounts() })
                         DropdownMenuItem(text = { Text("History") }, onClick = { accountMenuOpen = false; onOpenHistory() })
                         DropdownMenuItem(text = { Text("Settings") }, onClick = { accountMenuOpen = false; onOpenSettings() })
+                        // EDGE 3 hook: the "Side panel" entry (only while the feature is on in Settings).
+                        if (edgeEnabled.enabled) DropdownMenuItem(text = { Text("Side panel") }, onClick = { accountMenuOpen = false; DesktopEdgeSettings.togglePanelIfEnabled() })
                     }
                 }
             }
@@ -4558,7 +4571,7 @@ private fun DesktopTopBar(
 @Composable
 private fun DesktopLegacyTopBar(common: DesktopShellCallbacks, compact: Boolean) {
     val titleBarEnabled by DesktopTitleBarSetting.enabled.collectAsState()
-    val inlineCaption = DesktopPlatform.drawsOwnWindowFrame && !titleBarEnabled
+    val inlineCaption = DesktopPlatform.drawsOwnWindowFrame && !titleBarEnabled && !DesktopEdgePanel.mode.collectAsState().value // EDGE 3 hook: no caption buttons in the panel
     DesktopTitleBarDragArea(Modifier.fillMaxWidth().height(64.dp)) {
         Box(Modifier.fillMaxSize()) {
             Row(
@@ -4720,7 +4733,7 @@ private fun DesktopSidebar(
     }
 
     val titleBarEnabled by DesktopTitleBarSetting.enabled.collectAsState()
-    val inlineCaption = DesktopPlatform.drawsOwnWindowFrame && !titleBarEnabled
+    val inlineCaption = DesktopPlatform.drawsOwnWindowFrame && !titleBarEnabled && !DesktopEdgePanel.mode.collectAsState().value // EDGE 3 hook: no caption buttons in the panel
     Box(
         Modifier
             .width(220.dp)
@@ -5285,7 +5298,7 @@ private fun DesktopFrame(
             Column(Modifier.fillMaxSize()) {
                 // Above everything, and outside the box the rest of the window is drawn in, because
                 // that is what a title bar is.
-                DesktopTitleBar()
+                DesktopEdgeTitleSlot() // EDGE 3 hook: the panel header replaces the title bar in side panel mode
                 BoxWithConstraints(Modifier.fillMaxWidth().weight(1f)) { // 360 T2 hook: window class for the whole shell and its overlays
                     val adaptive = remember(maxWidth, maxHeight) { DesktopAdaptiveMath.adaptiveFor(maxWidth.value, maxHeight.value) }
                     val windowClass = adaptive.windowClass
@@ -6994,6 +7007,11 @@ private fun DesktopSettingsScreen(
                     )
                     // WEB 1 hook: Muses Web (experimental) rows, same group.
                     DesktopWebSettingsRows(
+                        rowVisible = { title, subtitle -> settingsRowVisible(title, subtitle) },
+                        toggle = { title, subtitle, checked, onChange -> SettingsToggle(title, subtitle, checked, onChange) },
+                    )
+                    // EDGE 3 hook: Side panel (experimental) rows, same group.
+                    DesktopEdgeSettingsRows(
                         rowVisible = { title, subtitle -> settingsRowVisible(title, subtitle) },
                         toggle = { title, subtitle, checked, onChange -> SettingsToggle(title, subtitle, checked, onChange) },
                     )

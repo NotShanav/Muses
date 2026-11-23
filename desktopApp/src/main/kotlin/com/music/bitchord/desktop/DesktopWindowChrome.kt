@@ -96,7 +96,8 @@ internal fun DesktopTitleBarDragArea(
 ) {
     val scope = LocalDesktopWindowScope.current
     val actions = LocalDesktopWindowActions.current
-    if (!DesktopPlatform.drawsOwnWindowFrame || scope == null) {
+    val edgePanelOn by DesktopEdgePanel.mode.collectAsState() // EDGE 3 hook: the panel is not moved by hand
+    if (!DesktopPlatform.drawsOwnWindowFrame || scope == null || edgePanelOn) {
         Box(modifier) { content() }
         return
     }

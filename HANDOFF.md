@@ -1426,3 +1426,138 @@ Unverified server assumptions the page relies on (from WEB2): `/api/voice` accep
 
 ### Exact next step
 Build in GitHub Actions and fix the compile errors of WEB1 and WEB2 (watch-lists in those sections). Then, Muses Web on, open `http://localhost:8765/` and run `docs/WEB_UI_CHECKLIST.md` sections 9 to 15 (play, seek, hidden tab with media keys, voice on localhost, battery saver, reduced motion, offline shell). Report: any CSP line in the console, whether the voice end-pointer cuts or lingers, whether the OS overlay shows the cover, and the Task Manager numbers for `--web` mode against the window mode. Optional before that: `node desktopApp/web-tests/player.test.mjs`, `voice.test.mjs`, `util.test.mjs`.
+
+
+## EDGE 1: geometry and edge detection (Kotlin NOT compiled, tests NOT run)
+
+### Did
+Part 1 of `MUSES_EDGE_PANEL_PLAN.md`: the pure geometry and the edge watcher, as new files only. **No existing Kotlin, Gradle or resource file was edited** (so there are no `// EDGE 1 hook` markers); `DesktopApp.kt` never opened; the abandoned web work untouched.
+- `DesktopEdgeGeometry`: monitor selection (cursor / primary / pick N, stable left-to-right order), work area from insets, docked open and hidden rectangles for Left/Right, panel width clamp (340 to 640 dp, never wider than the work area minus the gaps), edge-zone test (2 to 12 px, optional vertical segment in percent, shared-edge rule), panel-plus-24 px test, slide maths (ease-out cubic in, ease-in cubic out, durations Fast 140/120, Normal 240/200, Slow 360/300 ms, `reduceAnimation` = duration 0), interruption (`retarget` continues from the current x, duration proportional to the distance left), clamp to the display.
+- `DesktopEdgeWatcher`: poll loop on one daemon coroutine (`Dispatchers.Default`), all logic in `tick()` with injectable `EdgePointerSource`, `EdgeMonitorSource`, `EdgeFullscreenProbe`, `EdgeClock`. Dwell (default 150 ms, clamped 50 to 400), adaptive poll (80 ms; 150 ms after 5 s without movement or in low power; 40 ms in the zone or while BUSY), events `RevealRequested` and `Sample`.
+- `DesktopEdgeWindows`: own minimal `EdgeUser32` (GetAsyncKeyState, GetForegroundWindow, IsWindowVisible, GetWindowRect, GetClassNameW, GetWindowThreadProcessId, MonitorFromWindow, GetMonitorInfoW), lazy and Windows only; `WindowsFullscreenProbe`, `EdgeButtons`, `AwtEdgePointerSource` (`MouseInfo`), `AwtEdgeMonitorSource` (`GraphicsEnvironment` + `Toolkit.getScreenInsets`, cached).
+- The plan file was not in the repo root under the name the task gave; the attached `MUSES_EDGE_PANEL_PLAN_3_BALANCED_PARTS.md` was copied to the root as `MUSES_EDGE_PANEL_PLAN.md`.
+
+### Files
+New: `desktopApp/src/main/kotlin/com/music/bitchord/desktop/DesktopEdgeGeometry.kt`, `DesktopEdgeWatcher.kt`, `DesktopEdgeWindows.kt`; tests `desktopApp/src/test/kotlin/com/music/bitchord/desktop/DesktopEdgeGeometryTest.kt` (29 tests), `DesktopEdgeWatcherTest.kt` (26 tests); root `MUSES_EDGE_PANEL_PLAN.md`. Changed: `HANDOFF.md`.
+
+### API Part 2 builds on
+- `DesktopEdgeWatcher.forSystem(config, mode, onEvent)`; `start(scope)`, `stop()`, `isRunning`. `mode()` must return `EdgeWatchMode.HIDDEN` while the panel is hidden and `BUSY` for REVEALING/HIDING/PEEK/ACTIVE/PINNED.
+- Events arrive on the watcher thread, not the AWT thread: Part 2 must hand over (e.g. `SwingUtilities.invokeLater` or a main-dispatcher launch) before touching the window. `Sample` is sent only in BUSY, so the 700 ms hide timer and the 24 px test (`insidePanelPlusMargin`) belong to Part 2 and run on those samples.
+- `DesktopEdgeGeometry.layout(monitor, side, widthDp)` gives `open` and `hidden`; `retarget(running, restX, targetX, layout, now, speed, reduce)` gives the next `EdgeSlide`; `slide.xAt(now)` per frame.
+- `AwtEdgeMonitorSource.invalidate()` is available; it also refreshes by itself when `DesktopDisplayEvents.epoch` changes.
+
+### Decisions (no questions allowed)
+- **Units**: everything is AWT user space; dp to units uses `GraphicsConfiguration.defaultTransform.scaleX`, the same assumption `DesktopDisplayWatcher` already makes.
+- **Hidden position** is beyond the monitor's own edge (not the work-area edge), so a taskbar on that side leaves no sliver.
+- **Shared edges** (a neighbour monitor at that height) are not a screen edge and never trigger (`requireOuterEdge`, default true); on the outer part of a taller monitor the zone works. Part 3 may expose the switch.
+- **Fullscreen**: a fullscreen foreground window on ANY monitor suppresses the reveal. Mapping the AWT monitor to the Windows monitor needs DPI conversion; a wrong guess is worse than a missed reveal. Window and monitor rectangles both come from Windows (`GetWindowRect`, `GetMonitorInfoW`), so scaling cannot make them disagree. Shell classes `Progman`, `WorkerW`, `Shell_TrayWnd`, `Shell_SecondaryTrayWnd` and our own process are ignored. The probe runs only when a reveal is otherwise due and at most every 500 ms.
+- **One reveal per entry**: after `RevealRequested` the cursor must leave the zone before another. After the panel was BUSY and goes HIDDEN, the cursor must also leave the zone once (no re-open loop after a keyboard hide).
+- **Held button** (left, right or middle) restarts the dwell; the watcher asks `GetAsyncKeyState` only when it matters (in the zone, or BUSY).
+- **Neighbour overlap while sliding**: a window sliding past a monitor edge is visible on a monitor next to it. `hasNeighbourOnSide` tells Part 2 when that happens. Not solved in Part 1; Part 2 may accept it (the slide is 240 ms) or snap without animation on such an edge.
+- Taskbar/Alt-Tab hiding is not touched here (Part 2/3, only if a safe API exists).
+
+### Verified
+**NOT compiled and NOT run: no Kotlin compiler or Gradle was available here, and no screen.** What was done: every new file was read through for imports, nullability, and `internal` visibility; a grep confirmed none of the new type names exists elsewhere in `desktopApp/src`; the expected values in the 55 tests were traced by hand against the code (zone boundaries, two monitors of different heights, a monitor at negative x, taskbar on each side, 150 percent scale, interrupted slide continuity, dwell/fullscreen/held-button scripts with the fake clock). No Gradle dependency was added or changed.
+Watch-list for the first build: `EdgeUser32` through `Native.load` with `W32APIOptions.DEFAULT_OPTIONS` (same as `VoiceUser32`; `GetClassNameW` takes a `CharArray`, `GetWindowThreadProcessId` an `IntArray`); `Memory.getInt(0..16)` literal-to-Long conversions; `fun interface EdgeClock` with a companion; the `startAndStopTheLoop` test uses a real `Dispatchers.Default` job but no sleeping.
+
+### Deferred
+- Everything of Parts 2 and 3: state machine, window integration, slide driver, header, settings, tray, checklist.
+- Mapping the cursor's monitor to the Windows monitor for a per-monitor fullscreen test.
+- Handling the neighbour-monitor overlap during a slide.
+
+### Exact next step
+Build (compile check) with this zip, fix any error in the three new files or two tests, then run Part 2 with the returned zip.
+
+
+## EDGE 2: panel controller, window integration and engine tests (Kotlin NOT compiled, tests NOT run)
+
+### Did
+Part 2 of `MUSES_EDGE_PANEL_PLAN.md` (the task called it E2). The panel is the existing Compose window changing mode; nothing is a second window. `DesktopApp.kt` was never opened whole (one `grep -n` and one 12-line `sed`, one anchored insertion).
+- **State machine** (`DesktopEdgePanelMachine.kt`, pure): `HIDDEN / REVEALING / PEEK / ACTIVE / PINNED / HIDING` as a `StateFlow<EdgeView>` (state + sticky pin + "activated"). Inputs: watcher reveal and samples, press inside, typed key, focus gained/lost, pointer in window, dialog/popup open, pin, hide now, show now, slide finished. Output: commands `SLIDE_IN / SLIDE_OUT / PARK`. Also in this file: `EdgePanelConfig` (every Part 3 setting with defaults, `coerced()`, `watchConfig()`), `EdgeWindowFlags` (what `Window(...)` reads), `EdgeFrame.intervalMs`, `EdgeRestore.target`.
+- **Controller** (`DesktopEdgePanel.kt`): `enterPanel(reveal=false)`, `leavePanel()`, `togglePanel()`, `showNow()`, `hideNow()`, `setPinned/togglePin`, `onDisplayChanged()`, `setDialogOpen/setPopupOpen`, `attach/detach(window, state)`, `grantFocus`. Docks hidden, runs the edge watcher only while the mode is on, slides with a Swing `Timer` that exists only while a slide runs (interval from the monitor's refresh rate, position from elapsed time via `EdgeSlide.xAt`, interruption continues from `window.x`), parks the window after a hide. Mode off: no watcher, no timer, no per-frame work.
+- **Window integration** (`Main.kt`, marked `// EDGE 2 hook`): `visible = visible && edgeFlags.shown`, `alwaysOnTop`, `focusable`, `resizable` come from `DesktopEdgePanel.flags` (with the mode off they equal today's `true/false/true/true`); `DisposableEffect` attach/detach; `LaunchedEffect(focusable)` calls `requestFocus()` once the first click made it focusable; the opening-size block is skipped while in panel mode (a rebuilt window keeps the panel size); `Modifier.edgePanelPointer()` on the root Box (`DesktopEdgePanelHost.kt`, press and enter/exit only, consumes nothing).
+- **Other hooks**: `DesktopDisplayWatcher` (`applyMinimumSize` returns and `adapt()` re-docks instead of clamping a normal window while in panel mode), `DesktopWindowVisibility.show()` (tray "show" slides the panel in), `DesktopOverlays.anyDialogOpen`, and one `LaunchedEffect` in `DesktopApp.kt` after `val overlays` that feeds it to `setDialogOpen`.
+- **Tests**: `DesktopEdgePanelMachineTest` (40 tests: every transition, delays, held button, dialog/popup, typing, pin stickiness, hide-now, stale slide finish, unknown cursor, margin boundary 23/25 px, focus rules, flags, config clamping and mapping, frame interval, restore with negative x / unplugged monitor / maximized) and `DesktopEdgePanelPathTest` (10 tests: the REAL `DesktopEdgeWatcher` with fake pointer, monitor, fullscreen probe and clock feeding the machine: brush 100 ms = nothing, dwell 150 ms = reveal once, leave 400 ms and return = no hide, leave 700 ms = hide, held button, pinned, fullscreen foreground, no re-open loop after a hide, mode off). Geometry and interrupted-slide continuity are covered by the 29 tests of Part 1 (`DesktopEdgeGeometryTest`).
+
+### Files
+New: `desktopApp/src/main/kotlin/com/music/bitchord/desktop/DesktopEdgePanelMachine.kt`, `DesktopEdgePanel.kt`, `DesktopEdgePanelHost.kt`; tests `DesktopEdgePanelMachineTest.kt`, `DesktopEdgePanelPathTest.kt`.
+Changed (hooks only): `Main.kt`, `DesktopDisplayWatcher.kt`, `DesktopWindowVisibility.kt`, `DesktopOverlays.kt`, `DesktopApp.kt`, `HANDOFF.md`.
+No Gradle file, no `sharedUi`/`shared`/`app` file, no audio/lyrics/library/account file, nothing of the web work was touched.
+
+### Contract for Part 3 (names Part 3 must use, not re-invent)
+- Settings: build an `EdgePanelConfig` from `DesktopEdgeSettings` and assign `DesktopEdgePanel.config.value = ...` (a live change re-docks a visible panel by itself). Fields: side, widthDp, monitor (+ pickedMonitor), zoneWidthPx, segment, dwellMs, closeDelayMs (300..2000), speed, suppressWhenFullscreen, lowPower, pinByDefault. `coerced()` does the validation.
+- Enter/leave: top-bar button and shortcut call `DesktopEdgePanel.togglePanel()` (reveals once, so the owner sees where the window went); "Start in side panel mode" calls `enterPanel(reveal = false)` once the window exists (safe before it exists: it waits for `attach`). Tray: `togglePanel()`, `showNow()`.
+- Header: reads `DesktopEdgePanel.view` (`state`, `pinned`); buttons call `togglePin()`, `leavePanel()` (Expand), `hideNow()`. Mode flag for the layout: `DesktopEdgePanel.mode`.
+- "Test slide" button: `hideNow()` then `showNow()` (or `showNow()` when hidden).
+- Popups that are not in `DesktopOverlays` (menus) should call `setPopupOpen(true/false)`.
+
+### Decisions (no questions allowed)
+- **`enterPanel()` docks hidden** (plan and acceptance); the button path uses `togglePanel()`/`enterPanel(reveal = true)`, which slides in once so the owner does not watch the window vanish. Start-up uses `reveal = false`.
+- **Pin is sticky across a hide** (next reveal is PINNED, still not focusable until a click); leaving the mode un-pins. "Hide" works while pinned.
+- **Typing rule**: the app cannot see which Compose text field has focus, so a typed character (AWT `KEY_TYPED` while the window is active) delays closing until 4 s after the last one; the 700 ms away time must also have passed. A dialog or popup open blocks closing and restarts the away clock when it closes.
+- **A held mouse button** anywhere restarts the away clock (not only while over the panel).
+- **Unknown cursor or no geometry never closes the panel.** The cursor inside the Compose root (enter/exit events) also counts as near.
+- **Tray hidden = feature paused**: an edge reveal is ignored while `DesktopWindowVisibility.visible` is false. Tray "show" while in the mode slides the panel in.
+- **Fixed monitor choice** (primary / picked): a dwell on another monitor's edge is ignored; with "cursor" the panel opens on the cursor's monitor. The slide **snaps** (no animation) on an edge shared with a neighbour monitor (Part 1's deferred overlap).
+- **First show** (Bloom's lesson): after docking the window is "shown" off screen for 250 ms (`warmup`), then `visible` goes false. A rebuilt window in panel mode does the same.
+- **Swing `Timer`** instead of a coroutine for the slide: same thread (AWT), JDK only, exists only while sliding. The slide waits (at most 300 ms) for the window to be showing before it starts moving, because `visible` reaches AWT one recomposition later.
+- **Focus**: `focusable` is false until the first press inside (`activated`); then `requestFocus()` after the flag has reached the window. Focus lost while ACTIVE (no dialog, cursor away) returns to PEEK and non-focusable.
+- **Leaving** restores the saved bounds clamped to the monitor that holds them (or a centred 1220x780 dp when the window was maximized, then maximizes again), sets the normal minimum size, un-pins, and shows the window.
+- **Taskbar / Alt-Tab hiding: not done.** No safe existing API (it would need `WS_EX_TOOLWINDOW` through a new JNA/native call); the panel stays in Alt-Tab.
+- **`resizable = false` in panel mode** is passed through Compose as the plan says; the native frame (`window_jni.cpp`) was not edited, so its resize borders may still react. Every slide end re-asserts the full panel rectangle, which undoes any stray resize. Not verified.
+
+### Verified
+**NOT compiled and NOT run: no Kotlin compiler, Gradle or screen was available.** Done by hand: brace/paren balance of every touched file by script; every new type name grepped for duplicates in `desktopApp/src` (none); imports, nullability, visibility (all `internal`, no private type in an internal signature) read through; the expected values of all 50 new tests traced against the code, including the 700 ms and 4 s boundaries, the 23/25 px margin and the restore maths. No Gradle dependency added; only JDK/AWT/Swing and APIs already used in the repo (`Window(alwaysOnTop, focusable)` is already used by `DesktopVoiceOverlay`, `awaitPointerEventScope` by `DesktopArtTransitionWiring`).
+Watch-list for the first build and run: `::onCommand` bound reference in the `machine` initializer; `Timer(interval) { post { ... } }` SAM conversion; `config.drop(1).collect { }` in `init`; Compose applying `alwaysOnTop`/`focusable`/`resizable` changes to an undecorated transparent window with the custom native frame (toggling `resizable` may nudge the size by a few px or change the frame style: if so, drop that parameter and keep the minimum size); `requestFocus()` after a click on a non-focusable window (Windows may refuse; if typing does not work after the first click, call `toFront()` too); the first reveal after `warmup`; the slide start waiting for `isShowing`; `DesktopDisplayWatcher.adapt()` during a rotation in panel mode; Windows maximized -> floating wait (30 x 30 ms) before docking.
+
+### Deferred
+- All of Part 3: panel header (`DesktopEdgePanelHeader.kt`), Settings (`DesktopEdgeSettings.kt`, `DesktopEdgeSettingsUi.kt`), top-bar button, tray items, in-app shortcut, layout checks at 340..640 dp, `docs/EDGE_PANEL_CHECKLIST.md`. Until then the mode can only be entered from code (`DesktopEdgePanel.enterPanel()`), and no UI shows pin / expand / hide.
+- Hiding the panel from Alt-Tab and the taskbar.
+- Mapping the cursor's monitor to the Windows monitor for a per-monitor fullscreen test (still "any monitor").
+- Controller-level code (AWT, Timer, window flags) has no unit test: it needs a window. Only its pure parts are tested.
+
+### Exact next step
+Build (compile check) with this zip and fix any error in the three new files, the two new tests and the five hooks. Run `desktopApp` tests (`DesktopEdgePanel*Test`, `DesktopEdge*Test`). Then run Part 3 with the returned zip. Optional before that, to see the engine work with no UI: call `DesktopEdgePanel.enterPanel(reveal = true)` from a temporary debug line and watch `desktop.log` (`edge:` lines).
+
+
+## EDGE 3: panel UX, settings, tray, shortcut and checklist (Kotlin NOT compiled, tests NOT run)
+
+### Did
+Part 3 of `MUSES_EDGE_PANEL_PLAN.md` (the task called it E3). Built on the contract of EDGE 2 (`DesktopEdgePanel.config/mode/view/togglePanel/enterPanel/leavePanel/showNow/hideNow/togglePin/setPopupOpen`, `EdgePanelConfig.coerced()`); no engine file (`DesktopEdgePanel*`, `DesktopEdgeGeometry`, `DesktopEdgeWatcher`, `DesktopEdgeWindows`) was changed. `DesktopApp.kt` never opened whole (greps and short `sed` slices, then exact-match anchored edits by script that assert each anchor occurs once).
+- **Panel header** (`DesktopEdgePanelHeader.kt`): 48 dp bar with the app name, **Pin** (accent colour when pinned), **Expand** (`leavePanel()`), **Hide** (`hideNow()`, chevron points to the docked edge); 44 dp targets; no drag. `DesktopEdgeTitleSlot()` shows it instead of `DesktopTitleBar()` while the mode is on.
+- **Settings** (`DesktopEdgeSettings.kt`): `EdgeSettingsValues` (enabled, startInPanel, `EdgePanelConfig`), pure `DesktopEdgeSettingsCodec` (names, segment sliders, zone reminder text), persisted through `DesktopPersistence` (keys `edge_*`), `start()`, `update/updateConfig/setEnabled`, `testSlide()`, `togglePanelIfEnabled()`. Every change is coerced, saved and published to `DesktopEdgePanel.config` (the controller re-docks a visible panel by itself); switching the feature off while in the mode calls `leavePanel()`.
+- **Settings UI** (`DesktopEdgeSettingsUi.kt`): group rows inside the existing Advanced > Experimental group: enable; start in panel mode; enter/leave and **Test slide**; side; monitor (pointer / main / pick screen 1..N); width 340..640; trigger width 2..12 px; zone whole edge or from X% to Y%; open delay 50..400; close delay 300..2000; speed; hide while fullscreen; low power watcher; pin by default; "Where is the trigger?" text (strip width, edge, delay, shortcut, tray). Nothing but the first switch shows while the feature is off. Sliders save once on release.
+- **Tray** (`DesktopTrayMenu.kt`): "Side panel mode: off/on (click to enter/leave)" and, while the mode is on, "Show panel now". Present only while the feature is enabled; with it off the menu and its revision are unchanged.
+- **In-app shortcut**: Ctrl+Shift+P (`DesktopEdgeShortcut`), consumed only when the feature is on; not a global hotkey.
+- **Hooks (`// EDGE 3 hook`)**: `DesktopApp.kt` (6 places: `DesktopEdgeSettings.start()` effect, Settings rows, title slot, `inlineCaption` in 3 top-bar functions so no caption buttons or reserve in the panel, shortcut in the root key handler, account-menu entry plus popup-open effect), `DesktopWindowChrome.kt` (`DesktopTitleBarDragArea` is a plain box in panel mode: no move, no double-click maximize), `DesktopTrayMenu.kt`.
+- **Layout check (item 2)**: grep of every `width/widthIn/requiredWidth/sizeIn` with 340 dp or more in `desktopApp/src/main`: all remaining ones are `max =` caps (account sheet 380/520, pill 440, search 420, playlist 480, listen together 360), the old fixed minimums were already removed by the 360 work. No layout file needed a change. Not exhaustive for widths below 340 dp and not seen on screen.
+- **Tests**: `DesktopEdgeSettingsTest` (12 tests: defaults, start-in-panel needs the feature, every range clamp, kept values, invalid segment, segment slider minimum span, name round trips and fallbacks, slider snapping, config to watcher, config to docked rectangle for both sides and an over-wide value, reminder text, shortcut predicate). **Docs**: `docs/EDGE_PANEL_CHECKLIST.md` (two monitors, taskbar on each side, 100/125/150 %, fullscreen, drag across the edge, typing, tray, leaving, rotation, idle).
+
+### Files
+New: `desktopApp/src/main/kotlin/com/music/bitchord/desktop/DesktopEdgePanelHeader.kt`, `DesktopEdgeSettings.kt`, `DesktopEdgeSettingsUi.kt`; test `desktopApp/src/test/kotlin/com/music/bitchord/desktop/DesktopEdgeSettingsTest.kt`; `docs/EDGE_PANEL_CHECKLIST.md`.
+Changed (hooks only): `DesktopApp.kt`, `DesktopWindowChrome.kt`, `DesktopTrayMenu.kt`, `HANDOFF.md`. No Gradle, `sharedUi`, `shared`, `app`, playback, lyrics, library, account or web file touched.
+
+### Decisions (no questions allowed)
+- **"Side panel" entry is in the account menu of the top bar, not a new button.** The top bar's search-field width and offsets are fixed sums of the button sizes (`134.dp + buttonSize + 8.dp`, `captionReserve`); an extra button would have broken them in a layout nobody could look at. The menu works at every width. Add a real button once someone can see the bar.
+- **The panel's way out is Expand / the shortcut / the tray**; Hide only slides out. Pin is the header button; the "pin by default" setting is the engine's `pinByDefault`.
+- **Feature switch gates everything**: button, tray items, shortcut and start-up mode do nothing while "Side panel (experimental)" is off (default off).
+- **Sliders commit on release**, so a drag does not re-dock the panel on every step. Segment sliders keep at least 5 percent between start and end. Choosing "Part of the edge" starts from 25..75 percent.
+- **Screens to pick**: the count comes from `GraphicsEnvironment.screenDevices` once per Settings view (cap 8, 1 on failure); the list order is the engine's left-to-right order, so "Screen 1" is the leftmost.
+- **Test slide**: enters the mode with one reveal when it is off; when open, hides, waits 600 ms and shows again; when hidden, shows.
+- **Account menu counts as a popup** (`setPopupOpen`), so the panel does not slide away under it. Other menus/dropdowns in the app were NOT wired (Part 2's `overlays.anyDialogOpen` covers dialogs only); if a dropdown closes the panel under the cursor, wire it the same way.
+- **Taskbar / Alt-Tab hiding**: still not done (no safe existing API), unchanged from Part 2.
+- **Optional width grip on the inner edge: not done** (plan marked it optional); width is a Settings slider.
+
+### Verified
+**NOT compiled and NOT run: no Kotlin compiler, Gradle or screen was available.** Done by hand: brace/paren balance of every touched file by script; duplicate-name grep for all new names (each exists once); imports, nullability, `@Composable` context, visibility (all `internal`, no private type in an internal signature) read through; the expected values of the 12 tests traced against the code (rounding of `roundToInt` at .5, segment clamps, dock coordinates for both sides). No Gradle dependency added; only APIs already used in the repo (`FilterChip`, `FlowRow`, `DesktopBareSlider`, `DesktopSpringButton`, `DesktopPersistence`, `Icons.Rounded.ChevronLeft/Fullscreen`, `BitChordIcons.Pin`).
+Watch-list for the first build: `DesktopEdgePanel::togglePin` bound references as `() -> Unit`; `toggle(...) { on -> ... }` trailing-lambda calls on a `@Composable` function-typed parameter; `FlowRow` with `@OptIn(ExperimentalLayoutApi::class)`; `replaceFirstChar { c -> c.uppercase() }`; non-local `return` inside `synchronized` in `DesktopTrayMenu.setEdgePanel`; the `inlineCaption` lines now call `collectAsState()` (composable context in all three functions was assumed from the existing `titleBarEnabled` collect above each).
+
+### Deferred
+- A real top-bar button (see Decisions); width grip; hiding the panel from Alt-Tab/taskbar.
+- Wiring other dropdown menus to `setPopupOpen`.
+- Per-monitor fullscreen test; the neighbour-monitor overlap during a slide beyond the snap rule (from Parts 1 and 2).
+- Translations: the new strings are English literals (the tray ones go through `DesktopStrings` with English defaults).
+- Everything of the checklist (nothing was seen on a screen).
+
+### Exact next step
+Build (compile check) the zip and fix errors in the three new files, `DesktopEdgeSettingsTest` and the hooks (watch-list above); run `DesktopEdge*Test`. Then Settings > Advanced > Experimental > Side panel on, and walk `docs/EDGE_PANEL_CHECKLIST.md` sections 0 to 3 first. Send `desktop.log` (`edge:` lines) if the panel misbehaves.
