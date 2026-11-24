@@ -71,6 +71,7 @@ import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.Storage
 import com.music.bitchord.ui.icons.BitChordIcons
 import coil3.compose.AsyncImage
+import com.music.bitchord.ui.components.artSourceFor
 import com.music.bitchord.data.model.CARD_ART_PX
 import com.music.bitchord.data.model.HEADER_ART_PX
 import com.music.bitchord.data.model.HomeShelf
@@ -492,6 +493,7 @@ private fun RecentTrackRow(
         onLongPress = onLongPress,
         isCurrent = isCurrent,
         isPlaying = isPlaying,
+        videoId = item.videoId, // UI U6 hook
     )
 }
 
@@ -509,6 +511,7 @@ fun CompactTrackRow(
     onLongPress: (() -> Unit)?,
     isCurrent: Boolean = false,
     isPlaying: Boolean = false,
+    videoId: String? = null, // UI U6 hook: for the art transition's source bounds
 ) {
     Row(
         modifier = Modifier
@@ -525,6 +528,7 @@ fun CompactTrackRow(
                 contentScale = ContentScale.Crop,
                 modifier = Modifier
                     .size(48.dp)
+                    .artSourceFor(videoId) // UI U6 hook
                     .clip(RoundedCornerShape(7.dp))
                     .thumbnailBorder(RoundedCornerShape(7.dp))
                     .background(MaterialTheme.colorScheme.surfaceVariant),
@@ -844,7 +848,7 @@ private fun QuickPicksShelf(
                         model = item.thumbnailUrl.artworkAt(ROW_ART_PX),
                         contentDescription = null,
                         contentScale = ContentScale.Crop,
-                        modifier = Modifier.size(48.dp).clip(RoundedCornerShape(12.dp)),
+                        modifier = Modifier.size(48.dp).artSourceFor(item.videoId).clip(RoundedCornerShape(12.dp)), // UI U6 hook
                     )
                     Column(Modifier.weight(1f).padding(horizontal = 10.dp)) {
                         Text(item.title, style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -941,7 +945,7 @@ private fun HeroCard(
             model = item.thumbnailUrl.artworkAt(HEADER_ART_PX),
             contentDescription = null,
             contentScale = ContentScale.Crop,
-            modifier = Modifier.fillMaxSize(),
+            modifier = Modifier.fillMaxSize().artSourceFor(item.videoId), // UI U6 hook
         )
         if (isCurrent && isPlaying) SearchPlayingBars(Modifier.align(Alignment.Center))
         Column(
@@ -1186,7 +1190,7 @@ internal fun ShelfCard(
                         model = item.thumbnailUrl.artworkAt(CARD_ART_PX),
                         contentDescription = null,
                         contentScale = androidx.compose.ui.layout.ContentScale.Crop,
-                        modifier = Modifier.fillMaxSize(),
+                        modifier = Modifier.fillMaxSize().artSourceFor(item.videoId), // UI U6 hook
                     )
                     if (isCurrent && isPlaying) SearchPlayingBars(Modifier.align(Alignment.Center))
                 }

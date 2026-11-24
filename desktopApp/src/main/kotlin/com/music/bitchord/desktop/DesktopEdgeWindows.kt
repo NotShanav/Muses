@@ -26,6 +26,7 @@ internal interface EdgeUser32 : StdCallLibrary {
     fun GetWindowThreadProcessId(hWnd: Pointer, lpdwProcessId: IntArray): Int
     fun MonitorFromWindow(hWnd: Pointer, dwFlags: Int): Pointer?
     fun GetMonitorInfoW(hMonitor: Pointer, lpmi: Pointer): Boolean
+    fun GetWindowLongW(hWnd: Pointer, nIndex: Int): Int // UI U4 hook: GWL_STYLE for the caption test
 }
 
 /** Loads user32 once, only on Windows. */
@@ -54,6 +55,18 @@ internal object EdgeFullscreen {
         window.width > 0 && window.height > 0 && monitor.width > 0 && monitor.height > 0 &&
             window.x <= monitor.x && window.y <= monitor.y &&
             window.right >= monitor.right && window.bottom >= monitor.bottom
+
+    /** WS_CAPTION (WS_BORDER or WS_DLGFRAME): a window that still has a title bar and frame. */
+    const val WS_CAPTION = 0x00C00000
+
+    fun hasCaption(style: Int): Boolean = (style and WS_CAPTION) == WS_CAPTION
+
+    /**
+     * UI U4: fullscreen means the window covers the monitor AND has no caption. A maximised window
+     * with a hidden (auto-hide) taskbar covers the monitor too, but keeps its caption, so it is
+     * not fullscreen; a borderless game or an F11 browser has none.
+     */
+    fun isFullscreen(covers: Boolean, style: Int): Boolean = covers && !hasCaption(style)
 }
 
 /**
@@ -103,12 +116,33 @@ internal class WindowsFullscreenProbe(
                 info.getInt(12) - info.getInt(4),
                 info.getInt(16) - info.getInt(8),
             )
-            EdgeFullscreen.covers(window, screen)
+            val covers = EdgeFullscreen.covers(window, screen)
+            val style = user32.GetWindowLongW(hwnd, GWL_STYLE) // UI U4 hook
+            val result = EdgeFullscreen.isFullscreen(covers, style)
+            logDecision(String(chars, 0, length.coerceAtLeast(0)), window, screen, style, covers, result)
+            result
         }.getOrDefault(false)
+    }
+
+    private var lastLogNs = 0L
+
+    /** UI U4: one `edge:` line at most every 3 s, whenever the probe is asked (a reveal is due). */
+    private fun logDecision(cls: String, w: DisplayRect, m: DisplayRect, style: Int, covers: Boolean, result: Boolean) {
+        val now = System.nanoTime()
+        if (lastLogNs != 0L && now - lastLogNs < 3_000_000_000L) return
+        lastLogNs = now
+        runCatching {
+            DesktopTrackLog.log(
+                "edge: fullscreen probe class=$cls window=${w.x},${w.y} ${w.width}x${w.height} " +
+                    "monitor=${m.x},${m.y} ${m.width}x${m.height} style=0x${Integer.toHexString(style)} " +
+                    "covers=$covers caption=${EdgeFullscreen.hasCaption(style)} fullscreen=$result",
+            )
+        }
     }
 
     private companion object {
         const val MONITOR_DEFAULTTONEAREST = 2
+        const val GWL_STYLE = -16
     }
 }
 

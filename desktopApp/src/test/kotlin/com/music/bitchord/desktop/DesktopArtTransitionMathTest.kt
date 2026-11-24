@@ -203,4 +203,56 @@ class DesktopArtTransitionMathTest {
         assertTrue(near(p.liftScale(80f), 1f + p.LIFT_SCALE))
         assertTrue(near(p.liftScale(900f), 1f + p.LIFT_SCALE))
     }
+
+    // ---- UI U7: whole-area spawn, particle budget, landing on the pill art -------------------------
+
+    @Test
+    fun everyParticleStartsInsideTheSourceRectangle() {
+        val n = p.GRID
+        // A big wide card (cropped square) and a small thumbnail.
+        for ((w, h) in listOf(400f to 180f, 48f to 48f, 120f to 300f)) {
+            val cx = 500f
+            val cy = 300f
+            val side = p.coverSide(w, h)
+            for (i in 0 until p.COUNT) {
+                val fx = (p.cellCol(i, n) + 0.5f) / n
+                val fy = (p.cellRow(i, n) + 0.5f) / n
+                val x = p.spawnCoord(cx, fx, side, w / 2f)
+                val y = p.spawnCoord(cy, fy, side, h / 2f)
+                assertTrue(x >= cx - w / 2f - 1e-3f && x <= cx + w / 2f + 1e-3f, "x $x outside for ${w}x$h")
+                assertTrue(y >= cy - h / 2f - 1e-3f && y <= cy + h / 2f + 1e-3f, "y $y outside for ${w}x$h")
+            }
+        }
+    }
+
+    @Test
+    fun atTheEndEveryParticleIsAtItsCellOfThePillArtwork() {
+        val n = p.GRID
+        val tw = 56f
+        val th = 56f
+        val cx = 300f
+        val cy = 700f
+        val side = p.coverSide(tw, th)
+        for (i in 0 until p.COUNT) {
+            val fx = (p.cellCol(i, n) + 0.5f) / n
+            val fy = (p.cellRow(i, n) + 0.5f) / n
+            val hx = cx + p.coverOffset(fx, side)
+            val hy = cy + p.coverOffset(fy, side)
+            assertTrue(hx > cx - tw / 2f - 1f && hx < cx + tw / 2f + 1f, "home x $hx")
+            assertTrue(hy > cy - th / 2f - 1f && hy < cy + th / 2f + 1f, "home y $hy")
+        }
+    }
+
+    @Test
+    fun particleBudgetScalesWithAreaAndIsCapped() {
+        assertTrue(near(p.MIN_KEEP_FRACTION, p.keepFraction(0f)))
+        assertTrue(near(1f, p.keepFraction(p.FULL_AREA_PX)))
+        assertTrue(near(1f, p.keepFraction(p.FULL_AREA_PX * 10f)))
+        assertTrue(p.keepFraction(2_304f) < p.keepFraction(50_000f))
+        var kept = 0
+        val keep = p.keepFraction(2_304f)
+        for (i in 0 until p.COUNT) if (p.cellKept(p.cellCol(i, p.GRID), p.cellRow(i, p.GRID), 7, keep)) kept++
+        assertTrue(kept <= p.COUNT)
+        assertTrue(kept > (p.COUNT * 0.3f).toInt() && kept < (p.COUNT * 0.5f).toInt(), "kept $kept")
+    }
 }

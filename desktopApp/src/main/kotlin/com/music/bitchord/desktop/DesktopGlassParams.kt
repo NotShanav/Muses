@@ -20,27 +20,27 @@ import kotlin.math.sqrt
 @Serializable // STUDIO G3 hook: stored inside DesktopPillConfig
 internal data class DesktopGlassParams(
     /** How hard the rim bends the scene behind it, 0..1. */
-    val refraction: Float = 0.7f,
+    val refraction: Float = 0.95f,
     /** Width of the refracting band at the rim, dp. */
-    val bevelDp: Float = 14f,
+    val bevelDp: Float = 18f,
     /** Gentle magnification of the centre, 0..0.2. */
-    val magnify: Float = 0.04f,
+    val magnify: Float = 0.06f,
     /** Chromatic split of red and blue at the rim, 0..1. */
-    val dispersion: Float = 0.25f,
+    val dispersion: Float = 0.45f,
     /** How much of the blurred copy replaces the sharp one, 0..1. */
-    val frost: Float = 0.35f,
+    val frost: Float = 0.12f,
     /** Blur radius of the frosted copy, dp. */
     val blurDp: Float = 10f,
     /** Strength of the specular highlight, 0..1. */
-    val specular: Float = 0.6f,
+    val specular: Float = 0.85f,
     /** Strength of the bright edge line, 0..1. */
-    val rim: Float = 0.5f,
+    val rim: Float = 0.75f,
     /** Opacity of the dark tint that keeps text readable, 0..0.9. */
-    val tintAlpha: Float = 0.3f,
+    val tintAlpha: Float = 0.2f,
     /** Where the light comes from, degrees: 0 = right, 90 = above, 135 = upper left. */
     val lightAngleDeg: Float = 135f,
     /** How far the album colour tints the glass, 0..1. */
-    val albumInfluence: Float = 0.5f,
+    val albumInfluence: Float = 0.35f,
 ) {
     /** A copy with every field forced into its range; NaN and infinity fall back to the default. */
     fun validated(): DesktopGlassParams = DesktopGlassParams(
@@ -70,7 +70,14 @@ internal data class DesktopGlassParams(
         val LIGHT_ANGLE_DEG = 0f..360f
         val ALBUM_INFLUENCE = 0f..1f
 
+        /** UI U9: clear glass after the owner's iOS liquid-glass references: strong rim refraction, little frost, bright rim. */
         val Default = DesktopGlassParams()
+
+        /** UI U9: the same material, gentler, for small navigation capsules and floating bars. */
+        val Nav = DesktopGlassParams(
+            refraction = 0.6f, bevelDp = 10f, magnify = 0.03f, dispersion = 0.3f, frost = 0.2f,
+            specular = 0.6f, rim = 0.6f, tintAlpha = 0.25f, albumInfluence = 0.2f,
+        )
     }
 }
 

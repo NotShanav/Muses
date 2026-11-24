@@ -1561,3 +1561,249 @@ Watch-list for the first build: `DesktopEdgePanel::togglePin` bound references a
 
 ### Exact next step
 Build (compile check) the zip and fix errors in the three new files, `DesktopEdgeSettingsTest` and the hooks (watch-list above); run `DesktopEdge*Test`. Then Settings > Advanced > Experimental > Side panel on, and walk `docs/EDGE_PANEL_CHECKLIST.md` sections 0 to 3 first. Send `desktop.log` (`edge:` lines) if the panel misbehaves.
+
+## UI U1: pill pencil and song-row menus (NOT compiled)
+
+### Did
+- Removed the hover pencil on the floating pill (it was an overlay `Box` aligned TopEnd, so the layout has no gap). "Customise pill…" menu item and the Settings tile "Floating pill" are untouched.
+- Playlist/album/collection page song rows: right-click opens the existing song menu (Play next, Add to queue, etc.); a "…" (`DesktopMoreButton` via the existing `songMenu`) was added to the row's action cluster.
+- No new queue logic: both menu items use the existing `DesktopSongActions.onPlayNext/onAddToQueue`.
+
+### Files
+New: `desktopApp/src/main/kotlin/com/music/bitchord/desktop/DesktopSongContextMenu.kt` (`Modifier.onSecondaryPress`).
+Changed (hooks marked `// UI U1 hook`): `DesktopApp.kt` only (pill pencil removed; `songContextMenu` helper beside `songMenu`; `DesktopCollectionPage` and `DesktopCollectionSongRow` got `menu` and `contextMenu` parameters; `collectionActionsWidth` +34 dp).
+
+### Decisions
+- Right-click is consumed in the Initial pass and the modifier sits before `.clickable`, so a right-click does not also play the row.
+- The menu opens as a popup anchored to the row (not at the pointer); `DesktopSongMenuFor` positions it.
+- Action cluster is 170 dp (with remove) / 136 dp (without) so the duration column still lines up.
+- `dockHovered` in the pill function is now unused (warning at most); left in place on purpose.
+- Extras (Home Recents, Library lists) NOT done.
+
+### Verified
+NOT compiled, tests NOT run. By hand: brace/paren balance of both files, single definition of `onSecondaryPress` and `songContextMenu`, imports in the new file, call-site parameter match (only one call site of each changed function).
+Watch-list: `composed` import and `isSecondaryPressed` import in the new file; `songContextMenu` as a local `@Composable fun` inside the same scope as `songMenu`; `Icons.Rounded.Edit` is still used elsewhere in `DesktopApp.kt` (line ~8114), so no unused-import issue.
+
+### Deferred
+- Right-click on Home "Recents" rows and Library lists (Extras); menu at pointer position.
+
+### Exact next step
+U2 (Library playlists, pinning, playlist menu). If CI later flags U1, check the watch-list above first.
+
+## UI U2: Library playlists, pinning, playlist menu (NOT compiled)
+
+### Did
+- Pinning: `DesktopPlaylistPins` (pure order/toggle/codec), persisted under key `pinned_playlist_ids`. Pinned playlists sort first in the Library "Playlists" shelf, in its "Show all" grid, and in the Legacy sidebar list (account and local).
+- Playlist menu (`DesktopPlaylistMenu.kt`): Play, Shuffle, Play next, Add to queue, Pin/Unpin, and Rename/Delete only for playlists in the account's own list (`userPlaylists`). Opens on right-click or long-press of a playlist card (the shared cards already route right-click to `onShelfItemLongPress`) in the Library shelf and the Show-all grid.
+- Library already had "Show all" (`libraryShowAll`, `LibraryGridPage`) which shows the full playlist grid; left as is.
+
+### Files
+New: `DesktopPlaylistPins.kt`, `DesktopPlaylistMenu.kt`, test `DesktopPlaylistPinsTest.kt`.
+Hooked (`// UI U2 hook`): `DesktopApp.kt` only.
+
+### Decisions
+- Playlist actions open the playlist page and run when its songs have loaded (`pendingPlaylistAction` + `LaunchedEffect`); this reuses the existing loader, so no new fetch code. Side effect: Play/Shuffle/Queue also navigate to the playlist. Queue calls are the existing `enqueue`.
+- Rename/Delete reuse the existing dialogs, which act on the opened page, so they too open the playlist first.
+- Menu is a small centred dialog because the shared cards give no pointer position.
+- Local (on-device) playlists: menu works, but no Rename/Delete (same as the page today). Pin keys: shelf `browseId`; local = `desktop-playlist:` + id.
+
+### Verified
+NOT compiled, tests NOT run. Hand-checked: balance, types (`UserPlaylist.browseId` = "VL"+id, matched with `removePrefix("VL")`), `UiState.Success`/`LibraryPage.copy`, no duplicate names.
+Watch-list: `UiState.Success(success.data.copy(...))` inference in `pinnedLibraryState`; the local `@Composable fun row` in `DesktopPlaylistMenu`; `LaunchedEffect` placed at body level of the main composable (next to the one at "collectionReloads").
+
+### Deferred
+- Right-click menu on Legacy sidebar playlist rows and on "On device" cards; menu at the pointer; pin for albums.
+
+### Exact next step
+U3.
+
+## UI U3: one set of window buttons and the Desktop interface switch (NOT compiled)
+
+### Did
+- Cause of the double buttons: in Legacy, the wide layout showed the sidebar (head draws buttons) AND `DesktopLegacyTopBar` (draws them too). Modern had one site only.
+- New pure rule `DesktopCaptionPlacement.place(...)`: Modern -> top bar; Legacy wide -> sidebar head only; Legacy narrow (sidebar hidden) -> top bar; none when the system frame is used, the title bar setting is on, or in the side panel (existing rule kept). The three `inlineCaption` sites now use it, so buttons follow the layout live.
+- "Desktop interface" switch: no `enabled = false` exists anywhere. Both rows (Interface group and Advanced "Navigation shell") call `DesktopInterfaceSettings.setMode`, whose flow drives `modernInterface`, so it already switches live. It looked greyed because `desktopSwitchColors()` draws an OFF switch as a 10% white track and 35% white thumb. I added "Now: Modern/Legacy" to the row's subtitle and left the colours alone (they are used by every switch).
+
+### Files
+New: `DesktopCaptionPlacement.kt`, test `DesktopCaptionPlacementTest.kt`. Hooked (`// UI U3 hook`): `DesktopApp.kt` (3 `inlineCaption` definitions, interface subtitle).
+
+### Decisions
+- Kept style and side of the buttons; only the duplicate went. Did not change `desktopSwitchColors`; if the owner wants OFF switches clearer app-wide, raise `uncheckedTrackColor`/`uncheckedThumbColor` alpha there (one place).
+
+### Verified
+NOT compiled, tests NOT run. Hand-checked: named arguments match, brace balance 0, only three `DesktopWindowButtons()` call sites exist, `DesktopEdgePanel.mode` is a `StateFlow<Boolean>`.
+Watch-list: `DesktopStrings[...] + " Now: ..."` string template with nested quotes in the Interface group.
+
+### Deferred
+- If the switch still looks dead on the owner's PC, send a screenshot of ON and OFF; then change the switch colours.
+
+### Exact next step
+Gate A: push to GitHub, run the Windows workflow, send the raw error log to the PM (F prompt for fixes). Then U4.
+
+## UI U4: side panel does not open next to a maximized window (NOT compiled)
+
+### Did
+- Log first: the fullscreen probe writes one `edge: fullscreen probe class=... window=... monitor=... style=0x... covers=... caption=... fullscreen=...` line (at most every 3 s, only when a reveal is due). The watcher writes `edge: reveal suppressed: fullscreen foreground` (at most every 5 s) when the probe blocks a reveal.
+- New rule: fullscreen = `covers(window, monitor)` AND no `WS_CAPTION` (`EdgeFullscreen.isFullscreen(covers, style)`). Style read with `GetWindowLongW(hwnd, GWL_STYLE = -16)` added to our own `EdgeUser32` interface. Likely cause fixed: a maximised Chrome with an auto-hide taskbar (or a window whose frame overshoot covers the monitor) satisfied `covers` but still has a caption.
+- Not used: `SHQueryUserNotificationState` (the caption test is enough and needs no new binding).
+
+### Files
+`DesktopEdgeWindows.kt`, `DesktopEdgeWatcher.kt` (hooks `// UI U4 hook`), test `DesktopEdgeWatcherTest.kt` (new test `fullscreenNeedsNoCaption`: maximised with caption is not fullscreen, borderless covering is, a small popup is not).
+
+### Decisions
+- Fails closed as before: any error means "not fullscreen".
+- Chrome in F11 (real fullscreen) has no caption, so it is still blocked, as intended.
+
+### Reveal path re-read (other things a maximised window could trigger)
+- `needsLeave`: after the panel was BUSY, the cursor must leave the zone once before a reveal.
+- `buttonHeld` resets the dwell: a mouse button held (e.g. dragging a window or scrollbar into the edge) never reveals.
+- `requireOuterEdge` and `inEdgeZone` use AWT monitor rects; on a scaled (DPI) multi-monitor setup these can differ from the physical edge. Not changed.
+- Always-on-top ordering lives in the panel host (`DesktopEdgePanelHost.kt`), not read this part.
+
+### Verified
+NOT compiled, tests NOT run. Hand-checked: brace balance of the three files, constant and name usage (`GWL_STYLE` in the probe's companion, `WS_CAPTION` in `EdgeFullscreen`), `length` in scope for the class name.
+
+### Deferred
+Nothing in code. If it still fails on the owner's PC with Chrome maximised, send the `edge:` lines from `desktop.log` (the probe line shows `covers`, `caption` and the class; if `fullscreen=false` and no reveal, the cause is zone, button held or `needsLeave`, not fullscreen).
+
+### Exact next step
+U5 (panel grey strip). Gate A first if not yet run.
+
+## UI U5: side panel grey strip (NOT compiled)
+
+### Did
+- Read the dock/show sequence. Facts: the slide moves X only (height is fixed); `applyRect` sets AWT bounds and Compose's `windowState.size` in dp; the minimum-size rule of the normal window is already skipped in panel mode (`applyMinimumSize` and `adapt` both return early). What the panel did NOT get: the normal window's `refresh()` (invalidate, validate, repaint, `DesktopWindowsFrame.refreshFrame()`), because `adapt-panel` skips it. So a Compose canvas that lags the native window (or a window that Windows resized) left the unpainted area, which shows as flat grey over a material or the window ground. The cause is not proven, only the missing step is.
+- New `settleSize(w, expected)` in `DesktopEdgePanel`: compares the real window size with the layout's (`EdgeSizeCheck.drifted`, 1 px tolerance), asserts the bounds again if they differ (logs `edge: size drift expected=WxH actual=WxH; asserting again`), then always invalidate, validate, repaint and `refreshFrame()`. Called after the warm-up (window parked, before the first reveal) and when a slide finishes (open or hidden).
+
+### Files
+New: `DesktopEdgeSizeCheck.kt`, test `DesktopEdgeSizeCheckTest.kt`. Hooked (`// UI U5 hook`): `DesktopEdgePanel.kt` (2 calls plus the function).
+
+### Decisions
+- Did not hide the window until the first frame (AWT opacity on a transparent window is risky) and did not paint a solid root in panel mode (it only paints inside the Compose canvas, so it cannot cover the strip).
+- Bounds at rest equal Compose's layout height when `drifted` is false; when it is true the log line says so.
+
+### Verified
+NOT compiled, tests NOT run. Hand-checked: brace balance, `DisplayRect` fields, `l` in scope inside the warm-up lambda, `refreshFrame()` exists in `DesktopWindowsFrame`.
+
+### Deferred
+If the strip stays: send the `edge: size drift` lines (or their absence) from `desktop.log`. No drift line and a strip means the canvas lags, not the window; next try would be `windowState.size` re-assert at the same moment or a one-frame delay before the reveal.
+
+### Exact next step
+U6 (art transition starts from the clicked artwork). Gate A first if not run.
+
+## UI U6: art transition starts from the clicked artwork (NOT compiled)
+
+### Did
+- New registry `DesktopArtSources` + pure rule `ArtSourceRules.decide(videoId, press, zones)`. Three zone kinds: SOURCE (artwork or row of one song, with bounds), AREA (a page of shared cards, no bounds), BLOCK (the pill).
+- `maybeStartArtTransition` now asks the rule: no press (media key, auto-advance) = no effect; press inside a BLOCK (pill: Next, Previous, ...) = no effect; press inside the smallest SOURCE of that song = effect with `sourceBounds` = that rect; inside another song's SOURCE = that rect; inside an AREA only = effect with `sourceBounds = null` (pointer fallback, as before). The "full player open" skip and the Off / Every song click / Only when the song changes setting are untouched.
+- Hooks: `.artSource(videoId)` on `DesktopCollectionSongRow` (playlist/album rows); `.artSourceArea()` on the main page Box; `.artNoFire()` on both pills (classic dock in `DesktopApp.kt`, `DesktopLiquidPill.kt`).
+- Fix to U1: `DesktopLiquidPill.kt` had its own hover pencil (`onOpenPillStudio`); U1 had only removed the classic dock's. Removed here too. The parameter stays (unused) so call sites compile.
+
+### Files
+New: `DesktopArtSources.kt`, test `DesktopArtSourcesTest.kt`. Hooked (`// UI U6 hook`): `DesktopArtTransitionWiring.kt`, `DesktopApp.kt`, `DesktopLiquidPill.kt`.
+
+### Decisions
+- The Home "Recents" thumbnails and big cards, Song mixes and Listen again cards are drawn by `sharedUi` (`HomeScreen.kt`, Coil `AsyncImage`), which this round may not touch, so they cannot register their own bounds. They fire through the AREA fallback: the Next-button and media-key problems are fixed, but for those cards `sourceBounds` is still null. The plan's "Done when" for the Recents card is therefore NOT met yet; it is met for desktop-owned rows.
+
+### Verified
+NOT compiled, tests NOT run. Hand-checked: brace/paren balance of all four files, `Rect` import, modifier order (artSource before the row's `.clickable`), no duplicate names.
+Watch-list: `x in left..right` on Float; `private @Composable fun Modifier.artZone` used from three public wrappers.
+
+### Deferred
+- Bounds for shared cards. Needs one small allowed change in `sharedUi`: a CompositionLocal `LocalArtSourceModifier: (String) -> Modifier` read at the four `AsyncImage` sites in `HomeScreen.kt` (about lines 522, 843, 940, 1185) and applied to their artwork; desktop would provide `{ id -> Modifier.artSource(id) }`. Ask the owner to allow it, then it is a 15-line change.
+- Search result rows, queue rows, Library lists (desktop-owned, not hooked yet).
+
+### Exact next step
+U7 (dots from the whole source rectangle) can use `sourceBounds` as soon as it is non-null; with null it keeps the pointer. Run Gate A before it.
+
+### UI U6 follow-up (owner approved the sharedUi hook; NOT compiled)
+- New `sharedUi/.../components/ArtSourceHook.kt`: `LocalArtSourceModifier` (default adds nothing) and `Modifier.artSourceFor(videoId)`.
+- Applied at the four `HomeScreen.kt` artwork sites: Recents rows (`CompactTrackRow`, new optional `videoId` param, passed from its wrapper and from the artist page in `DesktopApp.kt`), Song mixes / Listen again row artwork, hero cards, square cards. Only `AsyncImage` modifiers and one parameter changed; no layout change.
+- Desktop provides `DesktopArtSourceProvider` (in `DesktopArtSources.kt`) at the existing `CompositionLocalProvider` next to `LocalShelfRowChrome`. Home cards with a video id now register their artwork rect, so `sourceBounds` is non-null for a Recents thumbnail and a big card; items without a video id (albums, playlists) still fall back to the page AREA.
+- Watch-list: `staticCompositionLocalOf<@Composable (String) -> Modifier> { { Modifier } }` (lambda default); `artSourceFor` is `@Composable` and is used only inside composable argument lists.
+- The "Done when" of U6 is now met in code, still NOT compiled.
+
+## UI U7: art transition: whole-area dots into the pill art (NOT compiled)
+
+### Did
+- Audit: the engine (`ArtParticleSim`, 48x48 mosaic sampled from the thumbnail, bezier flight to `artTransitionTarget()`, then reveal of the real pill art) already existed and already uses `sourceBounds` (U6). Missing pieces were added, not rewritten.
+- Spawn: every particle now starts inside `sourceBounds` (`ArtTransitionPhysics.spawnCoord`, clamped); cells that a wide card crops still start invisible and fade in as they release (`srcHidden` now uses the unclamped offset).
+- Budget: `keepFraction(area)` draws 40% of the cells for a tiny thumbnail up to 100% from 90,000 px squared; hard cap = `COUNT` (2304). Thinned cells are skipped in `step` (alpha 0, no per-frame work).
+- Settings: the on/off switch already exists (Advanced > Experimental, `artTransitionMode` OFF; plus the Off / Every song click / Only when the song changes chips). Left unchanged.
+
+### Files
+Edited (`// UI U7 hook`): `DesktopArtTransition.kt`, `DesktopArtTransitionPhysics.kt`. Tests added to `DesktopArtTransitionMathTest.kt` (start inside rect, end at pill cells, budget).
+
+### Decisions
+- `reduceAnimation` stays "no particles": the pill shows the new artwork through its normal image swap. I did not verify that swap fades; a dedicated crossfade was not added.
+- Pill-side cells are not thinned further than the source side, so the reformed art stays dense.
+
+### Verified
+NOT compiled, tests NOT run. Hand-checked: names unique (grep), `kept`/`keepFrac` declared before `init`, no new imports needed.
+
+### Deferred
+- Explicit crossfade for `reduceAnimation`.
+- Run Gate B (all U1-U7) on CI; send the raw log to the PM.
+
+### Exact next step
+Push, run the Windows workflow (Gate B), send the error log with the F prompt.
+
+
+## UI U8: Appearance settings, shorter and grouped (NOT compiled)
+
+### Did
+- Appearance top level now has six groups: Interface (Desktop interface, Convertible / touch mode), Background (Fluidity mode, Subtle effects, Background colours), Player (Full-screen cover art, Animated canvas, Spotify Canvas setup), Floating pill (row opens Pill Studio), Glass (row opens Glass Lab), Advanced appearance (row expands the rest in place).
+- The rest (Player background, Home sections, Studio and customisation incl. Reset all customisation, Window and performance) sits under "Advanced appearance". It shows when that row is expanded and always while the settings search field has text, so search still finds every moved setting.
+- Advanced > Diagnostics: the group is now collapsible (row "Memory report") and starts collapsed; search shows the rows. It holds only the memory-report rows today, so that is the only diagnostic group.
+
+### Files
+Only `DesktopApp.kt` (hooks marked `// UI U8 hook`). No new files.
+
+### Decisions
+- "Opens" for Advanced appearance is an in-place expand, not a new page: no new navigation state needed.
+- Pill and Glass rows are shortcuts; the original rows (Pill Studio in Studio group, "Glass lab (experimental)" in Advanced > Advanced options) stay. Nothing deleted.
+- Expand state is not saved across restarts (`remember`).
+
+### Verified
+NOT compiled, tests NOT run. Hand-checked: brace and paren counts unchanged vs. before the edit; no variable shared between the split groups; `LocalSettingsQuery` is in the same file. No pure logic extracted, so no new test.
+Watch-list: `if (...) {` wrapping several `SettingsGroup` calls inside `settingsSectionItem`.
+
+### Deferred
+- Per-group collapse inside Advanced appearance; saving the expand state.
+- Gate B (U1 to U8) not run yet; owner is not pushing for now.
+
+### Exact next step
+U9 (liquid glass look) needs the owner's reference screenshots; otherwise audit only.
+
+## UI U9: liquid glass look (NOT compiled)
+
+Reference used: the owner's three screenshots (iOS liquid glass: clear body, strong bent rim, bright specular rim, slight colour split, soft frost, text stays readable).
+
+### Audit (why the look did not show)
+- Engine is sound: window backdrop and page are recorded into layers and refracted by the shader (`glassSurface`). Shader failure falls back to the frosted pane, never a hole.
+- Only the floating pill used it (default `pillMaterial = LIQUID_GLASS`, so it was on by default when the shader compiles). The top navigation and floating bars used the classic frosted pane only.
+- The shader is an overlay that adds the bent rim and light; the pane under it (`glassPane`, Haze blur + tint) set the look. The old defaults (frost 0.35, tint 0.3, refraction 0.7, rim 0.5) gave a dark smoky pill, not clear glass.
+- Whether the shader compiles on the owner's PC is unknown from code: Advanced > Glass Lab shows `DesktopGlassShader.error`. If it shows an error, send that text.
+
+### Did
+- New defaults (`DesktopGlassParams.Default`, applied by "reset appearance"): refraction 0.95, bevel 18 dp, magnify 0.06, dispersion 0.45, frost 0.12, blur 10 dp, specular 0.85, rim 0.75, tint 0.20, light 135 deg, album colour 0.35. Same as the Crystal preset except blur; the pill still keeps a text-contrast tint floor (`liquidTintAlpha`).
+- New `DesktopGlassParams.Nav` (refraction 0.6, bevel 10, dispersion 0.3, frost 0.2, tint 0.25, rim 0.6) for small capsules.
+- New `Modifier.glassOverlay(shape, params)` (adds nothing when the shader or glass state is missing). Hooked into `desktopBarGlass` (floating nav and mini pills; new `liquid` flag, off for the 6 dp window-button chip) and into the top-nav selector capsule.
+- Shader numbers only: rim exponent 4 to 3, top sheen 0.05 to 0.08.
+
+### Files
+`DesktopGlassParams.kt`, `DesktopGlassShader.kt`, `DesktopGlassSurface.kt`, `DesktopApp.kt` (`// UI U9 hook`); test added to `DesktopGlassParamsTest.kt`.
+
+### Decisions
+- The full-width Modern top bar strip is not given a rim: a bent edge on a bar that meets the page would show as a seam. The glass is on its selector capsule instead.
+- Existing saved pill configs keep their own numbers; only fresh or reset configs get the new defaults.
+
+### Verified
+NOT compiled, tests NOT run. Brace and paren counts of `DesktopApp.kt` unchanged. Watch-list: `glassSurface` is called from a modifier chain already used by the pill; a second overlay on the same screen means more layer recording (check CPU in Glass Lab).
+
+### Deferred
+- Tuning by eye against the references needs a running build; send a screenshot after CI.
+- Gate B (U1 to U9) not run.
+
+### Exact next step
+Push, run the Windows workflow (Gate B), send the raw log with the F prompt.

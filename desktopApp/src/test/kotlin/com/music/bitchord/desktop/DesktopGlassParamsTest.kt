@@ -52,4 +52,14 @@ class DesktopGlassParamsTest {
         assertEquals(once, once.validated())
         assertTrue(once.tintAlpha in DesktopGlassParams.TINT_ALPHA)
     }
+
+    // UI U9: the defaults follow the liquid-glass references and stay inside every range.
+    @Test
+    fun u9DefaultsAreClearGlassAndInRange() {
+        val d = DesktopGlassParams.Default
+        assertEquals(d, d.validated())
+        assertEquals(DesktopGlassParams.Nav, DesktopGlassParams.Nav.validated())
+        assertTrue(d.refraction >= 0.9f && d.frost <= 0.15f && d.tintAlpha <= 0.25f)
+        assertTrue(DesktopGlassParams.Nav.refraction < d.refraction)
+    }
 }

@@ -562,6 +562,10 @@ fun BitChordDesktopApp() {
     val libraryGridState = rememberLazyGridState()
     /** A Library shelf's "Show all", open as a grid in place of the page. */
     var libraryShowAll by remember { mutableStateOf<HomeShelf?>(null) }
+    // UI U2 hook: pinned playlists, the playlist menu's target, and an action waiting for its page.
+    var pinnedPlaylistIds by remember { mutableStateOf(DesktopPlaylistPins.decode(persistence.string(DesktopPlaylistPins.KEY))) }
+    var playlistMenuItem by remember { mutableStateOf<ShelfItem?>(null) }
+    var pendingPlaylistAction by remember { mutableStateOf<Pair<String, DesktopPlaylistAction>?>(null) }
     /** Where the one back button in the top bar goes: every place visited, oldest first. */
     val navHistory = remember { mutableStateListOf<DesktopNavEntry>() }
     /** Places moved forward through the same visit stack, newest first. */
@@ -717,6 +721,19 @@ fun BitChordDesktopApp() {
             ?.items
             ?.let(DesktopSearchClient::userPlaylists)
             .orEmpty()
+    }
+    // UI U2 hook: the Library with pinned playlists first.
+    val pinnedLibraryState = remember(libraryState, pinnedPlaylistIds) {
+        val success = libraryState as? UiState.Success
+        if (success == null || pinnedPlaylistIds.isEmpty()) libraryState
+        else UiState.Success(
+            success.data.copy(
+                shelves = success.data.shelves.map { shelf ->
+                    if (shelf.title != PLAYLISTS_SHELF) shelf
+                    else shelf.copy(items = DesktopPlaylistPins.order(shelf.items, pinnedPlaylistIds) { it.browseId.orEmpty() })
+                },
+            ),
+        )
     }
     // The add-to-playlist dialog intentionally keeps only playlists owned by the account. The
     // sidebar is a library browser instead, so it shows the complete paged shelf: owned, saved,
@@ -1981,6 +1998,20 @@ fun BitChordDesktopApp() {
         onUpgradeQuality = null,
     )
 
+    /** UI U1 hook: the same menu as [songMenu], opened by a right-click instead of the "…" button. */
+    @Composable
+    fun songContextMenu(song: Song, open: Boolean, onDismiss: () -> Unit) {
+        if (open) DesktopSongMenuFor(
+            song = song,
+            liked = song.videoId in likedIds,
+            actions = songActionsFor(song),
+            onToggleLike = { toggleLike(song) },
+            onRevertToOriginal = null,
+            onUpgradeQuality = null,
+            onDismiss = onDismiss,
+        )
+    }
+
     /** Replay counts artists by name, so the page has to be found from the name alone. */
     fun openArtistByName(name: String) {
         scope.launch {
@@ -2245,6 +2276,26 @@ fun BitChordDesktopApp() {
     }
 
     /** A Library card: a folder is a page of this app's, a local playlist is opened from here. */
+    /** UI U2 hook: pin or unpin a playlist card, keeping the choice across restarts. */
+    fun togglePlaylistPin(item: ShelfItem) {
+        val id = item.browseId ?: return
+        pinnedPlaylistIds = DesktopPlaylistPins.toggle(pinnedPlaylistIds, id)
+        persistence.saveString(DesktopPlaylistPins.KEY, DesktopPlaylistPins.encode(pinnedPlaylistIds))
+    }
+
+    /** UI U2 hook: whether a Library card is a playlist the menu applies to. */
+    fun isPlaylistCard(item: ShelfItem): Boolean {
+        val id = item.browseId ?: return false
+        return item.videoId == null && (id.startsWith(LOCAL_PLAYLIST_PREFIX) || browseTypeOf(id) == BrowseType.PLAYLIST)
+    }
+
+    /** UI U2 hook: opens the playlist and runs [action] on it once its songs have arrived. */
+    fun runPlaylistAction(item: ShelfItem, action: DesktopPlaylistAction) {
+        val id = item.browseId ?: return
+        pendingPlaylistAction = id to action
+        openLibraryItem(item)
+    }
+
     fun openLibraryItem(item: ShelfItem) {
         val browseId = item.browseId.orEmpty()
         when {
@@ -2253,6 +2304,23 @@ fun BitChordDesktopApp() {
             browseId.startsWith(LOCAL_PLAYLIST_PREFIX) ->
                 playlists.firstOrNull { it.id == browseId.removePrefix(LOCAL_PLAYLIST_PREFIX) }?.let(::openPlaylist)
             else -> openShelfItem(item)
+        }
+    }
+
+    // UI U2 hook: runs the playlist menu's action when the opened page is the one it was asked on.
+    LaunchedEffect(openedCollection, pendingPlaylistAction) {
+        val (wanted, action) = pendingPlaylistAction ?: return@LaunchedEffect
+        val page = openedCollection?.takeIf { !it.loading } ?: return@LaunchedEffect
+        fun norm(id: String) = id.removePrefix(LOCAL_PLAYLIST_PREFIX).removePrefix("VL")
+        if (norm(page.browseId) != norm(wanted)) return@LaunchedEffect
+        pendingPlaylistAction = null
+        when (action) {
+            DesktopPlaylistAction.PLAY -> playSongs(page.songs, 0, collectionSource(page))
+            DesktopPlaylistAction.SHUFFLE -> playSongs(page.songs.shuffled(), 0, collectionSource(page))
+            DesktopPlaylistAction.PLAY_NEXT -> page.songs.asReversed().forEach { enqueue(it, next = true) }
+            DesktopPlaylistAction.ADD_TO_QUEUE -> page.songs.forEach { enqueue(it, next = false) }
+            DesktopPlaylistAction.RENAME -> overlays.rename = true
+            DesktopPlaylistAction.DELETE -> overlays.delete = true
         }
     }
 
@@ -3327,8 +3395,8 @@ fun BitChordDesktopApp() {
                     if (!modernInterface) DesktopSidebar(
                         destination = destination,
                         settingsOpen = overlays.settingsPage != null,
-                        accountPlaylists = sidebarAccountPlaylists,
-                        localPlaylists = playlists,
+                        accountPlaylists = DesktopPlaylistPins.order(sidebarAccountPlaylists, pinnedPlaylistIds) { it.browseId.orEmpty() }, // UI U2 hook
+                        localPlaylists = DesktopPlaylistPins.order(playlists, pinnedPlaylistIds) { LOCAL_PLAYLIST_PREFIX + it.id }, // UI U2 hook
                         openedCollectionId = openedCollection?.browseId,
                         query = query,
                         onQueryChange = { text ->
@@ -3679,6 +3747,16 @@ fun BitChordDesktopApp() {
                             onDismiss = ::closePlaylistDialogs,
                         )
                     }
+                    playlistMenuItem?.let { target -> // UI U2 hook
+                        DesktopPlaylistMenu(
+                            title = target.title,
+                            pinned = target.browseId in pinnedPlaylistIds,
+                            canEdit = accountPlaylists.any { it.browseId.removePrefix("VL") == target.browseId?.removePrefix("VL") },
+                            onAction = { action -> runPlaylistAction(target, action) },
+                            onTogglePin = { togglePlaylistPin(target) },
+                            onDismiss = { playlistMenuItem = null },
+                        )
+                    }
                     if (overlays.rename) {
                         DesktopRenamePlaylistDialog(
                             current = openedCollection?.title.orEmpty(),
@@ -3736,6 +3814,7 @@ fun BitChordDesktopApp() {
                 CompositionLocalProvider(
                     LocalPullToRefreshEnabled provides false,
                     LocalShelfRowChrome provides DesktopShelfRowChrome,
+                    com.music.bitchord.ui.components.LocalArtSourceModifier provides DesktopArtSourceProvider, // UI U6 hook
                 ) {
                 DesktopPointerMenuHost<Song>(
                     menu = { song, onDismiss ->
@@ -3755,6 +3834,7 @@ fun BitChordDesktopApp() {
                     Modifier
                         .fillMaxSize()
                         .fluidPageLift(destination to overlays.settingsPage)
+                        .artSourceArea() // UI U6 hook: shared cards cannot register themselves
                         .pointerInput(Unit) {
                             awaitPointerEventScope {
                                 while (true) {
@@ -4142,6 +4222,8 @@ fun BitChordDesktopApp() {
                             downloadedIds = downloads.map(Song::videoId).toSet(),
                             downloadInProgress = downloadInProgress,
                             contentPadding = contentPadding,
+                            menu = { song -> songMenu(song) }, // UI U1 hook
+                            contextMenu = { song, open, dismiss -> songContextMenu(song, open, dismiss) }, // UI U1 hook
                         )
                         destination == DesktopDestination.LISTEN_NOW -> {
                             val managedHomeState = rememberDesktopManagedHomeState(homeState)
@@ -4305,10 +4387,12 @@ fun BitChordDesktopApp() {
                                 horizontalArrangement = Arrangement.End,
                             ) { DesktopLibrarySortMenu() }
                             LibraryGridPage(
-                                shelf = libraryShowAll!!,
+                                shelf = libraryShowAll!!.let { all ->
+                                    if (all.title == PLAYLISTS_SHELF) all.copy(items = DesktopPlaylistPins.order(all.items, pinnedPlaylistIds) { it.browseId.orEmpty() }) else all
+                                }, // UI U2 hook
                                 gridState = libraryGridState,
                                 onItemClick = ::openLibraryItem,
-                                onItemLongPress = { item -> if (item.videoId != null) openMenu(item.toSong()) },
+                                onItemLongPress = { item -> if (item.videoId != null) openMenu(item.toSong()) else if (isPlaylistCard(item)) playlistMenuItem = item }, // UI U2 hook
                                 contentPadding = PaddingValues(bottom = sharedPagePadding.calculateBottomPadding()),
                                 modifier = Modifier.weight(1f),
                                 onNewPlaylist = { overlays.playlistDialog = true }
@@ -4317,10 +4401,10 @@ fun BitChordDesktopApp() {
                         }
                         destination == DesktopDestination.LIBRARY -> LibraryScreen(
                             signedIn = youtubeSignedIn,
-                            state = libraryState,
+                            state = pinnedLibraryState, // UI U2 hook
                             listState = libraryListState,
                             onShelfItemClick = ::openLibraryItem,
-                            onShelfItemLongPress = { item -> if (item.videoId != null) openMenu(item.toSong()) },
+                            onShelfItemLongPress = { item -> if (item.videoId != null) openMenu(item.toSong()) else if (isPlaylistCard(item)) playlistMenuItem = item }, // UI U2 hook
                             onNewPlaylist = { overlays.playlistDialog = true },
                             onShowAll = { shelf -> libraryShowAll = shelf },
                             replay = {
@@ -4448,7 +4532,13 @@ private fun DesktopTopBar(
     compact: Boolean,
 ) {
     val titleBarEnabled by DesktopTitleBarSetting.enabled.collectAsState()
-    val inlineCaption = DesktopPlatform.drawsOwnWindowFrame && !titleBarEnabled && !DesktopEdgePanel.mode.collectAsState().value // EDGE 3 hook: no caption buttons in the panel
+    val inlineCaption = DesktopCaptionPlacement.place( // UI U3 hook: one set of window buttons, see DesktopCaptionPlacement
+        drawsOwnWindowFrame = DesktopPlatform.drawsOwnWindowFrame,
+        titleBarEnabled = titleBarEnabled,
+        panelMode = DesktopEdgePanel.mode.collectAsState().value,
+        modernInterface = true,
+        compact = compact,
+    ) == DesktopCaptionPlace.TOP_BAR
     val reduceMotion by DesktopAppearanceSettings.reduceAnimation.collectAsState()
     var searchOpen by remember { mutableStateOf(false) }
     var accountMenuOpen by remember { mutableStateOf(false) }
@@ -4504,7 +4594,8 @@ private fun DesktopTopBar(
                         Modifier.align(Alignment.CenterStart).width(tabWidth).fillMaxHeight()
                             .graphicsLayer { translationX = slide * tabWidth.toPx() }
                             .clip(RoundedCornerShape(percent = 50))
-                            .background(DesktopAccent.copy(alpha = 0.20f)),
+                            .background(DesktopAccent.copy(alpha = 0.20f))
+                            .glassOverlay(RoundedCornerShape(percent = 50)), // UI U9 hook: liquid glass on the top-nav selector
                     )
                     Row {
                         tabs.forEach { (tab, label) ->
@@ -4571,7 +4662,13 @@ private fun DesktopTopBar(
 @Composable
 private fun DesktopLegacyTopBar(common: DesktopShellCallbacks, compact: Boolean) {
     val titleBarEnabled by DesktopTitleBarSetting.enabled.collectAsState()
-    val inlineCaption = DesktopPlatform.drawsOwnWindowFrame && !titleBarEnabled && !DesktopEdgePanel.mode.collectAsState().value // EDGE 3 hook: no caption buttons in the panel
+    val inlineCaption = DesktopCaptionPlacement.place( // UI U3 hook: one set of window buttons, see DesktopCaptionPlacement
+        drawsOwnWindowFrame = DesktopPlatform.drawsOwnWindowFrame,
+        titleBarEnabled = titleBarEnabled,
+        panelMode = DesktopEdgePanel.mode.collectAsState().value,
+        modernInterface = false,
+        compact = compact,
+    ) == DesktopCaptionPlace.TOP_BAR
     DesktopTitleBarDragArea(Modifier.fillMaxWidth().height(64.dp)) {
         Box(Modifier.fillMaxSize()) {
             Row(
@@ -4610,7 +4707,7 @@ private fun DesktopLegacyTopBar(common: DesktopShellCallbacks, compact: Boolean)
                     Spacer(Modifier.weight(1f))
                     Box(
                         Modifier.widthIn(min = 96.dp, max = 420.dp).weight(1f).height(46.dp) // 360 T2 hook: min was 220 dp
-                            .clip(RoundedCornerShape(6.dp)).desktopBarGlass(RoundedCornerShape(6.dp))
+                            .clip(RoundedCornerShape(6.dp)).desktopBarGlass(RoundedCornerShape(6.dp), liquid = false)
                             .clickable(onClick = common.onOpenNowPlaying),
                         contentAlignment = Alignment.Center,
                     ) {
@@ -4733,7 +4830,13 @@ private fun DesktopSidebar(
     }
 
     val titleBarEnabled by DesktopTitleBarSetting.enabled.collectAsState()
-    val inlineCaption = DesktopPlatform.drawsOwnWindowFrame && !titleBarEnabled && !DesktopEdgePanel.mode.collectAsState().value // EDGE 3 hook: no caption buttons in the panel
+    val inlineCaption = DesktopCaptionPlacement.place( // UI U3 hook: one set of window buttons, see DesktopCaptionPlacement
+        drawsOwnWindowFrame = DesktopPlatform.drawsOwnWindowFrame,
+        titleBarEnabled = titleBarEnabled,
+        panelMode = DesktopEdgePanel.mode.collectAsState().value,
+        modernInterface = false,
+        compact = false,
+    ) == DesktopCaptionPlace.SIDEBAR
     Box(
         Modifier
             .width(220.dp)
@@ -4980,6 +5083,7 @@ internal fun DesktopFloatingMiniPlayer(
                 },
             )
             .hoverable(dockInteraction)
+            .artNoFire() // UI U6 hook
             .fluidClickable { if (pill.clickAction == DesktopPillClickAction.OPEN_PLAYER && custom.miniPlayerTapExpands) onExpandPlayer() }
             .graphicsLayer {
                 alpha = entrance.value
@@ -5054,11 +5158,7 @@ internal fun DesktopFloatingMiniPlayer(
                 for (id in pill.zones["right"].orEmpty()) drawPillElement(id)
             }
         }
-        if (dockHovered) Box(Modifier.align(Alignment.TopEnd).padding(3.dp).zIndex(2f)) {
-            DesktopSpringButton(onClick = onOpenPillStudio, size = 26.dp) {
-                Icon(Icons.Rounded.Edit, "Customise pill", tint = Color.White.copy(alpha = 0.9f), modifier = Modifier.size(15.dp))
-            }
-        }
+        // UI U1 hook: the hover pencil was removed; "Customise pill…" (menu) and the Settings tile still open Pill Studio.
         // desktopBarGlass/fluidGlass already paints the glass edge. A second inset outline here
         // made the dock read like a box nested inside another box, especially over bright art.
     }
@@ -5570,6 +5670,7 @@ private fun DesktopArtistPage(
                                                             thumbnailUrl = song.thumbnailUrl,
                                                             onClick = { onPlaySongs(top, index) },
                                                             onLongPress = { onOpenMenu(song) },
+                                                            videoId = song.videoId, // UI U6 hook
                                                         )
                                                     }
                                                 }
@@ -6458,6 +6559,7 @@ private fun DesktopSettingsScreen(
                 }
             }
             if (section == DesktopSettingsSection.APPEARANCE) settingsSectionItem(section, sectionMatches) {
+                var advancedAppearanceOpen by remember { mutableStateOf(false) } // UI U8 hook
                 // STUDIO S2 hook: the old single Appearance group, split into labelled sub-groups (rows unchanged).
                 SettingsGroup(DesktopStrings["settings_appearance_interface", "Interface"]) {
                     val interfaceMode by DesktopInterfaceSettings.mode.collectAsState()
@@ -6465,7 +6567,7 @@ private fun DesktopSettingsScreen(
                     val interfaceSubtitle = DesktopStrings[
                         "desktop_interface_mode_subtitle",
                         "Modern uses compact glass navigation and a floating player. Legacy keeps the classic sidebar.",
-                    ]
+                    ] + " Now: ${if (interfaceMode == DesktopInterfaceMode.MODERN) "Modern" else "Legacy"}." // UI U3 hook: the switch is enabled; an off switch only looks grey
                     SettingsToggle(
                         interfaceTitle,
                         interfaceSubtitle,
@@ -6506,31 +6608,8 @@ private fun DesktopSettingsScreen(
                             }
                         }
                     }
-                    SettingsToggle(
-                        DesktopStrings["full_screen_cover_art", "Full-screen cover art"],
-                        DesktopStrings["full_screen_cover_art_subtitle", "Runs the cover to the edges of the player instead of a square sleeve"],
-                        fullBleedArtwork,
-                        onFullBleedArtworkChange,
-                    )
-                    SettingsToggle(
-                        DesktopStrings["d_animated_canvas", "Animated canvas"],
-                        DesktopStrings["d_show_motion_artwork_when_it_is_available", "Show motion artwork when it is available"],
-                        animatedCanvas,
-                        onAnimatedCanvasChange,
-                    )
-                    if (animatedCanvas) {
-                        SettingsNavigationRow(
-                            title = DesktopStrings["spotify_canvas_setup", "Spotify Canvas setup"],
-                            subtitle = if (spotifyCanvasReady) {
-                                "Connected"
-                            } else {
-                                "To use Spotify Canvas, provide your Spotify sp_dc cookie."
-                            },
-                            onClick = onOpenSpotifyCanvasSetup,
-                        )
-                    }
                 }
-                SettingsGroup(DesktopStrings["settings_appearance_colours", "Colours and background"]) {
+                SettingsGroup(DesktopStrings["settings_appearance_background", "Background"]) {
                     val fluidity by DesktopFluiditySettings.enabled.collectAsState()
                     SettingsToggle(
                         DesktopStrings["fluidity_mode", "Fluidity mode"],
@@ -6620,6 +6699,56 @@ private fun DesktopSettingsScreen(
                             TextButton(onClick = DesktopBackdropSettings::reset) { Text("Reset background colours") }
                         }
                     }
+                }
+                SettingsGroup(DesktopStrings["settings_appearance_player", "Player"]) {
+                    SettingsToggle(
+                        DesktopStrings["full_screen_cover_art", "Full-screen cover art"],
+                        DesktopStrings["full_screen_cover_art_subtitle", "Runs the cover to the edges of the player instead of a square sleeve"],
+                        fullBleedArtwork,
+                        onFullBleedArtworkChange,
+                    )
+                    SettingsToggle(
+                        DesktopStrings["d_animated_canvas", "Animated canvas"],
+                        DesktopStrings["d_show_motion_artwork_when_it_is_available", "Show motion artwork when it is available"],
+                        animatedCanvas,
+                        onAnimatedCanvasChange,
+                    )
+                    if (animatedCanvas) {
+                        SettingsNavigationRow(
+                            title = DesktopStrings["spotify_canvas_setup", "Spotify Canvas setup"],
+                            subtitle = if (spotifyCanvasReady) {
+                                "Connected"
+                            } else {
+                                "To use Spotify Canvas, provide your Spotify sp_dc cookie."
+                            },
+                            onClick = onOpenSpotifyCanvasSetup,
+                        )
+                    }
+                }
+                SettingsGroup(DesktopStrings["settings_appearance_pill", "Floating pill"]) { // UI U8 hook
+                    SettingsNavigationRow(
+                        title = "Floating pill",
+                        subtitle = "Arrange, preview, and tune the floating player",
+                        onClick = onOpenPillStudio,
+                    )
+                }
+                SettingsGroup(DesktopStrings["settings_appearance_glass", "Glass"]) { // UI U8 hook
+                    SettingsNavigationRow(
+                        title = "Glass Lab",
+                        subtitle = "Tune the liquid-glass material and see whether the shader works on this PC",
+                        onClick = onOpenGlassLab,
+                    )
+                }
+                SettingsGroup(DesktopStrings["settings_appearance_advanced", "Advanced appearance"]) { // UI U8 hook
+                    SettingsNavigationRow(
+                        title = "Advanced appearance",
+                        subtitle = if (advancedAppearanceOpen) "Tap to hide the rest of the appearance settings" else "Player background, Home, Studio, window and performance",
+                        onClick = { advancedAppearanceOpen = !advancedAppearanceOpen },
+                    )
+                }
+                // UI U8 hook: everything else stays here, shown when expanded or while searching.
+                if (advancedAppearanceOpen || LocalSettingsQuery.current.isNotBlank()) {
+                SettingsGroup("Player background") {
                     val playerBackgroundTitle = DesktopStrings["player_background", "Player background"]
                     val playerBackgroundSubtitle = DesktopStrings[
                         "player_background_subtitle",
@@ -6773,6 +6902,7 @@ private fun DesktopSettingsScreen(
                             DesktopWindowBackdrop::setAppBackground,
                         )
                     }
+                }
                 }
             }
             if (section == DesktopSettingsSection.MISCELLANEOUS) settingsSectionItem(section, sectionMatches) {
@@ -6960,9 +7090,18 @@ private fun DesktopSettingsScreen(
             // STUDIO S1 hook: moved here from the Appearance group.
             if (section == DesktopSettingsSection.DIAGNOSTICS) settingsSectionItem(section, sectionMatches) {
                 SettingsGroup(DesktopStrings["settings_diagnostics", "Diagnostics"]) {
-                    // UPGRADE M3: diagnostic memory report switch and button (DesktopMemoryReport.kt).
-                    DesktopMemoryReportSettingsRows { title, subtitle, checked, onChange ->
-                        SettingsToggle(title, subtitle, checked, onChange)
+                    // UI U8 hook: collapsible, starts collapsed; searching shows the rows.
+                    var diagnosticsOpen by remember { mutableStateOf(false) }
+                    SettingsNavigationRow(
+                        title = "Memory report",
+                        subtitle = if (diagnosticsOpen) "Tap to collapse" else "Tap to expand",
+                        onClick = { diagnosticsOpen = !diagnosticsOpen },
+                    )
+                    if (diagnosticsOpen || LocalSettingsQuery.current.isNotBlank()) {
+                        // UPGRADE M3: diagnostic memory report switch and button (DesktopMemoryReport.kt).
+                        DesktopMemoryReportSettingsRows { title, subtitle, checked, onChange ->
+                            SettingsToggle(title, subtitle, checked, onChange)
+                        }
                     }
                 }
             }
@@ -7954,6 +8093,9 @@ private fun DesktopCollectionPage(
     downloadedIds: Set<String>,
     downloadInProgress: Set<String>,
     contentPadding: PaddingValues,
+    /** UI U1: the "…" button of a row, and the right-click menu of a row. */
+    menu: @Composable (Song) -> Unit,
+    contextMenu: @Composable (Song, Boolean, () -> Unit) -> Unit,
 ) {
     val songs = collection.songs
     // The phone's "search this list": a filter over the rows already loaded.
@@ -8161,6 +8303,8 @@ private fun DesktopCollectionPage(
                     downloadInProgress = song.videoId in downloadInProgress,
                     number = index + 1,
                     onRemove = onRemoveFromPlaylist?.takeIf { song.setVideoId != null },
+                    menu = menu,
+                    contextMenu = contextMenu,
                 )
             }
             if (collection.continuation != null) {
@@ -8190,7 +8334,7 @@ private fun DesktopCollectionPage(
  * table whichever rows can be removed.
  */
 private fun collectionActionsWidth(hasRemove: Boolean): Dp =
-    if (hasRemove) 136.dp else 102.dp
+    if (hasRemove) 170.dp else 136.dp // UI U1: +34 dp for the "…" button
 
 @Composable
 private fun DesktopCollectionSongRow(
@@ -8208,12 +8352,18 @@ private fun DesktopCollectionSongRow(
     striped: Boolean,
     /** Takes this row out of the playlist being read. */
     onRemove: ((Song) -> Unit)? = null,
+    /** UI U1: the "…" button and the right-click menu. */
+    menu: @Composable (Song) -> Unit,
+    contextMenu: @Composable (Song, Boolean, () -> Unit) -> Unit,
 ) {
+    var contextOpen by remember(song.videoId) { mutableStateOf(false) }
     Row(
         Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(6.dp))
             .background(if (striped) Color.White.copy(alpha = 0.04f) else Color.Transparent)
+            .artSource(song.videoId) // UI U6 hook: the row is this song's click source
+            .onSecondaryPress { contextOpen = true } // UI U1 hook (before clickable)
             .clickable { onClick(song) }
             .padding(horizontal = 8.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -8307,7 +8457,9 @@ private fun DesktopCollectionSongRow(
                     Icon(BitChordIcons.Plus, DesktopStrings["add_to_playlist", "Add to playlist"], tint = DesktopSecondary, modifier = Modifier.size(18.dp))
                 }
             }
+            menu(song) // UI U1 hook
         }
+        contextMenu(song, contextOpen) { contextOpen = false } // UI U1 hook
     }
 }
 
@@ -8321,9 +8473,9 @@ private fun Song.isNowPlaying(): Boolean = isSameTrackAs(LocalNowPlaying.current
 
 /** The frosted pane the floating bars are made of. */
 @Composable
-internal fun Modifier.desktopBarGlass(shape: Shape, customRim: Float? = null): Modifier {
+internal fun Modifier.desktopBarGlass(shape: Shape, customRim: Float? = null, liquid: Boolean = true): Modifier {
     val fluid by DesktopFluiditySettings.enabled.collectAsState()
-    return if (fluid) {
+    val barBase = if (fluid) {
         if (customRim == null) fluidGlass(shape, tint = 0.58f)
         else fluidGlass(shape, tint = 0.58f, rimWidth = 0.dp)
             .border(1.dp, Color.White.copy(alpha = customRim.coerceIn(0f, 0.7f)), shape)
@@ -8332,6 +8484,7 @@ internal fun Modifier.desktopBarGlass(shape: Shape, customRim: Float? = null): M
         if (customRim == null) surface.border(0.5.dp, DesktopBarEdge, shape)
         else surface.border(1.dp, Color.White.copy(alpha = customRim.coerceIn(0f, 0.7f)), shape)
     }
+    return if (liquid) barBase.glassOverlay(shape) else barBase // UI U9 hook
 }
 
 /** The edge of a chrome pane that meets the page, and so has to dissolve into it. */

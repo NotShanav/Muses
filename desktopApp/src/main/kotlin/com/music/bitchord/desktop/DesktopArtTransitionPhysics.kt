@@ -60,6 +60,12 @@ internal object ArtTransitionPhysics {
     /** Backdrop injections per transition, at most. */
     const val SINK_CHUNKS = 12
 
+    /** UI U7: particle budget. Share of the GRID x GRID cells that are drawn, by source area (px squared). */
+    const val MIN_KEEP_FRACTION = 0.4f
+
+    /** UI U7: from this source area upward every cell is drawn (the hard cap is COUNT). */
+    const val FULL_AREA_PX = 90_000f
+
     // ---- Small helpers -------------------------------------------------------------------------
 
     fun clamp01(x: Float): Float = if (x < 0f) 0f else if (x > 1f) 1f else x
@@ -133,6 +139,22 @@ internal object ArtTransitionPhysics {
     /** True when a cell centred [offset] from the centre falls outside a box of half size [halfExtent]. */
     fun outsideCover(offset: Float, halfExtent: Float, cell: Float): Boolean =
         abs(offset) > halfExtent + cell * 0.5f
+
+    /** UI U7: share of cells drawn for a source of [areaPx]: small thumbnails use fewer dots (battery), never below MIN_KEEP_FRACTION. */
+    fun keepFraction(areaPx: Float): Float =
+        MIN_KEEP_FRACTION + (1f - MIN_KEEP_FRACTION) * clamp01(areaPx / FULL_AREA_PX)
+
+    /** UI U7: whether the cell at ([col], [row]) is drawn at all, by a stable hash so the thinning is even. */
+    fun cellKept(col: Int, row: Int, seed: Int, keep: Float): Boolean = hash01(col, row, seed + 201) < keep
+
+    /**
+     * UI U7: where a cell starts along one axis: its place in the cover-scaled square, clamped into the
+     * source rectangle ([halfExtent] from [center]) so no particle ever starts outside the artwork box.
+     */
+    fun spawnCoord(center: Float, frac: Float, side: Float, halfExtent: Float): Float {
+        val o = coverOffset(frac, side)
+        return center + (if (o < -halfExtent) -halfExtent else if (o > halfExtent) halfExtent else o)
+    }
 
     // ---- Noise ---------------------------------------------------------------------------------
 

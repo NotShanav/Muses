@@ -252,6 +252,7 @@ internal object DesktopEdgePanel {
             post {
                 warmup = false
                 refreshFlags()
+                window?.let { settleSize(it, l.hidden) } // UI U5 hook
                 if (reveal) machine.showNow(true)
             }
         }
@@ -319,6 +320,27 @@ internal object DesktopEdgePanel {
         w.setBounds(r.x, r.y, r.width, r.height)
         val s = if (scale.isFinite() && scale > 0.0) scale else 1.0
         windowState?.size = DpSize((r.width / s).dp, (r.height / s).dp)
+    }
+
+    /**
+     * UI U5: the panel never goes through the normal window's repaint path (the display watcher
+     * skips it in panel mode), so a window whose size drifted, or whose Compose canvas lagged behind
+     * it, showed a flat strip under the content. Compare the real size with the layout's, assert the
+     * bounds again when they differ, and always revalidate and repaint like a normal window does.
+     */
+    private fun settleSize(w: Window, expected: DisplayRect) {
+        val b = w.bounds
+        val actual = DisplayRect(b.x, b.y, b.width, b.height)
+        if (EdgeSizeCheck.drifted(expected, actual)) {
+            DesktopTrackLog.log("edge: size drift expected=${expected.width}x${expected.height} actual=${actual.width}x${actual.height}; asserting again")
+            w.setBounds(w.x, w.y, expected.width, expected.height)
+        }
+        runCatching {
+            w.invalidate()
+            w.validate()
+            w.repaint()
+            DesktopWindowsFrame.refreshFrame()
+        }
     }
 
     /** Puts the window where the current state says it belongs, after a display or config change. */
@@ -491,6 +513,7 @@ internal object DesktopEdgePanel {
             slide = null
             val rest = if (s.opening) l.open else l.hidden
             w.setBounds(rest.x, rest.y, rest.width, rest.height) // asserts the size, too
+            settleSize(w, rest) // UI U5 hook
             machine.onSlideFinished(opening = s.opening)
             if (s.opening) grantFocus(w)
         }

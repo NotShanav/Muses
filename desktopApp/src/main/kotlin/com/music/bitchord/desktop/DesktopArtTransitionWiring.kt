@@ -164,8 +164,15 @@ internal fun maybeStartArtTransition(
         println("ArtTransition skipped: same song")
         return
     }
+    // UI U6 hook: only a press on an artwork, a song row or a page of cards starts it, and the
+    // effect starts from that artwork. Next, Previous, media keys and auto-advance never do.
+    val decision = ArtSourceRules.decide(videoId, press?.let { it.x to it.y }, DesktopArtSources.snapshot())
+    if (!decision.fire) {
+        println("ArtTransition skipped: press was not on an artwork or row")
+        return
+    }
     DesktopArtPress.consume()
-    DesktopArtTransition.start(ArtTransitionRequest(videoId, thumbnailUrl, sourceBounds = null, pointer = press))
+    DesktopArtTransition.start(ArtTransitionRequest(videoId, thumbnailUrl, sourceBounds = decision.bounds?.toRect(), pointer = press))
 }
 
 /** One-time host wiring: backdrop sink at startup, and the setting mapped onto DesktopArtTransition.enabled. */

@@ -576,6 +576,7 @@ internal class ArtParticleSim(
     private val dirY = FloatArray(count)
     private val glowAmt = FloatArray(count)
     private val srcHidden = BooleanArray(count)
+    private val kept = BooleanArray(count) // UI U7 hook: cells drawn at all (particle budget by source area)
 
     private val chunkR = FloatArray(ArtTransitionPhysics.SINK_CHUNKS)
     private val chunkG = FloatArray(ArtTransitionPhysics.SINK_CHUNKS)
@@ -595,6 +596,8 @@ internal class ArtParticleSim(
     private val srcHalfH = srcRect.height * 0.5f
     private val cellSW = srcSide / ArtTransitionPhysics.GRID
     private val cellSH = srcSide / ArtTransitionPhysics.GRID
+
+    private val keepFrac = ArtTransitionPhysics.keepFraction(srcRect.width * srcRect.height) // UI U7 hook
 
     private val tmp = FloatArray(2)
     private val tmp2 = FloatArray(2)
@@ -664,11 +667,15 @@ internal class ArtParticleSim(
             ang[p] = ph.hash01(col, row, seed + 5) * 6.2831855f
             hx[p] = (col + 0.5f) / n
             hy[p] = (row + 0.5f) / n
-            sx[p] = srcCx + ph.coverOffset(hx[p], srcSide)
-            sy[p] = srcCy + ph.coverOffset(hy[p], srcSide)
+            // UI U7 hook: every cell starts inside the whole source rectangle (small thumbnail or big card).
+            val rawDx = ph.coverOffset(hx[p], srcSide)
+            val rawDy = ph.coverOffset(hy[p], srcSide)
+            sx[p] = ph.spawnCoord(srcCx, hx[p], srcSide, srcHalfW)
+            sy[p] = ph.spawnCoord(srcCy, hy[p], srcSide, srcHalfH)
+            kept[p] = ph.cellKept(col, row, seed, keepFrac)
             // Cells of the square that the box crops away start invisible and fade in as they let go.
-            srcHidden[p] = ph.outsideCover(sx[p] - srcCx, srcHalfW, cellSW) ||
-                ph.outsideCover(sy[p] - srcCy, srcHalfH, cellSH)
+            srcHidden[p] = ph.outsideCover(rawDx, srcHalfW, cellSW) ||
+                ph.outsideCover(rawDy, srcHalfH, cellSH)
             val bg = ph.hash01(col, row, seed + 101) < ArtTransitionPhysics.BG_FRACTION
             isBg[p] = bg
             if (bg) {
@@ -758,6 +765,10 @@ internal class ArtParticleSim(
 
         var stillPending = 0
         for (p in 0 until count) {
+            if (!kept[p]) { // UI U7 hook: thinned out by the particle budget
+                alpha[p] = 0f
+                continue
+            }
             if (isBg[p]) stepBg(p) else stillPending += stepPill(p)
             alpha[p] = alpha[p] * fadeMul
         }

@@ -337,6 +337,22 @@ class DesktopEdgeWatcherTest {
     }
 
     @Test
+    fun fullscreenNeedsNoCaption() { // UI U4
+        val screen = DisplayRect(0, 0, 1920, 1080)
+        val covering = DisplayRect(-8, -8, 1936, 1096)
+        val captioned = 0x00CF0000 // WS_OVERLAPPEDWINDOW: a normal maximised window
+        val borderless = 0x14000000 // WS_POPUP or WS_VISIBLE
+        // Maximised Chrome with an auto-hide taskbar covers the monitor but keeps its caption.
+        assertFalse(EdgeFullscreen.isFullscreen(EdgeFullscreen.covers(covering, screen), captioned))
+        // A borderless window covering the monitor is fullscreen.
+        assertTrue(EdgeFullscreen.isFullscreen(EdgeFullscreen.covers(covering, screen), borderless))
+        // No caption but not covering (a small popup) is not fullscreen.
+        assertFalse(EdgeFullscreen.isFullscreen(EdgeFullscreen.covers(DisplayRect(100, 100, 800, 600), screen), borderless))
+        assertTrue(EdgeFullscreen.hasCaption(captioned))
+        assertFalse(EdgeFullscreen.hasCaption(0x00800000)) // WS_BORDER alone is not a caption
+    }
+
+    @Test
     fun desktopAndTaskbarWindowsAreNeverFullscreenApps() {
         assertTrue(EdgeFullscreen.isShellClass("Progman"))
         assertTrue(EdgeFullscreen.isShellClass("WorkerW"))

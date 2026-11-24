@@ -313,3 +313,12 @@ internal fun Modifier.glassSurface(
             drawContent()
         }
 }
+
+/**
+ * UI U9: the liquid-glass overlay for a bar or capsule that already has its own frosted pane. With no
+ * glass state, reduced blur or no working shader it adds nothing, so the classic look stays as it was.
+ */
+@Composable
+internal fun Modifier.glassOverlay(shape: Shape, params: DesktopGlassParams = DesktopGlassParams.Nav): Modifier =
+    glassSurface(shape, params, Color(0xFF080A12), Color.Transparent)
+

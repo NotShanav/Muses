@@ -399,6 +399,7 @@ internal fun DesktopLiquidPill(
             .glassPane(shape, glassParams, LiquidTint, accent)
             .then(if (edgeOn) Modifier.glassSurface(shape, glassParams, LiquidTint, accent, rimNow) else Modifier)
             .hoverable(interaction)
+            .artNoFire() // UI U6 hook: transport presses never start the art transition
             .clickable(interactionSource = interaction, indication = null) {
                 if (pill.clickAction == DesktopPillClickAction.OPEN_PLAYER && custom.miniPlayerTapExpands && !preview) onExpandPlayer()
             },
@@ -627,11 +628,7 @@ internal fun DesktopLiquidPill(
                 for (id in pill.zones["right"].orEmpty()) drawPillElement(id)
             }
         }
-        if (hovered) Box(Modifier.align(Alignment.TopEnd).padding(3.dp).zIndex(2f)) {
-            DesktopSpringButton(onClick = onOpenPillStudio, size = 26.dp) {
-                Icon(Icons.Rounded.Edit, "Customise pill", tint = Color.White.copy(alpha = 0.9f), modifier = Modifier.size(15.dp))
-            }
-        }
+        // UI U1 hook: the hover pencil was removed here too; "Customise pill…" and the Settings tile remain.
     }
 }
 

@@ -94,9 +94,9 @@ half4 main(float2 fcIn) {
   float back = max(dot(n, -lightDir), 0.0);
   float spec = (pow(facing, 3.0) * 0.9 + pow(back, 3.0) * 0.35) * pow(t, 2.0) * specular;
   float shimmer = 0.85 + 0.15 * sin(time * 0.9 + (fc.x / max(size.x, 1.0)) * 6.2831853);
-  float edge = pow(t, 4.0) * rim * shimmer;
+  float edge = pow(t, 3.0) * rim * shimmer;
   float top = clamp(1.0 - (fc.y / max(size.y, 1.0)) * 2.2, 0.0, 1.0);
-  float shine = clamp(spec + edge * 0.25 + top * 0.05 * specular, 0.0, 1.0);
+  float shine = clamp(spec + edge * 0.25 + top * 0.08 * specular, 0.0, 1.0);
   // This layer is an overlay on a frosted pane that already carries the blur and the tint (the text
   // stays readable whatever this does). It adds the bent scene only in the rim band, plus the light.
   float ring = clamp(prof * 0.9, 0.0, 1.0) * clamp(sg.a, 0.0, 1.0);

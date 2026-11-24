@@ -242,9 +242,14 @@ internal class DesktopEdgeWatcher(
         if (inZone && !needsLeave && monitor != null && point != null) {
             val held = runCatching { pointer.buttonHeld() }.getOrDefault(false)
             dwell.update(inZone = true, buttonHeld = held, nowMs = now)
-            if (dwell.isSatisfied(now, cfg.dwellMs) && !isFullscreenBlocked(cfg, now)) {
-                dwell.consume()
-                onEvent(EdgeEvent.RevealRequested(now, monitor, point))
+            if (dwell.isSatisfied(now, cfg.dwellMs)) {
+                if (!isFullscreenBlocked(cfg, now)) {
+                    dwell.consume()
+                    onEvent(EdgeEvent.RevealRequested(now, monitor, point))
+                } else if (now - lastSuppressLogMs >= 5_000L) { // UI U4 hook
+                    lastSuppressLogMs = now
+                    runCatching { DesktopTrackLog.log("edge: reveal suppressed: fullscreen foreground (see the probe line above)") }
+                }
             }
         } else {
             dwell.update(inZone = false, buttonHeld = false, nowMs = now)
@@ -256,6 +261,8 @@ internal class DesktopEdgeWatcher(
      * The fullscreen check costs native calls, so it runs only once a reveal is otherwise due, and
      * at most every [FULLSCREEN_RECHECK_MS] while the cursor keeps dwelling.
      */
+    private var lastSuppressLogMs = -5_000L
+
     private fun isFullscreenBlocked(cfg: EdgeWatchConfig, now: Long): Boolean {
         if (!cfg.suppressWhenFullscreen) return false
         if (lastFullscreenCheckMs < 0L || now - lastFullscreenCheckMs >= FULLSCREEN_RECHECK_MS) {
