@@ -14,6 +14,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -503,12 +504,12 @@ internal class DesktopVoiceController(
             ) { shouldStopRecording() }
             runCatching { actions.duckPlayback(false) }
             playbackDucked = false
-            if (cancelled) return
+            if (cancelled || !currentCoroutineContext().isActive) return // F2: stop() resets `cancelled`, the cancelled job is the reliable signal
             val pcm = recorded.getOrElse { return fail(codeOf(it)) }
 
             _state.value = DesktopVoiceState.Thinking
             val heard = recognizerFactory(program, model).transcribe(pcm).getOrElse { return fail(codeOf(it)) }
-            if (cancelled) return
+            if (cancelled || !currentCoroutineContext().isActive) return // F2
 
             val command = DesktopVoiceCommandParser.parse(heard, safePlaylistNames())
             val outcome = execute(command)

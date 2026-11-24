@@ -1812,3 +1812,8 @@ Push, run the Windows workflow (Gate B), send the raw log with the F prompt.
 - Error: `DesktopApp.kt:2296:9 Unresolved reference 'openLibraryItem'`. Cause: `runPlaylistAction` (U2) called the local function `openLibraryItem` before its declaration; Kotlin local functions cannot be used ahead of where they are declared.
 - Fix: moved `runPlaylistAction` to directly after `openLibraryItem` (no code change). Same-file uses at the `::openLibraryItem` references are after both.
 - Only this error was in the log (the rest were warnings). Later errors may appear once this one is out of the way: send the next raw log.
+
+## UI F2: voice test failure after CI run 2 (NOT compiled)
+- Run 2: compile OK, 1146 of 1147 tests pass. Failing: `DesktopVoiceControllerTest.stopAbandonsARunningSessionAndDropsEverything` (line 559: state not Idle after `stop()`, release, 80 ms).
+- Cause (read from `runSession`): `stop()` calls `forceIdle`, which sets `cancelled = true` and then `reset()` sets it back to false at once. A session still inside the blocking `record(...)` then passes `if (cancelled) return` and sets `Thinking`. Timing decides whether the cancelled job is stopped first, so it is flaky.
+- Fix (voice engine, outside the UI round's scope; smallest change, owner asked for a green build): the two `if (cancelled) return` checks after record and after transcribe also return when the coroutine is no longer active (`currentCoroutineContext().isActive`). Import added. No behaviour change for a normal session.
