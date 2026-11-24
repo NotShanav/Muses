@@ -1807,3 +1807,8 @@ NOT compiled, tests NOT run. Brace and paren counts of `DesktopApp.kt` unchanged
 
 ### Exact next step
 Push, run the Windows workflow (Gate B), send the raw log with the F prompt.
+
+## UI F1: compile fix after CI run 1 (NOT compiled)
+- Error: `DesktopApp.kt:2296:9 Unresolved reference 'openLibraryItem'`. Cause: `runPlaylistAction` (U2) called the local function `openLibraryItem` before its declaration; Kotlin local functions cannot be used ahead of where they are declared.
+- Fix: moved `runPlaylistAction` to directly after `openLibraryItem` (no code change). Same-file uses at the `::openLibraryItem` references are after both.
+- Only this error was in the log (the rest were warnings). Later errors may appear once this one is out of the way: send the next raw log.

@@ -2289,13 +2289,6 @@ fun BitChordDesktopApp() {
         return item.videoId == null && (id.startsWith(LOCAL_PLAYLIST_PREFIX) || browseTypeOf(id) == BrowseType.PLAYLIST)
     }
 
-    /** UI U2 hook: opens the playlist and runs [action] on it once its songs have arrived. */
-    fun runPlaylistAction(item: ShelfItem, action: DesktopPlaylistAction) {
-        val id = item.browseId ?: return
-        pendingPlaylistAction = id to action
-        openLibraryItem(item)
-    }
-
     fun openLibraryItem(item: ShelfItem) {
         val browseId = item.browseId.orEmpty()
         when {
@@ -2305,6 +2298,13 @@ fun BitChordDesktopApp() {
                 playlists.firstOrNull { it.id == browseId.removePrefix(LOCAL_PLAYLIST_PREFIX) }?.let(::openPlaylist)
             else -> openShelfItem(item)
         }
+    }
+
+    /** UI U2 hook: opens the playlist and runs [action] on it once its songs have arrived. */
+    fun runPlaylistAction(item: ShelfItem, action: DesktopPlaylistAction) {
+        val id = item.browseId ?: return
+        pendingPlaylistAction = id to action
+        openLibraryItem(item)
     }
 
     // UI U2 hook: runs the playlist menu's action when the opened page is the one it was asked on.
