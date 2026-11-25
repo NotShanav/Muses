@@ -378,10 +378,11 @@ audio.addEventListener('error', () => {
     // One automatic retry: the same URL makes the server resolve a fresh stream. Keep the position.
     retriedFor = track;
     const at = audio.currentTime || 0;
+    const wasPlaying = !audio.paused;
     startAt = at > 1 ? at : 0;
     audio.src = srcFor(track.videoId);
     if (audio.load) audio.load();
-    play();
+    if (wasPlaying) play();
     return;
   }
   failStreak += 1;

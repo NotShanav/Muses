@@ -44,7 +44,7 @@ export function errorBox(err, retry) {
 export async function renderAsync(ctx, title, fetcher, build, silent = false) {
   const { main } = ctx;
   if (!silent) {
-    main.replaceChildren(h('h1', { text: title }), h('p', { class: 'muted', role: 'status', text: 'Loading…' }));
+    main.replaceChildren(h('h1', { text: title }), h('div', { class: 'skel', role: 'status', 'aria-label': 'Loading' }, Array.from({ length: 8 }, () => h('i'))));
   }
   try {
     const data = await fetcher();

@@ -32,6 +32,7 @@ function updateAvatar() {
 
 function onRoute(name, route) {
   document.body.dataset.route = name;
+  setTint(player.details ? player.details.palette : null); // Now playing gets the album backdrop
   const section = name === 'playlist' ? 'library' : name;
   document.querySelectorAll('.nav a').forEach((a) => {
     if (a.dataset.route === section) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current');
@@ -60,6 +61,21 @@ bus.addEventListener('authstate', updateAvatar);
 bus.addEventListener('authchange', updateAvatar);
 player.on('details', () => setTint(player.details ? player.details.palette : null));
 player.on('error', (e) => toast(e.detail));
+
+// Keyboard: Space play/pause, N next, P previous, M mute, Shift+Left/Right seek 10 s, / search.
+document.addEventListener('keydown', (e) => {
+  if (e.defaultPrevented || e.ctrlKey || e.metaKey || e.altKey || document.querySelector('dialog[open]')) return;
+  const t = e.target;
+  if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))) return;
+  const k = e.key.toLowerCase();
+  if (e.key === '/') { e.preventDefault(); focusSearch(); }
+  else if (e.code === 'Space' && !(t && /^(BUTTON|A|SUMMARY)$/.test(t.tagName))) { e.preventDefault(); player.toggle(); }
+  else if (k === 'n') player.next();
+  else if (k === 'p') player.prev();
+  else if (k === 'm') player.toggleMute();
+  else if (e.shiftKey && e.key === 'ArrowRight') player.seekBy(10);
+  else if (e.shiftKey && e.key === 'ArrowLeft') player.seekBy(-10);
+});
 
 startRouter({ main, onRoute });
 startEvents();

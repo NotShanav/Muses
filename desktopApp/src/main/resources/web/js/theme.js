@@ -39,6 +39,7 @@ function apply() {
 }
 
 // --- Album tint: a static gradient on one of two fixed layers; changing it cross-fades opacity only.
+const FALLBACK = ['#3b3560', '#1a1822'];
 let palette = null;
 let shown = '';
 let front = 0;
@@ -46,7 +47,9 @@ let front = 0;
 function renderTint() {
   const layers = document.querySelectorAll('#tint i');
   if (layers.length < 2) return;
-  const gradient = getTheme() === 'tint' ? tintGradient(palette) : null;
+  const onNow = !!document.body && document.body.dataset.route === 'now';
+  const gradient = onNow ? tintGradient(palette) || tintGradient(FALLBACK) : getTheme() === 'tint' ? tintGradient(palette) : null;
+  root.classList.toggle('has-tint', !!gradient && onNow); // light text over the backdrop on Now playing
   if (!gradient) {
     shown = '';
     layers.forEach((l) => l.classList.remove('on'));

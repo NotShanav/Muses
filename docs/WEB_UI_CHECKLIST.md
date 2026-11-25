@@ -111,3 +111,11 @@ Optional logic tests (Node 22+, no browser): `node desktopApp/web-tests/util.tes
 - [ ] Performance recording of 30 s with nothing playing and no panel open: no timers, no animation frames, no network except the 20 s event keep-alive. After a voice request, the panel hides itself within about 30 s and nothing keeps running afterwards.
 - [ ] While a song plays on Home with the tab hidden: no `requestAnimationFrame`, no UI updates (only the audio element, the 10 s resume write and the warm-up near the end).
 - [ ] Task Manager: note memory and power of the browser tab plus the desktop process in `--web` mode against the desktop window mode, for the next round.
+
+## 16. WEB5 (player bar, immersive Now playing)
+- Desktop (>= 1024 px): bar shows cover, previous/play/next, seek with times, mute and volume; click the cover to open Now playing.
+- Now playing >= 900 px: cover left, Queue and Lyrics tabs right; the Player tab is hidden. Below 900 px: three tabs.
+- Backdrop follows the cover colours on Now playing in every theme; text stays white; leaving the page restores the theme.
+- Queue: "Next up" header, current song scrolled into view, no flicker while titles fill in. Lyrics do not reload when the title arrives.
+- Keys: Space, N, P, M, Shift+Left/Right, `/`. They do nothing while typing or with a dialog open.
+- Skeleton shows while a page loads; covers fade in; toast sits above the bar; battery saver and reduced motion switch the fades off.

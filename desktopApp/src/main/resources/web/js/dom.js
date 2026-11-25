@@ -56,7 +56,10 @@ export function setIcon(button, name) {
 export function img(url, px, cls = 'art') {
   if (!url) return h('span', { class: cls + ' ph', 'aria-hidden': 'true' });
   const ratio = Math.min(window.devicePixelRatio || 1, 2);
-  const el = h('img', { class: cls, width: px, height: px, alt: '', loading: 'lazy', decoding: 'async' });
+  const el = h('img', { class: cls + ' lz', width: px, height: px, alt: '', loading: 'lazy', decoding: 'async' });
+  const done = () => el.classList.add('ld');
+  el.addEventListener('load', done);
+  el.addEventListener('error', done);
   el.src = artSrc(url, Math.round(px * ratio));
   return el;
 }

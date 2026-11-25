@@ -54,15 +54,25 @@
   <a href="#/settings" data-route="settings" class="rail-only"><svg class="ic" aria-hidden="true"><use href="#i-settings"/></svg><span>Settings</span></a>
 </nav>
 <main id="main" tabindex="-1"><p class="muted">Loading…</p></main>
-<section class="mini glass" id="mini" aria-label="Mini player" hidden>
+<section class="mini glass" id="mini" aria-label="Player" hidden>
   <div class="bar" aria-hidden="true"><i id="mini-fill"></i></div>
   <div class="mini-row">
     <a class="mini-main" href="#/now" aria-label="Open now playing">
       <img id="mini-art" class="art" width="44" height="44" alt="" decoding="async">
       <span class="rt"><span class="t" id="mini-title"></span><span class="s" id="mini-artist"></span></span>
     </a>
-    <button id="mini-toggle" class="icon-btn" type="button" aria-label="Play"><svg class="ic" aria-hidden="true"><use href="#i-play"/></svg></button>
-    <button id="mini-next" class="icon-btn" type="button" aria-label="Next"><svg class="ic" aria-hidden="true"><use href="#i-next"/></svg></button>
+    <div class="mini-center">
+      <div class="mini-ctl">
+        <button id="mini-prev" class="icon-btn only-wide" type="button" aria-label="Previous"><svg class="ic" aria-hidden="true"><use href="#i-prev"/></svg></button>
+        <button id="mini-toggle" class="icon-btn" type="button" aria-label="Play"><svg class="ic" aria-hidden="true"><use href="#i-play"/></svg></button>
+        <button id="mini-next" class="icon-btn" type="button" aria-label="Next"><svg class="ic" aria-hidden="true"><use href="#i-next"/></svg></button>
+      </div>
+      <div class="mini-scrub only-wide"><span id="mini-cur" class="dur">0:00</span><input id="mini-seek" class="seek" type="range" min="0" max="1000" step="1" value="0" aria-label="Seek"><span id="mini-dur" class="dur">0:00</span></div>
+    </div>
+    <div class="mini-right only-wide" id="mini-right">
+      <button id="mini-mute" class="icon-btn" type="button" aria-label="Mute"><svg class="ic" aria-hidden="true"><use href="#i-volume"/></svg></button>
+      <input id="mini-vol" class="seek" type="range" min="0" max="100" step="1" value="100" aria-label="Volume">
+    </div>
   </div>
 </section>
 <div id="toast" role="status" aria-live="polite"></div>

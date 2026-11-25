@@ -23,7 +23,7 @@ export function render(ctx) {
   const artEl = h('img', { class: 'np-art', width: 360, height: 360, alt: '', decoding: 'async' });
   const titleEl = h('h2', { class: 'np-title' });
   const artistEl = h('p', { class: 'np-artist muted' });
-  const seek = h('input', { type: 'range', min: 0, max: 1000, step: 1, value: 0, 'aria-label': 'Seek' });
+  const seek = h('input', { class: 'seek', type: 'range', min: 0, max: 1000, step: 1, value: 0, 'aria-label': 'Seek' });
   const curEl = h('span', { text: '0:00' });
   const durEl = h('span', { text: '0:00' });
   const btn = (label, name, fn, cls = 'icon-btn') => h('button', { class: cls, type: 'button', 'aria-label': label, onclick: fn }, icon(name));
@@ -33,7 +33,7 @@ export function render(ctx) {
   const likeBtn = btn('Like', 'heart', onLike);
   const micBtn = h('button', { class: 'icon-btn big mic', type: 'button', 'aria-label': 'Speak a command', 'aria-pressed': 'false' }, icon('mic'));
   const muteBtn = btn('Mute', 'volume', () => player.toggleMute());
-  const volEl = h('input', { class: 'vol', type: 'range', min: 0, max: 100, step: 1, value: 100, 'aria-label': 'Volume' });
+  const volEl = h('input', { class: 'vol seek', type: 'range', min: 0, max: 100, step: 1, value: 100, 'aria-label': 'Volume' });
   const volRow = h('div', { class: 'transport vol-row', hidden: !player.volumeSettable }, muteBtn, volEl);
   const lyricsBox = h('div', { class: 'lyr', tabindex: '0', 'aria-label': 'Lyrics' });
   const queueBox = h('ul', { class: 'tracks' });
@@ -69,7 +69,9 @@ export function render(ctx) {
   main.replaceChildren(h('h1', { class: 'sr-only', text: 'Now playing' }), empty, content);
 
   // ---- tabs ------------------------------------------------------------------------------------
+  const wide = matchMedia('(min-width: 900px)'); // wide screens: the player is always on the left
   function selectTab(name) {
+    if (name === 'player' && wide.matches) name = 'queue';
     tab = name;
     for (const key of Object.keys(panels)) {
       panels[key].hidden = key !== name;
@@ -100,9 +102,10 @@ export function render(ctx) {
     syncDetails();
     syncState();
     syncTime();
-    lyr = { id: null, state: 'idle', synced: null, plain: null, active: -2 };
+    // The title arrives in a second 'track' event for the same song: keep the lyrics, only reset on a new song.
+    if (lyr.id !== t.videoId) lyr = { id: null, state: 'idle', synced: null, plain: null, active: -2 };
     if (tab === 'lyrics') ensureLyrics();
-    if (tab === 'queue') buildQueue();
+    if (tab === 'queue') scheduleQueue();
     syncLoop();
   }
 
@@ -133,6 +136,7 @@ export function render(ctx) {
     const d = player.duration;
     const t = player.time;
     seek.value = d ? Math.round((t / d) * 1000) : 0;
+    seek.style.setProperty('--p', (d ? Math.min(100, (t / d) * 100) : 0).toFixed(2) + '%');
     curEl.textContent = fmtTime(t);
     durEl.textContent = fmtTime(d);
     seek.setAttribute('aria-valuetext', fmtTime(t) + ' of ' + fmtTime(d));
@@ -141,6 +145,7 @@ export function render(ctx) {
 
   seek.addEventListener('input', () => {
     dragging = true;
+    seek.style.setProperty('--p', Number(seek.value) / 10 + '%');
     curEl.textContent = fmtTime((Number(seek.value) / 1000) * player.duration);
   });
   seek.addEventListener('change', () => {
@@ -158,6 +163,7 @@ export function render(ctx) {
   function syncVolume() {
     const muted = player.muted;
     volEl.value = muted ? 0 : Math.round(player.volume * 100);
+    volEl.style.setProperty('--p', volEl.value + '%');
     setIcon(muteBtn, muted || player.volume === 0 ? 'mute' : 'volume');
     muteBtn.setAttribute('aria-pressed', String(muted));
     muteBtn.setAttribute('aria-label', muted ? 'Unmute' : 'Mute');
@@ -165,11 +171,23 @@ export function render(ctx) {
   volEl.addEventListener('input', () => player.setVolume(Number(volEl.value) / 100));
 
   // ---- queue -----------------------------------------------------------------------------------
+  let qRaf = 0;
+  let lastQ = -1;
+  function scheduleQueue() { // one rebuild per frame: names arriving one by one no longer make the list flicker
+    if (!qRaf) qRaf = requestAnimationFrame(() => { qRaf = 0; if (tab === 'queue') buildQueue(); });
+  }
   function buildQueue() {
-    queueBox.replaceChildren(...player.queue.map((t, i) => h('li', { class: 'row' + (i === player.index ? ' cur' : '') },
-      h('button', { class: 'row-main', type: 'button', onclick: () => player.jumpTo(i) },
-        img(t.art, 44, 'art'),
-        h('span', { class: 'rt' }, h('span', { class: 't', text: t.title || 'Song' }), h('span', { class: 's', text: t.artists || '' }))))));
+    const rows = [];
+    player.queue.forEach((t, i) => {
+      if (i === player.index + 1) rows.push(h('li', { class: 'qh', text: 'Next up' }));
+      rows.push(h('li', { class: 'row' + (i === player.index ? ' cur' : '') },
+        h('button', { class: 'row-main', type: 'button', onclick: () => player.jumpTo(i) },
+          img(t.art, 44, 'art'),
+          h('span', { class: 'rt' }, h('span', { class: 't', text: t.title || 'Song' }), h('span', { class: 's', text: t.artists || '' })))));
+    });
+    queueBox.replaceChildren(...rows);
+    const cur = queueBox.querySelector('.cur');
+    if (cur && lastQ !== player.index) { lastQ = player.index; cur.scrollIntoView({ block: 'nearest' }); }
     player.hydrateQueue(8); // names for tracks restored from ids only
   }
 
@@ -247,11 +265,14 @@ export function render(ctx) {
     player.on('details', syncDetails),
     player.on('state', syncState),
     player.on('time', syncTime),
-    player.on('queue', () => { if (tab === 'queue') buildQueue(); }),
+    player.on('queue', scheduleQueue),
     player.on('volume', syncVolume),
     attachMic(micBtn),
   ];
   document.addEventListener('visibilitychange', syncLoop);
+  const onWide = () => selectTab(tab);
+  wide.addEventListener('change', onWide);
+  offs.push(() => wide.removeEventListener('change', onWide));
   selectTab('player');
   syncTrack();
   syncVolume();

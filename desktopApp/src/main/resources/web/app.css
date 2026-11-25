@@ -193,3 +193,75 @@ html[data-theme="tint"] #tint { display: block; }
 details.about { margin: 0 0 20px; }
 details.about summary { min-height: 44px; display: flex; align-items: center; cursor: pointer; font-weight: 600; }
 .mono { font-family: ui-monospace, Consolas, monospace; font-size: .9rem; }
+
+/* ---- WEB5: immersive Now playing, desktop player bar, custom sliders, skeletons, fixes ------------------ */
+:root { --line2: rgba(128, 128, 140, .35); }
+@media (min-width: 1024px) { :root { --mini: 76px; } }
+html.has-tint #tint { display: block; }
+html.has-tint body[data-route="now"] { --fg: #fff; --muted: rgba(255, 255, 255, .72); --line: rgba(255, 255, 255, .16); --line2: rgba(255, 255, 255, .28); --surface: rgba(255, 255, 255, .08); --surface2: rgba(255, 255, 255, .14); --bar: rgba(0, 0, 0, .4); --glass: rgba(0, 0, 0, .28); --accent: #fff; --accent-fg: #111; color: var(--fg); }
+html.has-tint body[data-route="now"] :is(dialog.menu, #toast, .voice-panel, #sugg) { --surface: #22222b; --surface2: #2d2d38; --fg: #fff; --muted: #b4b4c0; --line: #3a3a46; }
+
+/* sliders: one look for seek and volume; the thumb shows on hover, focus and touch */
+.seek { -webkit-appearance: none; appearance: none; width: 100%; height: 44px; margin: 0; background: none; cursor: pointer; --p: 0%; }
+.seek::-webkit-slider-runnable-track { height: 4px; border-radius: 2px; background: linear-gradient(to right, var(--fg) var(--p), var(--line2) var(--p)); }
+.seek::-moz-range-track { height: 4px; border-radius: 2px; background: var(--line2); }
+.seek::-moz-range-progress { height: 4px; border-radius: 2px; background: var(--fg); }
+.seek::-webkit-slider-thumb { -webkit-appearance: none; width: 12px; height: 12px; margin-top: -4px; border: 0; border-radius: 50%; background: var(--fg); transform: scale(0); }
+.seek::-moz-range-thumb { width: 12px; height: 12px; border: 0; border-radius: 50%; background: var(--fg); transform: scale(0); }
+.seek:hover::-webkit-slider-thumb, .seek:focus-visible::-webkit-slider-thumb, .seek:active::-webkit-slider-thumb { transform: scale(1); }
+.seek:hover::-moz-range-thumb, .seek:focus-visible::-moz-range-thumb, .seek:active::-moz-range-thumb { transform: scale(1); }
+@media (hover: none) { .seek::-webkit-slider-thumb { transform: scale(1); } .seek::-moz-range-thumb { transform: scale(1); } }
+.seek:focus-visible { outline-offset: -2px; }
+
+/* loading skeleton, covers fading in, no content-visibility on shelves (it made sections pop in and the scrollbar jump) */
+.skel { display: grid; grid-template-columns: repeat(auto-fill, minmax(148px, 1fr)); gap: 16px; margin-top: 8px; }
+.skel i { aspect-ratio: 1; border-radius: 8px; background: var(--surface2); }
+.sec, .card { content-visibility: visible; }
+.lz:not(.ld) { opacity: 0; }
+.qh { list-style: none; padding: 14px 8px 4px; font-size: .85rem; font-weight: 600; color: var(--muted); }
+@media (hover: hover) { .shelf { scrollbar-width: thin; } }
+#toast { bottom: calc(var(--nav) + var(--sab) + 16px); }
+body.has-mini #toast { bottom: calc(var(--nav) + var(--mini) + var(--sab) + 16px); }
+body[data-route="now"].has-mini #toast { bottom: calc(var(--nav) + var(--sab) + 16px); }
+@media (min-width: 1024px) {
+  #toast, body[data-route="now"].has-mini #toast { bottom: 16px; }
+  body.has-mini #toast { bottom: calc(var(--mini) + 16px); }
+}
+
+/* player bar: phones show cover, title, play and next; desktop adds previous, seek and volume */
+.only-wide { display: none; }
+.mini-center, .mini-ctl { display: flex; align-items: center; }
+@media (min-width: 1024px) {
+  .mini-row { display: grid; grid-template-columns: minmax(200px, 1fr) minmax(320px, 540px) minmax(180px, 1fr); gap: 16px; min-height: var(--mini); padding: 0 20px; }
+  .mini .bar { display: none; }
+  .mini-center { flex-direction: column; align-items: stretch; }
+  .mini-ctl { justify-content: center; gap: 8px; }
+  .mini-ctl .only-wide.icon-btn { display: inline-grid; }
+  .mini-scrub.only-wide { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 8px; margin-top: -10px; }
+  .mini-scrub .seek { height: 20px; }
+  .mini-right.only-wide { display: flex; align-items: center; justify-content: flex-end; gap: 4px; }
+  .mini-right .seek { width: 110px; }
+  .mini-right.off { display: none !important; }
+}
+
+/* Now playing: art on the left, Queue and Lyrics on the right (wide); one column with tabs on phones */
+.np-art { box-shadow: 0 16px 44px rgba(0, 0, 0, .4); }
+.ln { text-align: left; font-weight: 700; }
+@media (min-width: 900px) {
+  .np { display: grid; grid-template-columns: minmax(280px, 440px) minmax(0, 1fr); grid-template-areas: "player tabs" "player body"; grid-template-rows: auto 1fr; column-gap: 56px; align-items: start; padding-top: 8px; }
+  .np-tabs { grid-area: tabs; }
+  .np-tabs [aria-controls="np-player"] { display: none; }
+  #np-player { grid-area: player; display: block; max-width: none; margin: 0; }
+  #np-lyrics, #np-queue { grid-area: body; max-width: none; margin: 0; }
+  #np-queue { max-height: calc(100dvh - 190px); overflow-y: auto; }
+  .lyr { max-height: calc(100dvh - 190px); }
+  .np-art { width: 100%; margin: 0 0 20px; border-radius: 12px; }
+  .np-title, .np-artist { text-align: left; }
+  .ln { font-size: 1.9rem; line-height: 1.25; }
+}
+@media (prefers-reduced-motion: no-preference) {
+  html:not([data-saver]) .lz { transition: opacity .25s ease; }
+  html:not([data-saver]) .skel i { animation: skel 1.2s ease-in-out infinite alternate; }
+  html:not([data-saver]) .ln { transition: opacity .25s ease; }
+  @keyframes skel { from { opacity: .4; } to { opacity: .8; } }
+}
