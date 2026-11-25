@@ -68,6 +68,8 @@ internal object DesktopEdgePanel {
     private var slide: EdgeSlide? = null
     private var slideTimer: Timer? = null
     private var slideDeadlineMs = 0L
+    private var awaitingSettle = false // REVEAL FIX hook: opening from off screen, window not yet stable
+    private var settleTicks = 0
     private var watcher: DesktopEdgeWatcher? = null
     private var keyDispatcher: KeyEventDispatcher? = null
     private var focusListener: WindowFocusListener? = null
@@ -435,6 +437,7 @@ internal object DesktopEdgePanel {
     private fun beginSlide(opening: Boolean) {
         val w = window ?: return
         val cfg = config.value.coerced()
+        val slideWasParked = opening && parked // REVEAL FIX hook
         if (opening && parked) {
             // From off screen: choose the monitor now (the cursor's, the primary, or the picked one).
             val monitor = pendingMonitor
@@ -470,6 +473,8 @@ internal object DesktopEdgePanel {
             reduceAnimation = snap,
         )
         slideDeadlineMs = now + SHOW_WAIT_MS
+        awaitingSettle = opening && (parked || !w.isShowing || slideWasParked) // REVEAL FIX hook
+        settleTicks = 0
         startTimer(w)
         stepSlide() // the first frame at once; a snap finishes right here
     }
@@ -502,21 +507,67 @@ internal object DesktopEdgePanel {
         val now = clock.nowMs()
         // The window may not be on screen yet (the Compose `visible` flag lands a frame later):
         // keep the slide at its start until it is, for at most SHOW_WAIT_MS.
-        if (!w.isShowing && now < slideDeadlineMs && s.durationMs > 0L) {
-            slide = s.copy(startMs = now)
-            return
+        // REVEAL FIX hook: while waiting, the window is held OFF SCREEN at its final size. Before,
+        // it stayed wherever Windows put the freshly shown window (on screen, wrong size) and was
+        // only corrected after the slide ended, which was the visible jump.
+        if (s.durationMs > 0L && now < slideDeadlineMs) {
+            if (!w.isShowing) {
+                holdOffscreen(w, l)
+                slide = s.copy(fromX = if (s.opening) l.hiddenX else s.fromX, startMs = now)
+                return
+            }
+            if (awaitingSettle) {
+                settleTicks = if (holdOffscreen(w, l)) settleTicks + 1 else 0
+                if (settleTicks < SETTLE_TICKS) {
+                    slide = s.copy(fromX = l.hiddenX, startMs = now)
+                    return
+                }
+            }
         }
-        val x = s.xAt(now)
+        if (awaitingSettle) {
+            awaitingSettle = false
+            if (s.fromX != l.hiddenX && s.opening) slide = s.copy(fromX = l.hiddenX, startMs = now)
+        }
+        val s2 = slide ?: return
+        val x = s2.xAt(now)
         if (w.x != x) w.setLocation(x, l.open.y)
-        if (s.isFinished(now)) {
+        if (s2.isFinished(now)) {
             stopTimer()
             slide = null
-            val rest = if (s.opening) l.open else l.hidden
-            w.setBounds(rest.x, rest.y, rest.width, rest.height) // asserts the size, too
+            val rest = if (s2.opening) l.open else l.hidden
+            // REVEAL FIX hook: the size was already right before the slide began, so only the place
+            // is set here; settleSize re-asserts the size only if it really drifted.
+            if (w.x != rest.x || w.y != rest.y) w.setLocation(rest.x, rest.y)
             settleSize(w, rest) // UI U5 hook
-            machine.onSlideFinished(opening = s.opening)
-            if (s.opening) grantFocus(w)
+            machine.onSlideFinished(opening = s2.opening)
+            if (s2.opening) grantFocus(w)
         }
+    }
+
+    /**
+     * REVEAL FIX: puts the window at its hidden (off screen) rectangle and reports whether it was
+     * ALREADY there with Compose's content the same size as the window. False means "changed
+     * something, check again next frame"; the slide starts after SETTLE_TICKS true answers in a row.
+     */
+    private fun holdOffscreen(w: Window, l: EdgeLayout): Boolean {
+        val h = l.hidden
+        val b = w.bounds
+        var ok = true
+        if (b.x != h.x || b.y != h.y || kotlin.math.abs(b.width - h.width) > 1 || kotlin.math.abs(b.height - h.height) > 1) {
+            w.setBounds(h.x, h.y, h.width, h.height)
+            ok = false
+        }
+        val content = (w as? javax.swing.RootPaneContainer)?.contentPane
+        if (content != null) {
+            val ins = w.insets
+            val cw = w.width - ins.left - ins.right
+            val ch = w.height - ins.top - ins.bottom
+            if (kotlin.math.abs(content.width - cw) > 1 || kotlin.math.abs(content.height - ch) > 1) {
+                runCatching { w.invalidate(); w.validate() }
+                ok = false
+            }
+        }
+        return ok
     }
 
     private fun park() {
@@ -582,7 +633,8 @@ internal object DesktopEdgePanel {
     }
 
     private const val WARMUP_MS = 250L
-    private const val SHOW_WAIT_MS = 300L
+    private const val SHOW_WAIT_MS = 450L
+    private const val SETTLE_TICKS = 3 // REVEAL FIX hook
     private const val MAXIMIZE_WAIT_STEPS = 30
     private const val MAXIMIZE_WAIT_MS = 30L
     private const val DEFAULT_WINDOW_WIDTH_DP = 1_220
