@@ -119,3 +119,22 @@ Optional logic tests (Node 22+, no browser): `node desktopApp/web-tests/util.tes
 - Queue: "Next up" header, current song scrolled into view, no flicker while titles fill in. Lyrics do not reload when the title arrives.
 - Keys: Space, N, P, M, Shift+Left/Right, `/`. They do nothing while typing or with a dialog open.
 - Skeleton shows while a page loads; covers fade in; toast sits above the bar; battery saver and reduced motion switch the fades off.
+
+## 16. Fixes in 5.0.1 (tick after the build)
+- [ ] Home shows the shelves (Recents, mixes, ...) and never the text `[object HTMLElement]`; same for Search results and Library (no stray "null").
+- [ ] Type in the search box on a wide window: the suggestion list is fully visible, not cut off by the left rail.
+- [ ] Full screen button (top bar, left of the account dot) and the F key toggle full screen; Esc leaves it; the icon and label follow the state. Hidden on iPhone Safari.
+- [ ] With full screen on (button or F11), Home, Library and Now playing fill the screen without a sideways scrollbar; on a 1920 px screen the page uses up to about 1480 px.
+- [ ] Installed as an app (Chrome: Install Muses), it opens in its own window without a browser tab bar; the full screen button still works there.
+
+## 17. WEB 5.0.2 (Now playing like the reference, full screen) (tick after the build)
+- [ ] Wide window (>= 900 px): square cover on the left (about 390 px, tiny corner radius, centred vertically). Right: small bold "Playing from Queue", big bold title, muted artist, and at the right of that row a round heart and a round "more" button. Heart toggles like; "more" opens a menu (Like, Add to playlist, Show lyrics, Show queue).
+- [ ] Under the title one line shows the current lyric with a small chevron; it changes with the song and a click opens the Lyrics view. It is hidden for songs without time-synced lyrics.
+- [ ] Seek bar has the elapsed time left-below and the remaining time (`-2:47`) right-below; dragging updates both. Previous, play/pause and next are large white glyphs without a filled circle; shuffle and repeat are small beside them.
+- [ ] Volume row: small speaker at both ends (left one mutes); it is hidden where the browser cannot set the volume (iPhone).
+- [ ] Bottom row: lyrics button (left, with the microphone), centred two-part pill (headphones, account) with "This browser" under it, queue button (right). Lyrics and Queue replace the middle of the right column; the same button again returns; seek and transport stay visible. The account part opens Settings.
+- [ ] Backdrop keeps the album tint with a soft dark edge; all text is white.
+- [ ] Full screen (button or F) on Now playing: no top bar, rail or player bar; layout centred, cover larger; a small "exit full screen" button top right. After 3 s without mouse or key activity the cursor, the bottom row and that button fade out; moving the mouse or pressing a key brings them back. Esc leaves full screen. Switching tab stops the timer (DevTools Performance: no timers while hidden).
+- [ ] Phone width (< 900 px): single column with the Player / Lyrics / Queue tabs; nothing scrolls sideways at 360 px; the bottom row shows only the microphone and the pill.
+- [ ] Settings or Home in full screen are unchanged (the rules above are for Now playing only).
+

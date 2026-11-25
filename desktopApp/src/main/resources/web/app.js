@@ -10,6 +10,7 @@ import { initMini } from './js/mini.js';
 import { initMediaSession } from './js/mediasession.js';
 import { initVoice } from './js/voice.js';
 import { initPwa } from './js/pwa.js';
+import { initFullscreen, toggleFullscreen } from './js/fullscreen.js';
 import { describeError, toast } from './js/ui.js';
 
 const main = document.getElementById('main');
@@ -56,13 +57,14 @@ initMini();
 initMediaSession();
 initVoice();
 initPwa();
+initFullscreen();
 document.querySelector('.nav a[data-route="search"]').addEventListener('click', () => focusSearch());
 bus.addEventListener('authstate', updateAvatar);
 bus.addEventListener('authchange', updateAvatar);
 player.on('details', () => setTint(player.details ? player.details.palette : null));
 player.on('error', (e) => toast(e.detail));
 
-// Keyboard: Space play/pause, N next, P previous, M mute, Shift+Left/Right seek 10 s, / search.
+// Keyboard: Space play/pause, N next, P previous, M mute, F full screen, Shift+Left/Right seek 10 s, / search.
 document.addEventListener('keydown', (e) => {
   if (e.defaultPrevented || e.ctrlKey || e.metaKey || e.altKey || document.querySelector('dialog[open]')) return;
   const t = e.target;
@@ -73,6 +75,7 @@ document.addEventListener('keydown', (e) => {
   else if (k === 'n') player.next();
   else if (k === 'p') player.prev();
   else if (k === 'm') player.toggleMute();
+  else if (k === 'f' && !e.shiftKey) toggleFullscreen();
   else if (e.shiftKey && e.key === 'ArrowRight') player.seekBy(10);
   else if (e.shiftKey && e.key === 'ArrowLeft') player.seekBy(-10);
 });

@@ -3,7 +3,7 @@
 // the session cookie on every page load; the cache is only the fallback when the server is unreachable.
 // Bump VERSION on every change to the web UI: a new version installs in the background and the page
 // offers "Reload" (see js/pwa.js).
-const VERSION = 'muses-web-5.0.0';
+const VERSION = 'muses-web-5.0.2';
 const SHELL = [
   '/',
   '/app.css',
@@ -16,6 +16,7 @@ const SHELL = [
   '/js/boot.js',
   '/js/dom.js',
   '/js/events.js',
+  '/js/fullscreen.js',
   '/js/mediasession.js',
   '/js/mini.js',
   '/js/pages/home.js',

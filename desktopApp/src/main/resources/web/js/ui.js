@@ -1,6 +1,6 @@
 // ui.js - shared pieces: toast, error box, cards and shelves, track lists, the small menu dialog,
 // and renderAsync (loading -> content or error with "Try again").
-import { h, icon, img } from './dom.js';
+import { h, icon, img, nodes } from './dom.js';
 import { player } from './player.js';
 import { api, ApiError } from './api.js';
 import { toTrack, itemHref, fmtTime } from './util.js';
@@ -49,7 +49,7 @@ export async function renderAsync(ctx, title, fetcher, build, silent = false) {
   try {
     const data = await fetcher();
     if (ctx.signal.aborted) return;
-    main.replaceChildren(...[].concat(build(data)));
+    main.replaceChildren(...nodes(build(data))); // nodes(): pages return nested arrays and nulls
   } catch (e) {
     if (ctx.signal.aborted || (e && e.name === 'AbortError')) return;
     main.replaceChildren(h('h1', { text: title }), errorBox(e, () => renderAsync(ctx, title, fetcher, build)));

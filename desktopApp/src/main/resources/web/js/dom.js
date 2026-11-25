@@ -33,6 +33,15 @@ export function h(tag, attrs, ...kids) {
 
 export const clear = (el) => el.replaceChildren();
 
+/** Flattens any nesting of arrays into a plain list of Nodes (null/false dropped, other values become text).
+ *  Use it before replaceChildren(...): an array handed to replaceChildren is turned into the text
+ *  "[object HTMLElement],..." and null into "null". */
+export function nodes(value) {
+  return [value].flat(Infinity)
+    .filter((n) => n != null && n !== false)
+    .map((n) => (n instanceof Node ? n : document.createTextNode(String(n))));
+}
+
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
 /** An icon from the sprite in index.html (`#i-<name>`). */

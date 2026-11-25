@@ -1822,3 +1822,17 @@ Push, run the Windows workflow (Gate B), send the raw log with the F prompt.
 Changed under `desktopApp/src/main/resources/web/`: `index.html` (player bar markup), `app.css` (WEB5 block at the end), `app.js` (backdrop per route, keyboard keys), `js/mini.js` (rewritten: desktop bar), `js/theme.js` (backdrop on Now playing, fallback colours), `js/dom.js` (cover fade-in), `js/ui.js` (skeleton), `js/pages/now.js` (two-pane layout, seek/volume fill, queue and lyrics fixes), `js/player.js` (a failed restore no longer autoplays), `sw.js` (VERSION 5.0.0). `node --check` on every JS file and the three `web-tests` pass; the service-worker SHELL list covers every file.
 Bugs fixed: lyrics reloaded twice per song; queue rebuilt per name (flicker); toast offset when no player bar; sections popping in (content-visibility); plain "Loading..." jumps; no volume/seek outside Now playing; autoplay after a failed restore.
 Deferred: gapless playback (second Audio swap), shelf arrows, palette from the cover when `/api/track` has none, drag to reorder the queue.
+
+
+## WEB 5.0.1 (account A of 2): bug fixes and full screen switch
+Did: (1) `[object HTMLElement]` on Home/Search/Library: pages return nested arrays and nulls, and `replaceChildren` turned them into text; new `nodes()` in `js/dom.js` flattens, used by `renderAsync` in `js/ui.js`. (2) Search suggestions hidden behind the left rail: `.topbar` z-index 30 -> 35. (3) New `js/fullscreen.js` (button `#fs-btn`, F key, sets `html.fs`), sprite icons, roomier layout at 1500 px+, `sw.js` VERSION 5.0.1 and the new file in SHELL.
+Verified: node syntax check of every JS file only. Not run in a browser, not compiled.
+Deferred: Now playing redesign (see `HANDOVER_DELETE_ME.md` in the zip root).
+
+## WEB 5.0.2 (account B of 2): Now playing redesign + full screen layout
+Did (web files only; Kotlin, player.js logic and the desktop app untouched): `js/pages/now.js` restructured (cover; "Playing from"; title/artist with round like and more buttons; current lyric line that opens Lyrics; seek with elapsed and remaining time; large prev/play/next glyphs; volume row with speaker icons; bottom row with lyrics button + mic, output/account pill with device label, queue button), lyrics now load when a song starts (feeds the one-line lyric), the old "wide shows Queue instead of Player" remap removed; `app.css` end block "WEB 5.0.2" (wide grid, phone rules, vignette on `#tint::after`, full screen rules, idle fade); `index.html` five icons (chevron, lyrics, queue, headphones, volume-low); `sw.js` VERSION `muses-web-5.0.2`; `docs/WEB_UI_CHECKLIST.md` section 17.
+Full screen on `#/now`: top bar, rail and player bar hidden, body padding removed, exit button (only in API full screen, not F11). Idle: `mousemove`/`keydown` only, one 3 s timeout, class `np-idle` on `<html>` (hides cursor, bottom row, exit button), cleared on hidden tab, leaving full screen and leaving the page.
+Assumptions: the web player has no "source" or device name, so the text is always "Playing from Queue" and "This browser"; the output half of the pill only shows a toast. `HANDOVER_DELETE_ME.md` removed.
+Verified: node syntax check of now.js, CSS brace count. Not run in a browser, not compiled.
+Deferred: real source name ("Playing from <playlist>"), output device picker, lyrics fade between lines.
+

@@ -1,11 +1,13 @@
-// now.js - Now Playing: cover, title, scrubber, transport, like; tabs for Lyrics and Queue.
+// now.js - Now Playing (Apple-Music-like): cover left, title / like / more / current lyric line / seek / transport /
+// volume on the right, bottom row with Lyrics, output pill and Queue. Phones keep one column with tabs.
 // The lyrics highlight uses requestAnimationFrame ONLY while the Lyrics tab is shown, the song is
 // playing and the page is visible. Everything else updates from player events (max 4 per second).
 import { api } from '../api.js';
 import { player } from '../player.js';
 import { h, icon, setIcon, img } from '../dom.js';
 import { fmtTime, findLyricIndex, artSrc } from '../util.js';
-import { describeError, toast } from '../ui.js';
+import { describeError, toast, menuDialog, choosePlaylist } from '../ui.js';
+import { toggleFullscreen } from '../fullscreen.js';
 import { saverOn } from '../theme.js';
 import { attach as attachMic } from '../voice.js';
 
@@ -18,33 +20,42 @@ export function render(ctx) {
   let lyr = { id: null, state: 'idle', synced: null, plain: null, active: -2 };
   let lyrCtl = null;
   let shownArt = '';
+  let lineShown = null;
 
   // ---- structure -------------------------------------------------------------------------------
-  const artEl = h('img', { class: 'np-art', width: 360, height: 360, alt: '', decoding: 'async' });
+  const root = document.documentElement;
+  const DEVICE = 'This browser'; // the web page has no device name
+  const artEl = h('img', { class: 'np-art', width: 390, height: 390, alt: '', decoding: 'async' });
+  const fromEl = h('p', { class: 'np-from', text: 'Playing from Queue' });
   const titleEl = h('h2', { class: 'np-title' });
   const artistEl = h('p', { class: 'np-artist muted' });
   const seek = h('input', { class: 'seek', type: 'range', min: 0, max: 1000, step: 1, value: 0, 'aria-label': 'Seek' });
   const curEl = h('span', { text: '0:00' });
-  const durEl = h('span', { text: '0:00' });
+  const remEl = h('span', { text: '-0:00' });
   const btn = (label, name, fn, cls = 'icon-btn') => h('button', { class: cls, type: 'button', 'aria-label': label, onclick: fn }, icon(name));
   const shuffleBtn = btn('Shuffle', 'shuffle', () => player.toggleShuffle());
   const repeatBtn = btn('Repeat', 'repeat', () => player.cycleRepeat());
-  const playBtn = btn('Play', 'play', () => player.toggle(), 'icon-btn big');
-  const likeBtn = btn('Like', 'heart', onLike);
-  const micBtn = h('button', { class: 'icon-btn big mic', type: 'button', 'aria-label': 'Speak a command', 'aria-pressed': 'false' }, icon('mic'));
-  const muteBtn = btn('Mute', 'volume', () => player.toggleMute());
+  const prevBtn = btn('Previous', 'prev', () => player.prev(), 'icon-btn glyph');
+  const playBtn = btn('Play', 'play', () => player.toggle(), 'icon-btn glyph play');
+  const nextBtn = btn('Next', 'next', () => player.next(), 'icon-btn glyph');
+  const likeBtn = btn('Like', 'heart', onLike, 'icon-btn round');
+  const moreBtn = btn('More actions', 'more', onMore, 'icon-btn round');
+  const micBtn = h('button', { class: 'icon-btn mic', type: 'button', 'aria-label': 'Speak a command', 'aria-pressed': 'false' }, icon('mic'));
+  const muteBtn = btn('Mute', 'volume-low', () => player.toggleMute());
   const volEl = h('input', { class: 'vol seek', type: 'range', min: 0, max: 100, step: 1, value: 100, 'aria-label': 'Volume' });
-  const volRow = h('div', { class: 'transport vol-row', hidden: !player.volumeSettable }, muteBtn, volEl);
+  const volRow = h('div', { class: 'np-vol', hidden: !player.volumeSettable }, muteBtn, volEl, h('span', { class: 'vol-hi', 'aria-hidden': 'true' }, icon('volume')));
   const lyricsBox = h('div', { class: 'lyr', tabindex: '0', 'aria-label': 'Lyrics' });
   const queueBox = h('ul', { class: 'tracks' });
+  const lyricText = h('span', { class: 'np-lyric-t' });
+  const lyricLine = h('button', { class: 'np-lyric', type: 'button', hidden: true, 'aria-label': 'Open lyrics', onclick: () => selectTab('lyrics') }, lyricText, icon('chevron'));
+  const lyricsBtn = btn('Lyrics', 'lyrics', () => selectTab(tab === 'lyrics' ? 'player' : 'lyrics'), 'icon-btn np-lyrbtn');
+  const queueBtn = btn('Queue', 'queue', () => selectTab(tab === 'queue' ? 'player' : 'queue'), 'icon-btn np-queuebtn');
+  const outBtn = h('button', { class: 'seg', type: 'button', 'aria-label': 'Audio output: ' + DEVICE, onclick: () => toast('Playing on ' + DEVICE.toLowerCase()) }, icon('headphones'));
+  const acctBtn = h('a', { class: 'seg', href: '#/settings', 'aria-label': 'Account and settings' }, icon('user'));
+  const exitBtn = h('button', { class: 'icon-btn np-exit', type: 'button', 'aria-label': 'Exit full screen', title: 'Exit full screen (F)', onclick: toggleFullscreen }, icon('fullscreen-exit'));
 
   const panels = {
-    player: h('div', { class: 'np-panel', id: 'np-player', role: 'tabpanel' },
-      artEl, titleEl, artistEl,
-      h('div', { class: 'scrub' }, curEl, seek, durEl),
-      h('div', { class: 'transport' }, shuffleBtn, btn('Previous', 'prev', () => player.prev()), playBtn, btn('Next', 'next', () => player.next()), repeatBtn),
-      h('div', { class: 'transport' }, likeBtn, micBtn),
-      volRow),
+    player: h('div', { class: 'np-panel', id: 'np-player', role: 'tabpanel' }, lyricLine),
     lyrics: h('div', { class: 'np-panel', id: 'np-lyrics', role: 'tabpanel', hidden: true }, lyricsBox),
     queue: h('div', { class: 'np-panel', id: 'np-queue', role: 'tabpanel', hidden: true }, queueBox),
   };
@@ -63,16 +74,30 @@ export function render(ctx) {
     if (e.key === 'ArrowRight') { selectTab(names[(at + 1) % names.length]); tabBtns[tab].focus(); }
     if (e.key === 'ArrowLeft') { selectTab(names[(at + names.length - 1) % names.length]); tabBtns[tab].focus(); }
   });
-  const content = h('div', { class: 'np', hidden: true }, tablist, panels.player, panels.lyrics, panels.queue);
+  const info = h('div', { class: 'np-info' }, fromEl,
+    h('div', { class: 'np-head' }, h('div', { class: 'np-titles' }, titleEl, artistEl), h('div', { class: 'np-acts' }, likeBtn, moreBtn)));
+  const ctl = h('div', { class: 'np-ctl' },
+    h('div', { class: 'scrub' }, seek, h('div', { class: 'times' }, curEl, remEl)),
+    h('div', { class: 'transport main' }, shuffleBtn, prevBtn, playBtn, nextBtn, repeatBtn),
+    volRow);
+  const bottom = h('div', { class: 'np-bottom' },
+    h('div', { class: 'np-bl' }, lyricsBtn, micBtn),
+    h('div', { class: 'np-bc' }, h('div', { class: 'np-pill', role: 'group', 'aria-label': 'Output and account' }, outBtn, acctBtn), h('span', { class: 'np-device', text: DEVICE })),
+    h('div', { class: 'np-br' }, queueBtn));
+  const content = h('div', { class: 'np', hidden: true, 'data-tab': 'player' },
+    tablist, h('div', { class: 'np-cover' }, artEl),
+    h('div', { class: 'np-side' }, info, panels.player, panels.lyrics, panels.queue, ctl),
+    bottom);
   const empty = h('p', { class: 'muted' }, 'Nothing is playing yet. Pick a song from ',
     h('a', { href: '#/home', text: 'Home' }), ' or ', h('a', { href: '#/search', text: 'Search' }), '.');
-  main.replaceChildren(h('h1', { class: 'sr-only', text: 'Now playing' }), empty, content);
+  main.replaceChildren(h('h1', { class: 'sr-only', text: 'Now playing' }), empty, content, exitBtn);
 
   // ---- tabs ------------------------------------------------------------------------------------
-  const wide = matchMedia('(min-width: 900px)'); // wide screens: the player is always on the left
   function selectTab(name) {
-    if (name === 'player' && wide.matches) name = 'queue';
     tab = name;
+    content.dataset.tab = name; // CSS: phones show one view at a time; wide screens swap the middle of the right column
+    lyricsBtn.setAttribute('aria-pressed', String(name === 'lyrics'));
+    queueBtn.setAttribute('aria-pressed', String(name === 'queue'));
     for (const key of Object.keys(panels)) {
       panels[key].hidden = key !== name;
       tabBtns[key].setAttribute('aria-selected', String(key === name));
@@ -80,6 +105,7 @@ export function render(ctx) {
     }
     if (name === 'lyrics') ensureLyrics();
     if (name === 'queue') buildQueue();
+    syncLyricLine();
     syncLoop();
   }
 
@@ -103,8 +129,9 @@ export function render(ctx) {
     syncState();
     syncTime();
     // The title arrives in a second 'track' event for the same song: keep the lyrics, only reset on a new song.
-    if (lyr.id !== t.videoId) lyr = { id: null, state: 'idle', synced: null, plain: null, active: -2 };
-    if (tab === 'lyrics') ensureLyrics();
+    if (lyr.id !== t.videoId) { lyr = { id: null, state: 'idle', synced: null, plain: null, active: -2 }; lineShown = null; }
+    ensureLyrics(); // also feeds the one-line lyric under the title
+    syncLyricLine();
     if (tab === 'queue') scheduleQueue();
     syncLoop();
   }
@@ -138,15 +165,18 @@ export function render(ctx) {
     seek.value = d ? Math.round((t / d) * 1000) : 0;
     seek.style.setProperty('--p', (d ? Math.min(100, (t / d) * 100) : 0).toFixed(2) + '%');
     curEl.textContent = fmtTime(t);
-    durEl.textContent = fmtTime(d);
+    remEl.textContent = '-' + fmtTime(Math.max(0, d - t));
     seek.setAttribute('aria-valuetext', fmtTime(t) + ' of ' + fmtTime(d));
     if (tab === 'lyrics') highlight(false);
+    syncLyricLine();
   }
 
   seek.addEventListener('input', () => {
     dragging = true;
     seek.style.setProperty('--p', Number(seek.value) / 10 + '%');
-    curEl.textContent = fmtTime((Number(seek.value) / 1000) * player.duration);
+    const at = (Number(seek.value) / 1000) * player.duration;
+    curEl.textContent = fmtTime(at);
+    remEl.textContent = '-' + fmtTime(Math.max(0, player.duration - at));
   });
   seek.addEventListener('change', () => {
     player.seek((Number(seek.value) / 1000) * player.duration);
@@ -160,11 +190,23 @@ export function render(ctx) {
     likeBtn.disabled = false;
   }
 
+  function onMore() {
+    const t = player.current;
+    if (!t) return;
+    const liked = !!(player.details && player.details.liked);
+    menuDialog(t.title || 'Song', [
+      { label: liked ? 'Remove like' : 'Like', run: onLike },
+      { label: 'Add to playlist…', run: () => choosePlaylist(t.videoId) },
+      { label: 'Show lyrics', run: () => selectTab('lyrics') },
+      { label: 'Show queue', run: () => selectTab('queue') },
+    ]);
+  }
+
   function syncVolume() {
     const muted = player.muted;
     volEl.value = muted ? 0 : Math.round(player.volume * 100);
     volEl.style.setProperty('--p', volEl.value + '%');
-    setIcon(muteBtn, muted || player.volume === 0 ? 'mute' : 'volume');
+    setIcon(muteBtn, muted || player.volume === 0 ? 'mute' : 'volume-low');
     muteBtn.setAttribute('aria-pressed', String(muted));
     muteBtn.setAttribute('aria-label', muted ? 'Unmute' : 'Mute');
   }
@@ -210,9 +252,11 @@ export function render(ctx) {
       if (lyr !== mine || (e && e.name === 'AbortError')) return;
       mine.state = 'error';
       lyricsBox.replaceChildren(h('p', { class: 'muted', text: describeError(e) }));
+      syncLyricLine();
       return;
     }
     drawLyrics();
+    syncLyricLine();
     syncLoop();
   }
 
@@ -227,6 +271,15 @@ export function render(ctx) {
     } else {
       lyricsBox.replaceChildren(h('pre', { class: 'plain', text: lyr.plain }));
     }
+  }
+
+  function syncLyricLine() { // the current line under the title; only for time-synced lyrics
+    const on = lyr.state === 'ready' && !!lyr.synced;
+    lyricLine.hidden = !on;
+    if (!on) return;
+    const i = findLyricIndex(lyr.synced, player.time * 1000);
+    const text = (i >= 0 && lyr.synced[i] && lyr.synced[i].text) || '♪';
+    if (text !== lineShown) { lineShown = text; lyricText.textContent = text; }
   }
 
   function highlight(force) {
@@ -270,9 +323,29 @@ export function render(ctx) {
     attachMic(micBtn),
   ];
   document.addEventListener('visibilitychange', syncLoop);
-  const onWide = () => selectTab(tab);
-  wide.addEventListener('change', onWide);
-  offs.push(() => wide.removeEventListener('change', onWide));
+
+  // Full screen: after 3 s without mouse or key activity hide the cursor and the bottom row (CSS class np-idle).
+  // Events only (mousemove, keydown); one timeout; nothing runs unless the page is in full screen.
+  let idleT = 0;
+  let lastAct = 0;
+  const stopIdle = () => { clearTimeout(idleT); idleT = 0; root.classList.remove('np-idle'); };
+  const wake = () => {
+    const now = performance.now();
+    if (root.classList.contains('np-idle')) root.classList.remove('np-idle');
+    else if (idleT && now - lastAct < 400) return; // do not re-arm on every pixel of movement
+    lastAct = now;
+    clearTimeout(idleT);
+    idleT = 0;
+    if (root.classList.contains('fs') && !document.hidden) idleT = setTimeout(() => { idleT = 0; root.classList.add('np-idle'); }, 3000);
+  };
+  const onFsChange = () => { if (root.classList.contains('fs')) wake(); else stopIdle(); };
+  const onHide = () => { if (document.hidden) stopIdle(); };
+  document.addEventListener('mousemove', wake, { passive: true });
+  document.addEventListener('keydown', wake);
+  document.addEventListener('fullscreenchange', onFsChange);
+  document.addEventListener('webkitfullscreenchange', onFsChange);
+  addEventListener('resize', onFsChange);
+  document.addEventListener('visibilitychange', onHide);
   selectTab('player');
   syncTrack();
   syncVolume();
@@ -280,6 +353,13 @@ export function render(ctx) {
   return () => {
     offs.forEach((off) => off());
     document.removeEventListener('visibilitychange', syncLoop);
+    document.removeEventListener('visibilitychange', onHide);
+    document.removeEventListener('mousemove', wake);
+    document.removeEventListener('keydown', wake);
+    document.removeEventListener('fullscreenchange', onFsChange);
+    document.removeEventListener('webkitfullscreenchange', onFsChange);
+    removeEventListener('resize', onFsChange);
+    stopIdle();
     if (raf) cancelAnimationFrame(raf);
     if (lyrCtl) lyrCtl.abort();
   };
