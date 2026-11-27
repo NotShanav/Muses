@@ -2,6 +2,17 @@ package com.music.bitchord.desktop
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.input.pointer.PointerEventType
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.layout.positionInParent
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -204,7 +215,15 @@ internal fun DesktopSettingsCategoryRail(
     }
 }
 
-/** The same choices as a scrolling row of chips, for a Settings page too narrow for the rail. */
+/**
+ * The same choices as a scrolling row of chips, for a Settings page too narrow for the rail (the
+ * side panel, a small window).
+ *
+ * PANEL FIX: a plain `horizontalScroll` answers a finger and Shift+wheel only, so with a mouse the
+ * chips past the edge could not be reached and the row sat part-scrolled, clipping the first chip.
+ * Now the wheel scrolls it sideways, a drag scrolls it, there is a little room at both ends, and
+ * the chosen chip is brought into view.
+ */
 @Composable
 internal fun DesktopSettingsCategoryChips(
     selected: DesktopSettingsCategory,
@@ -212,11 +231,47 @@ internal fun DesktopSettingsCategoryChips(
     onSelect: (DesktopSettingsCategory) -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val scroll = rememberScrollState()
+    val entries = DesktopSettingsCategory.entries
+    val starts = remember { FloatArray(entries.size) }
+    val widths = remember { IntArray(entries.size) }
+    var viewport by remember { mutableIntStateOf(0) }
+    val notch = with(LocalDensity.current) { 48.dp.toPx() }
+    LaunchedEffect(selected, viewport) {
+        val index = entries.indexOf(selected)
+        if (index < 0 || viewport <= 0 || widths[index] <= 0) return@LaunchedEffect
+        val target = (starts[index] + widths[index] / 2f - viewport / 2f).toInt()
+        scroll.animateScrollTo(target.coerceIn(0, scroll.maxValue))
+    }
     Row(
-        modifier.horizontalScroll(rememberScrollState()).padding(bottom = 8.dp),
+        modifier
+            .onSizeChanged { viewport = it.width }
+            .pointerInput(scroll, notch) {
+                awaitPointerEventScope {
+                    while (true) {
+                        val event = awaitPointerEvent()
+                        if (event.type != PointerEventType.Scroll) continue
+                        if (event.changes.any { it.isConsumed }) continue
+                        val delta = event.changes.fold(Offset.Zero) { sum, change -> sum + change.scrollDelta }
+                        val amount = if (delta.x != 0f) delta.x else delta.y
+                        if (amount != 0f) {
+                            scroll.dispatchRawDelta(amount * notch)
+                            event.changes.forEach { it.consume() }
+                        }
+                    }
+                }
+            }
+            .pointerInput(scroll) {
+                detectHorizontalDragGestures { change, amount ->
+                    change.consume()
+                    scroll.dispatchRawDelta(-amount)
+                }
+            }
+            .horizontalScroll(scroll)
+            .padding(start = 2.dp, end = 12.dp, bottom = 8.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        DesktopSettingsCategory.entries.forEach { category ->
+        entries.forEachIndexed { index, category ->
             val isSelected = category == selected && !dimmed
             Text(
                 category.title(),
@@ -224,6 +279,10 @@ internal fun DesktopSettingsCategoryChips(
                 color = if (isSelected) Color.Black else Color.White,
                 maxLines = 1,
                 modifier = Modifier
+                    .onGloballyPositioned {
+                        starts[index] = it.positionInParent().x
+                        widths[index] = it.size.width
+                    }
                     .clip(RoundedCornerShape(50))
                     .background(if (isSelected) Color.White else Color.White.copy(alpha = 0.10f))
                     .desktopRowClickable { onSelect(category) }

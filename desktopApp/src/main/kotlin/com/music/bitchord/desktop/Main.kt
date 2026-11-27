@@ -1,6 +1,7 @@
 package com.music.bitchord.desktop
 
 import androidx.compose.runtime.CompositionLocalProvider
+import com.music.bitchord.ui.LocalForegroundOverride
 import com.music.bitchord.ui.player.PlayerPlatform
 import com.music.bitchord.data.DebugLog
 import com.music.bitchord.data.TrackLog
@@ -222,6 +223,8 @@ private fun desktopApplication() = application {
             LocalDesktopWindowActions provides actions,
             LocalDesktopWindowScope provides this,
             LocalDesktopTouchMode provides touchMode,
+            // TRAY FIX: "on screen" is the window being shown, not the window having focus.
+            LocalForegroundOverride provides (visible && edgeFlags.shown && !state.isMinimized),
         ) {
             // A transparent window lets the click through wherever a pixel has alpha 0, including the
             // few at its outer edge that the app leaves unpainted — which is how a click at the

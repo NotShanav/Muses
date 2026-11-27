@@ -318,6 +318,7 @@ import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
@@ -1848,36 +1849,9 @@ fun BitChordDesktopApp() {
         canvas = withContext(Dispatchers.IO) { DesktopCanvasClient.lookup(current) }
     }
 
-    LaunchedEffect(
-        playback.song?.videoId,
-        playback.isPlaying,
-        playback.durationMs,
-        playback.volume,
-        playback.error,
-        shuffle,
-        repeatMode,
-        playbackSpeed,
-    ) {
-        mprisController.update(
-            playback = playback,
-            shuffle = shuffle,
-            loopStatus = when (repeatMode) {
-                DesktopRepeatMode.OFF -> "None"
-                DesktopRepeatMode.ALL -> "Playlist"
-                DesktopRepeatMode.ONE -> "Track"
-            },
-            rate = playbackSpeed.toDouble(),
-        )
-    }
-    LaunchedEffect(playback.song?.videoId, playback.isPlaying, playback.durationMs) {
-        DesktopScrobbling.onPlaybackStateChanged(playback)
-    }
-    // Its own effect, and keyed on [seeks] as well: Windows extrapolates the position from the last
-    // timeline it was given while the track plays, so a seek that is not republished leaves the
-    // shell — and any dock reading it — counting on from where the playhead used to be.
-    LaunchedEffect(playback.song?.videoId, playback.isPlaying, playback.durationMs, playback.seeks) {
-        DesktopWindowsMedia.publish(playback)
-    }
+    // TRAY FIX: MPRIS, Last.fm, Windows media controls, Discord and the tray now report from one
+    // frame-independent collector further down (see "reportPlayback"); effects keyed on
+    // `playback` here only re-ran on recomposition, which stops while the window is hidden.
     // Refetched on opening the page rather than cached for the session: the
     // point of it is that something played elsewhere shows up here.
     LaunchedEffect(destination, youtubeSignedIn, sessionRevision) {
@@ -1895,9 +1869,6 @@ fun BitChordDesktopApp() {
     }
     // Keyed on the same things, plus the rate: Discord counts the bar down on
     // its own clock, so only a change to what it was told is worth another push.
-    LaunchedEffect(playback.song?.videoId, playback.isPlaying, playback.durationMs, playbackSpeed) {
-        DesktopDiscordRpc.onPlaybackStateChanged(playback, playbackSpeed)
-    }
     // The account's own history on YouTube Music, which is what the home feed is built out of.
     DisposableEffect(playback.song?.videoId) {
         val previous = playbackEngine.state.value.positionMs / 1_000
@@ -2469,10 +2440,69 @@ fun BitChordDesktopApp() {
             },
         )
     }
-    LaunchedEffect(selectedSong, playback.isPlaying) {
-        val title = selectedSong?.let { "${it.title} — ${it.artist}" }
-        tray.update(title = title, isPlaying = playback.isPlaying)
-        DesktopTrayMenu.publish(title = title, playing = playback.isPlaying)
+    // TRAY FIX (reportPlayback): everything that tells the outside world what is playing. A
+    // compose-keyed LaunchedEffect only re-runs when the composition recomposes, and a window that
+    // is hidden (closed to the tray, or the side panel slid away) draws no frames, so it never
+    // does: Windows' media card, MPRIS, Discord, Last.fm and the tray went stale until the window
+    // came back. This collects the engine's own state flow and the three settings instead, which
+    // needs no frame clock, and pushes only what changed.
+    LaunchedEffect(playbackEngine, mprisController, tray) {
+        var lastMpris: List<Any?>? = null
+        var lastScrobble: List<Any?>? = null
+        var lastSmtc: List<Any?>? = null
+        var lastDiscord: List<Any?>? = null
+        var lastTray: List<Any?>? = null
+        combine(
+            playbackEngine.state,
+            snapshotFlow { Triple(shuffle, repeatMode, playbackSpeed) },
+            snapshotFlow { selectedSong },
+        ) { engine, options, picked -> Triple(engine, options, picked) }
+            .collect { (engine, options, picked) ->
+                val (shuffleNow, repeatNow, speedNow) = options
+                val videoId = engine.song?.videoId
+                val mprisKey = listOf(
+                    videoId, engine.isPlaying, engine.durationMs, engine.volume, engine.error,
+                    shuffleNow, repeatNow, speedNow,
+                )
+                if (mprisKey != lastMpris) {
+                    lastMpris = mprisKey
+                    mprisController.update(
+                        playback = engine,
+                        shuffle = shuffleNow,
+                        loopStatus = when (repeatNow) {
+                            DesktopRepeatMode.OFF -> "None"
+                            DesktopRepeatMode.ALL -> "Playlist"
+                            DesktopRepeatMode.ONE -> "Track"
+                        },
+                        rate = speedNow.toDouble(),
+                    )
+                }
+                val scrobbleKey = listOf(videoId, engine.isPlaying, engine.durationMs)
+                if (scrobbleKey != lastScrobble) {
+                    lastScrobble = scrobbleKey
+                    DesktopScrobbling.onPlaybackStateChanged(engine)
+                }
+                // Keyed on [seeks] as well: Windows extrapolates the position from the last
+                // timeline it was given while the track plays, so a seek that is not republished
+                // leaves the shell counting on from where the playhead used to be.
+                val smtcKey = listOf(videoId, engine.isPlaying, engine.durationMs, engine.seeks)
+                if (smtcKey != lastSmtc) {
+                    lastSmtc = smtcKey
+                    DesktopWindowsMedia.publish(engine)
+                }
+                val discordKey = listOf(videoId, engine.isPlaying, engine.durationMs, speedNow)
+                if (discordKey != lastDiscord) {
+                    lastDiscord = discordKey
+                    DesktopDiscordRpc.onPlaybackStateChanged(engine, speedNow)
+                }
+                val trayKey = listOf(picked, engine.isPlaying)
+                if (trayKey != lastTray) {
+                    lastTray = trayKey
+                    val title = picked?.let { "${it.title} — ${it.artist}" }
+                    tray.update(title = title, isPlaying = engine.isPlaying)
+                    DesktopTrayMenu.publish(title = title, playing = engine.isPlaying)
+                }
+            }
     }
 
     LaunchedEffect(Unit) {

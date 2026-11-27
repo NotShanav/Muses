@@ -2,6 +2,8 @@ package com.music.bitchord.ui
 
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.ProvidableCompositionLocal
+import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -33,8 +35,17 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
  * [com.music.bitchord.playback.PlaybackService], which is a foreground service
  * precisely so that it goes on running when this does not.
  */
+/**
+ * Lets a host say what "on screen" means. Null (the default, and all of Android) keeps the
+ * lifecycle's answer. The desktop window sets it, because there the lifecycle is only RESUMED
+ * while the window has keyboard focus: a side panel or a window the listener is only looking at
+ * while typing in another app counted as being in the background, and the lyrics froze.
+ */
+val LocalForegroundOverride: ProvidableCompositionLocal<Boolean?> = compositionLocalOf { null }
+
 @Composable
 fun rememberIsForeground(): Boolean {
+    val override = LocalForegroundOverride.current
     val lifecycle = LocalLifecycleOwner.current.lifecycle
     var foreground by remember(lifecycle) {
         mutableStateOf(lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED))
@@ -49,5 +60,5 @@ fun rememberIsForeground(): Boolean {
         lifecycle.addObserver(observer)
         onDispose { lifecycle.removeObserver(observer) }
     }
-    return foreground
+    return override ?: foreground
 }
